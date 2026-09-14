@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "decision": "BLOCK",
+  "summary": "The requested private storage change enables public access.",
+  "subject": {
+    "intent_source": "intent.yaml",
+    "plan_format_version": "1.x",
+    "plan_digest": "sha256:example"
+  },
+  "verification": [
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "STORAGE_PUBLIC",
+      "severity": "CRITICAL",
+      "disposition": "BLOCK",
+      "claim": "Object storage permits public access.",
+      "resource": {
+        "address": "aws_s3_bucket.assets",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "expected": {
+        "path": "object_storage.public_access",
+        "value": false
+      },
+      "observed": {
+        "path": "object_storage.public_access",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket.assets",
+          "path": "resource_changes[].change.after",
+          "redacted": false
+        }
+      ],
+      "remediation": "Disable public access using the provider-supported controls."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "LIVE_STATE_AVAILABLE",
+      "required": false,
+      "reason": "InfraProof was run without a live-state collector.",
+      "resource_address": null,
+      "evidence": []
+    }
+  ]
+}
