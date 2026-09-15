@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "decision": "UNKNOWN",
+  "summary": "Public access could not be determined from the supplied plan.",
+  "subject": {
+    "intent_source": "intent.yaml",
+    "plan_format_version": "1.x",
+    "plan_digest": "sha256:example"
+  },
+  "verification": [
+    {
+      "name": "terraform_plan",
+      "status": "PARTIAL",
+      "method": "terraform-plan-json"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "STORAGE_POLICY_SENSITIVE",
+      "severity": "MEDIUM",
+      "disposition": "INFO",
+      "claim": "The bucket policy is marked sensitive and was not read.",
+      "resource": {
+        "address": "aws_s3_bucket.assets",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "object_storage.policy_document",
+        "state": "REDACTED"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket.assets",
+          "path": "resource_changes[].change.after.policy",
+          "redacted": true
+        }
+      ],
+      "remediation": "Supply the policy through a non-sensitive attribute, or accept the UNKNOWN result."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "STORAGE_PUBLIC_DETERMINABLE",
+      "required": true,
+      "reason": "Public access could not be determined from the supplied plan.",
+      "resource_address": "aws_s3_bucket.assets",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket.assets",
+          "path": "resource_changes[].change.after",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

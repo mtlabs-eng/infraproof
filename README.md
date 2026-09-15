@@ -22,6 +22,19 @@ The initial product is an offline CLI. It consumes a structured intent contract 
 - [Milestones](docs/milestones/)
 - [Claude Code handoff](docs/CLAUDE-CODE-HANDOFF.md)
 
+## Status
+
+Milestone 01 (Evidence Bundle foundation) is implemented: the Evidence Bundle is modelled,
+validated, ordered canonically, and rendered as stable JSON and Markdown, with an exit-code
+contract. Plan parsing, intent loading, provider mappers, and policy evaluation are not implemented,
+so the `check` command below is not yet available.
+
+```sh
+go test ./...
+go vet ./...
+go run ./cmd/infraproof --version
+```
+
 ## Planned user experience
 
 ```sh
@@ -31,6 +44,4 @@ infraproof check \
   --format markdown
 ```
 
-The command exits successfully for `PASS`, uses a distinct non-zero status for `WARN`, `BLOCK`, invalid input, and internal failure, and always supports machine-readable JSON output.
-
-This repository currently contains an approved design package, not a product implementation.
+The command exits successfully for `PASS`, uses a distinct non-zero status for `WARN`, `BLOCK`, invalid input, and internal failure, and always supports machine-readable JSON output. This command is not registered yet; the exit-code contract it will use is implemented and tested.
