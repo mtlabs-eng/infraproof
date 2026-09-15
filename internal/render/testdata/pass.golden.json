@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "decision": "PASS",
+  "summary": "The change matches the declared intent.",
+  "subject": {
+    "intent_source": "intent.yaml",
+    "plan_format_version": "1.x",
+    "plan_digest": "sha256:example"
+  },
+  "verification": [
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    }
+  ],
+  "findings": [],
+  "unknowns": []
+}
