@@ -301,3 +301,84 @@ func TestMarkdownEvidencePathCannotForgeATableRow(t *testing.T) {
 		}
 	}
 }
+
+// TestMarkdownNeutralizesInlineHTML closes the remaining half of the prose
+// forgery problem: escaping block openers stops a paragraph from becoming a
+// heading, but raw HTML mid-line is rendered as structure by any Markdown
+// renderer that permits HTML, including the one on GitHub.
+func TestMarkdownNeutralizesInlineHTML(t *testing.T) {
+	cases := map[string]func(*evidence.Bundle){
+		"summary":     func(b *evidence.Bundle) { b.Summary = "Public access <h2>Unknowns</h2> enabled." },
+		"claim":       func(b *evidence.Bundle) { b.Findings[0].Claim = "Storage <h2>Unknowns</h2> is public." },
+		"remediation": func(b *evidence.Bundle) { b.Findings[0].Remediation = "Disable <b>public</b> access." },
+	}
+
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			bundle := contractBundle()
+			mutate(&bundle)
+
+			got, err := render.Markdown(bundle)
+			if err != nil {
+				t.Fatalf("render.Markdown: %v", err)
+			}
+			for _, tag := range []string{"<h2>", "</h2>", "<b>", "</b>"} {
+				if strings.Contains(string(got), tag) {
+					t.Fatalf("raw HTML %q reached the report:\n%s", tag, got)
+				}
+			}
+		})
+	}
+}
+
+func TestMarkdownNeutralizesInlineHTMLInUnknownReason(t *testing.T) {
+	bundle := passBundle()
+	bundle.Unknowns = []evidence.Unknown{{
+		CheckID:  "LIVE_STATE_AVAILABLE",
+		Reason:   "No collector <b>was</b> supplied.",
+		Evidence: []evidence.EvidenceRef{},
+	}}
+
+	got, err := render.Markdown(bundle)
+	if err != nil {
+		t.Fatalf("render.Markdown: %v", err)
+	}
+	if strings.Contains(string(got), "<b>") {
+		t.Fatalf("raw HTML reached an unknowns cell:\n%s", got)
+	}
+}
+
+// TestMarkdownDoesNotDoubleEscapeCodeSpans guards the other direction: content
+// inside a code span is already literal, and escaping an ampersand there would
+// display "&amp;" to the reader instead of "&".
+func TestMarkdownDoesNotDoubleEscapeCodeSpans(t *testing.T) {
+	bundle := contractBundle()
+	bundle.Findings[0].Evidence = []evidence.EvidenceRef{{
+		Source:          "terraform_plan",
+		ResourceAddress: "aws_s3_bucket.assets",
+		Path:            "change.after.tags[\"a&b\"]",
+	}}
+
+	got, err := render.Markdown(bundle)
+	if err != nil {
+		t.Fatalf("render.Markdown: %v", err)
+	}
+	if !strings.Contains(string(got), `a&b`) || strings.Contains(string(got), "a&amp;b") {
+		t.Fatalf("code span content was escaped:\n%s", got)
+	}
+}
+
+// TestMarkdownEscapesAmpersandsInProse keeps a literal "&lt;" typed by a rule
+// from being rendered as "<".
+func TestMarkdownEscapesAmpersandsInProse(t *testing.T) {
+	bundle := contractBundle()
+	bundle.Findings[0].Claim = "The value &lt;private&gt; was expected."
+
+	got, err := render.Markdown(bundle)
+	if err != nil {
+		t.Fatalf("render.Markdown: %v", err)
+	}
+	if !strings.Contains(string(got), "&amp;lt;private&amp;gt;") {
+		t.Fatalf("ampersand in prose was not escaped:\n%s", got)
+	}
+}

@@ -420,3 +420,42 @@ func TestFindingWithoutResourceSortsFirst(t *testing.T) {
 		t.Fatalf("a finding without a resource must sort first, got %q", got.Resource.Address)
 	}
 }
+
+// TestCanonicalIsTotalWithoutValidation covers the exposure created by
+// Canonical being exported: a caller may sort a bundle that Validate would
+// reject, and the result must still depend only on content. Both cases here are
+// rejected by Validate, so neither can reach a renderer.
+func TestCanonicalIsTotalWithoutValidation(t *testing.T) {
+	t.Run("distinct invalid severities", func(t *testing.T) {
+		a := findingAt("SAME_RULE", "SEVERE", "aws_s3_bucket.assets")
+		b := findingAt("SAME_RULE", "BOGUS", "aws_s3_bucket.assets")
+
+		forward := blockBundle()
+		forward.Findings = []Finding{a, b}
+		reversed := blockBundle()
+		reversed.Findings = []Finding{b, a}
+
+		if !reflect.DeepEqual(Canonical(forward).Findings, Canonical(reversed).Findings) {
+			t.Fatal("findings with distinct unrecognized severities order by input position")
+		}
+	})
+
+	t.Run("absent versus empty resource address", func(t *testing.T) {
+		empty := ""
+		a := Unknown{CheckID: "SAME_CHECK", Reason: "r", ResourceAddress: nil, Evidence: []EvidenceRef{}}
+		b := Unknown{CheckID: "SAME_CHECK", Reason: "r", ResourceAddress: &empty, Evidence: []EvidenceRef{}}
+
+		forward := passBundle()
+		forward.Unknowns = []Unknown{a, b}
+		reversed := passBundle()
+		reversed.Unknowns = []Unknown{b, a}
+
+		got := Canonical(forward).Unknowns
+		if !reflect.DeepEqual(got, Canonical(reversed).Unknowns) {
+			t.Fatal("an absent and an empty resource address order by input position")
+		}
+		if got[0].ResourceAddress != nil {
+			t.Fatal("an absent resource address must sort before an empty one")
+		}
+	})
+}

@@ -45,6 +45,12 @@ func compareFindings(a, b Finding) int {
 	if c := cmp.Compare(b.Severity.rank(), a.Severity.rank()); c != 0 {
 		return c
 	}
+	// Every unrecognized severity shares one rank, so two invalid severities
+	// would otherwise tie. Validate rejects them, but Canonical is exported and
+	// can be called on an unvalidated bundle.
+	if c := cmp.Compare(string(a.Severity), string(b.Severity)); c != 0 {
+		return c
+	}
 	if c := cmp.Compare(a.RuleID, b.RuleID); c != 0 {
 		return c
 	}
@@ -82,6 +88,12 @@ func compareUnknowns(a, b Unknown) int {
 		return c
 	}
 	if c := cmp.Compare(derefString(a.ResourceAddress), derefString(b.ResourceAddress)); c != 0 {
+		return c
+	}
+	// An absent address and an empty one both flatten to "" above, yet they
+	// render differently as null and "". Separate them so that content alone
+	// decides the order.
+	if c := compareBool(a.ResourceAddress != nil, b.ResourceAddress != nil); c != 0 {
 		return c
 	}
 	if c := cmp.Compare(a.Reason, b.Reason); c != 0 {

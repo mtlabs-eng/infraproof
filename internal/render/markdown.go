@@ -48,7 +48,7 @@ func subjectBlock(s evidence.Subject) string {
 func verificationTable(checks []evidence.Verification) string {
 	rows := make([][]string, 0, len(checks))
 	for _, v := range checks {
-		rows = append(rows, []string{v.Name, string(v.Status), v.Method})
+		rows = append(rows, []string{inlineText(v.Name), string(v.Status), inlineText(v.Method)})
 	}
 	return table([]string{"Check", "Status", "Method"}, rows)
 }
@@ -89,7 +89,7 @@ func findingBullets(f evidence.Finding) []string {
 	for _, ref := range f.Evidence {
 		bullets = append(bullets, "- Evidence: "+evidenceText(ref))
 	}
-	bullets = append(bullets, "- Remediation: "+f.Remediation)
+	bullets = append(bullets, "- Remediation: "+inlineText(f.Remediation))
 
 	return bullets
 }
@@ -129,7 +129,7 @@ func unknownsBlock(unknowns []evidence.Unknown) string {
 		rows = append(rows, []string{
 			u.CheckID,
 			yesNo(u.Required),
-			u.Reason,
+			inlineText(u.Reason),
 			optionalCode(u.ResourceAddress),
 			evidenceList(u.Evidence),
 		})
@@ -194,10 +194,11 @@ func escapeCell(s string) string {
 // negative number is ordinary phrasing and is left untouched — over-escaping
 // would corrupt the most natural way a rule has to describe a finding.
 //
-// Inline HTML in the middle of a line is passed through unchanged; only a raw
-// HTML block opening the paragraph is escaped.
+// Raw HTML is neutralised anywhere in the line, not only at its start: a
+// Markdown renderer that permits HTML — GitHub's does — would otherwise let a
+// mid-sentence tag produce real structure.
 func prose(s string) string {
-	s = strings.TrimSpace(s)
+	s = inlineText(strings.TrimSpace(s))
 	if at := blockOpenerAt(s); at >= 0 {
 		return s[:at] + `\` + s[at:]
 	}
@@ -212,8 +213,9 @@ func blockOpenerAt(s string) int {
 	}
 
 	switch s[0] {
-	case '#', '>', '|', '<':
-		// Heading, blockquote, table row, raw HTML block.
+	case '#', '>', '|':
+		// Heading, blockquote, table row. A raw HTML block needs no case here:
+		// inlineText has already neutralised the opening "<".
 		return 0
 	case '-', '+', '*', '_':
 		// A bullet needs a following space; a thematic break needs a run of
@@ -261,6 +263,15 @@ func leadingDigits(s string) int {
 		}
 	}
 	return len(s)
+}
+
+// inlineText neutralises raw HTML in a free-text field. It is applied only to
+// plain prose, never to content inside a code span: a span already renders its
+// contents literally, so escaping there would show a reader "&amp;amp;" where the
+// data says "&amp;".
+func inlineText(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	return strings.ReplaceAll(s, "<", "&lt;")
 }
 
 // code wraps a value in a Markdown code span wide enough to contain it. A value

@@ -73,14 +73,18 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
 
 ## Required invariants
 
-- `schema_version`, `decision`, `subject`, and `verification` are required.
-- Findings are ordered deterministically by severity, rule ID, and resource address.
+- `schema_version`, `decision`, `summary`, `subject`, and `verification` are required.
+- `summary` states the conclusion. A bundle that does not state its own conclusion is not trustworthy output, so an empty summary is rejected.
+- Findings are ordered deterministically by severity descending, then rule ID, then resource address. Remaining fields act as further tiebreaks so that the order is total: two records that differ in any field at all are ordered by content, never by the position a producer wrote them in.
 - Unknowns are first-class records, not free-form warnings.
 - A `BLOCK` bundle contains at least one finding with `disposition: BLOCK` and evidence.
-- A `WARN` bundle contains no blocking finding and at least one finding with `disposition: WARN`.
+- A `WARN` bundle contains no blocking finding, at least one finding with `disposition: WARN`, and no unknown with `required: true`. A required unknown escalates the decision to `UNKNOWN`, following the precedence `BLOCK > UNKNOWN > WARN > PASS`; a decision must never understate the evidence that is missing.
 - An `UNKNOWN` bundle contains no blocking finding and at least one unknown with `required: true`.
 - A `PASS` bundle contains no `BLOCK` or `WARN` finding and no unknown with `required: true`.
 - Raw sensitive values never appear.
+- Free-text prose is a single line. `summary`, `claim`, `remediation`, and `reason` must not contain a line break. Prose is rendered into documents whose structure is expressed by line breaks and leading characters, so a break in prose would let a claim forge a heading, a list item, or a table row in a report a human is expected to trust. Constraining it here rather than in one renderer keeps the guarantee for every present and future output format.
+- A value marked `REDACTED`, `UNKNOWN`, or `ABSENT` carries no value. Only a `KNOWN` fact has a value at all, so an unavailable or sensitive field cannot be presented as one.
+- Evidence records a location, never a value. An evidence reference has no value field, so raw source data cannot travel through evidence.
 - `plan_digest` is calculated over the exact input bytes and allows correlation without embedding the plan.
 - Timestamps are omitted from canonical golden output unless supplied externally.
 
