@@ -142,3 +142,46 @@ func TestFixtureDirectoryIsSanitized(t *testing.T) {
 		}
 	}
 }
+
+// TestImportIDIsPreserved covers the one field the milestone's extraction list
+// does not name. Terraform records an adopted object's import ID on the change,
+// and a verifier that dropped it could not tell a resource being adopted from
+// one being created.
+func TestImportIDIsPreserved(t *testing.T) {
+	change := onlyChange(t, "importing")
+
+	if change.ImportID != "already-existing-assets" {
+		t.Fatalf("import ID = %q", change.ImportID)
+	}
+	if len(change.Actions) != 1 || change.Actions[0] != ActionNoOp {
+		t.Fatalf("actions = %v, want [no-op]", change.Actions)
+	}
+}
+
+func TestChangeWithoutImportingHasNoImportID(t *testing.T) {
+	if got := onlyChange(t, "create").ImportID; got != "" {
+		t.Fatalf("import ID = %q, want empty", got)
+	}
+}
+
+func TestMalformedImportingIsReported(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "aws_s3_bucket.assets",
+	      "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	      "provider_name": "p",
+	      "change": {"actions": ["create"], "before": null, "after": {}, "importing": 7}
+	    }
+	  ]
+	}`)
+
+	_, err := Parse(raw)
+	if err == nil {
+		t.Fatal("an importing block that is not an object should be rejected")
+	}
+	if !strings.Contains(err.Error(), "importing") {
+		t.Fatalf("error %q does not locate the importing block", err.Error())
+	}
+}

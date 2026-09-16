@@ -1,0 +1,71 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.0",
+  "plan_digest": "sha256:62408cc4a6f133195ec27585cbcad760a3852a763743cf045bc7a7071576257d",
+  "resource_changes": [
+    {
+      "address": "module.storage.aws_s3_bucket.assets",
+      "module_address": "module.storage",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "provider": "registry.terraform.io/hashicorp/aws",
+      "actions": [
+        "create"
+      ],
+      "replace": false,
+      "destructive": false,
+      "unknown_paths": [
+        "after.id"
+      ],
+      "redacted_paths": []
+    },
+    {
+      "address": "module.storage.aws_s3_bucket.replicas[0]",
+      "module_address": "module.storage",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "provider": "registry.terraform.io/hashicorp/aws",
+      "actions": [
+        "create"
+      ],
+      "replace": false,
+      "destructive": false,
+      "unknown_paths": [
+        "after.id"
+      ],
+      "redacted_paths": []
+    },
+    {
+      "address": "module.storage.module.inner.aws_s3_bucket.logs",
+      "module_address": "module.storage.module.inner",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "provider": "registry.terraform.io/hashicorp/aws",
+      "actions": [
+        "create"
+      ],
+      "replace": false,
+      "destructive": false,
+      "unknown_paths": [
+        "after.id"
+      ],
+      "redacted_paths": []
+    },
+    {
+      "address": "module.storage[\"eu\"].aws_s3_bucket.keyed",
+      "module_address": "module.storage[\"eu\"]",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "provider": "registry.terraform.io/hashicorp/aws",
+      "actions": [
+        "create"
+      ],
+      "replace": false,
+      "destructive": false,
+      "unknown_paths": [
+        "after.id"
+      ],
+      "redacted_paths": []
+    }
+  ]
+}

@@ -15,6 +15,21 @@
 // and the redacted state survive, so no part of this package holds a sensitive
 // value that a later output path could disclose.
 //
+// Reading is deliberately pessimistic, because plan JSON arrives from coding
+// agents and third-party tooling as well as from Terraform itself:
+//
+//   - A mask whose shape cannot be applied to the value it describes — an
+//     object mask over a string, an array mask shorter than the array it
+//     covers, a mask node that is not a boolean, object or array — marks rather
+//     than being ignored. A contradiction can be resolved toward disclosing a
+//     value the producer asked to protect, or toward withholding one that may
+//     have been safe; only the second is tolerable to be wrong about.
+//   - Content after the plan document is rejected. A file holding a second
+//     plan would otherwise be read as the first alone, so the change a human
+//     reviews and the change this package reads would differ.
+//   - A rejected plan returns its digest and nothing else. A half-built plan
+//     invites a caller to act on data the parser refused to vouch for.
+//
 // Known behaviour: a JSON object containing a duplicate key resolves to the
 // last occurrence, which is the encoding/json decoder's rule.
 package terraformplan

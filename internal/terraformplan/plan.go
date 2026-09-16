@@ -10,8 +10,8 @@ type Plan struct {
 	// its own version into the same field.
 	TerraformVersion string
 	// Digest is "sha256:<hex>" over the exact input bytes. It allows a report to
-	// correlate with a plan file without embedding the plan, and is populated
-	// even when parsing fails.
+	// correlate with a plan file without embedding the plan, and is the only
+	// field a rejected plan carries.
 	Digest string
 	// ResourceChanges holds every change in the plan, in input order. Nothing is
 	// filtered: a resource type no mapper recognizes is still here.
@@ -24,7 +24,9 @@ type Plan struct {
 
 // ProviderConfig is one declared provider instance.
 type ProviderConfig struct {
-	// Key is the provider config key, such as "aws.west" or "storage:aws.inner".
+	// Key is the provider config key. Terraform writes "aws.west" for a root
+	// instance and "<module_address>:<name>.<alias>" for one declared inside a
+	// module, as in "module.storage.module.inner:terraform".
 	Key string
 	// Name is the local provider name, such as "aws".
 	Name string

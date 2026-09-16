@@ -47,8 +47,12 @@ func parseMask(path string, raw any, present bool, errs *[]error) mask {
 		}
 		return out
 	default:
+		// The producer put something here, so something is marked; the shape
+		// just cannot be read. Degrading to "no mask" would disclose exactly
+		// the value the producer asked to have protected, so this covers the
+		// whole subtree instead.
 		*errs = append(*errs, invalid(path, "must be a boolean, an object, or an array"))
-		return mask{}
+		return mask{kind: maskFlag, flag: true}
 	}
 }
 
@@ -78,6 +82,37 @@ func (m mask) marks() bool {
 // isSet reports whether this exact node is marked, as opposed to a descendant.
 // Only a literal true marks the node it sits on.
 func (m mask) isSet() bool { return m.kind == maskFlag && m.flag }
+
+// contradicts reports whether a mask claims something beneath a value that
+// cannot hold it — an object mask over a string, say, or an array mask over a
+// null.
+//
+// Terraform derives its masks by walking the value, so their shapes always
+// agree and this never fires on real output. But plan JSON reaches this package
+// from coding agents and third-party tooling too, and there are only two ways
+// to read a contradiction: as "nothing is marked", which discloses the value
+// the producer asked to have protected, or as "this is marked", which withholds
+// a value that may have been safe. Only the second is safe to be wrong about.
+func contradicts(raw any, rawPresent bool, m mask) bool {
+	if m.isSet() || !m.marks() {
+		return false
+	}
+	if !rawPresent {
+		// With no value here, the mask supplies the shape and cannot disagree
+		// with it.
+		return false
+	}
+	switch m.kind {
+	case maskObject:
+		_, ok := raw.(map[string]any)
+		return !ok
+	case maskArray:
+		_, ok := raw.([]any)
+		return !ok
+	default:
+		return false
+	}
+}
 
 func (m mask) field(name string) mask {
 	if m.kind != maskObject {
@@ -131,8 +166,8 @@ func merge(raw any, rawPresent bool, unknown, sensitive mask) Value {
 
 	value := Value{
 		present:   true,
-		unknown:   unknown.isSet(),
-		sensitive: sensitive.isSet(),
+		unknown:   unknown.isSet() || contradicts(raw, rawPresent, unknown),
+		sensitive: sensitive.isSet() || contradicts(raw, rawPresent, sensitive),
 	}
 	if value.sensitive || value.unknown {
 		// Nothing readable exists here, so there is nothing to descend into.
@@ -185,6 +220,22 @@ func mergeFromMasks(value Value, unknown, sensitive mask) Value {
 	return value
 }
 
+// elementMask returns the mask covering element i.
+//
+// Terraform preserves positions when it writes an array mask, padding unmarked
+// elements with false, so a mask array shorter than the value array does not
+// describe its tail at all. An undescribed element is treated as marked, for
+// the same reason a contradiction is.
+//
+// An absent key in an object mask is different and stays unmarked: Terraform
+// omits unmarked keys there by design.
+func elementMask(m mask, i, length int) mask {
+	if m.kind == maskArray && m.len() < length && i >= m.len() {
+		return mask{kind: maskFlag, flag: true}
+	}
+	return m.at(i)
+}
+
 func mergeObject(raw map[string]any, unknown, sensitive mask) map[string]Value {
 	names := make([]string, 0, len(raw))
 	for name := range raw {
@@ -219,7 +270,7 @@ func mergeArray(raw []any, unknown, sensitive mask) []Value {
 		if i < len(raw) {
 			child, present = raw[i], true
 		}
-		out = append(out, merge(child, present, unknown.at(i), sensitive.at(i)))
+		out = append(out, merge(child, present, elementMask(unknown, i, length), elementMask(sensitive, i, length)))
 	}
 	return out
 }

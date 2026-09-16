@@ -17,14 +17,26 @@ const supportedMajorVersion = "1"
 
 // Parse reads plan JSON into a Plan.
 //
-// The returned Plan always carries a Digest, even when parsing fails, so a
-// rejected plan can still be correlated with the file it came from. Structural
-// problems are collected rather than reported one at a time; only a document
-// that is not JSON at all stops the walk immediately.
+// A rejected plan returns its Digest and nothing else. The digest identifies
+// the bytes that were rejected, which stays useful; a half-built plan does not,
+// and handing one back invites a caller to act on data the parser refused to
+// vouch for.
+//
+// Structural problems are collected rather than reported one at a time; only a
+// document that is not JSON at all stops the walk immediately.
 func Parse(raw []byte) (Plan, error) {
 	sum := sha256.Sum256(raw)
-	plan := Plan{Digest: "sha256:" + hex.EncodeToString(sum[:])}
+	digest := "sha256:" + hex.EncodeToString(sum[:])
 
+	plan, err := parseDocument(raw)
+	if err != nil {
+		return Plan{Digest: digest}, err
+	}
+	plan.Digest = digest
+	return plan, nil
+}
+
+func parseDocument(raw []byte) (Plan, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	// Numbers stay exact: float64 would round a large integer identifier and
 	// make the text of a zero depend on the decoder.
@@ -32,16 +44,23 @@ func Parse(raw []byte) (Plan, error) {
 
 	var document map[string]any
 	if err := decoder.Decode(&document); err != nil {
-		return plan, invalid("", "input is not valid JSON: %v", err)
+		return Plan{}, invalid("", "input is not valid JSON at byte offset %d", decoder.InputOffset())
+	}
+	// A file holding a second document would otherwise be read as the first one
+	// alone, so the change a human reviews and the change this tool reads would
+	// not be the same change.
+	if decoder.More() {
+		return Plan{}, invalid("", "unexpected content after the plan document at byte offset %d", decoder.InputOffset())
 	}
 
+	var plan Plan
 	var errs []error
 
 	version, err := formatVersion(document)
 	if err != nil {
 		// A plan whose format this build does not implement cannot be read
 		// further without guessing at its meaning.
-		return plan, err
+		return Plan{}, err
 	}
 	plan.FormatVersion = version
 	plan.TerraformVersion = optionalString(document, "terraform_version", "terraform_version", &errs)
@@ -53,7 +72,7 @@ func Parse(raw []byte) (Plan, error) {
 	resolveProviderInstances(&plan, keysByAddress)
 
 	if len(errs) > 0 {
-		return plan, errors.Join(errs...)
+		return Plan{}, errors.Join(errs...)
 	}
 	return plan, nil
 }
@@ -71,13 +90,34 @@ func formatVersion(document map[string]any) (string, error) {
 
 	major, minor, split := strings.Cut(version, ".")
 	if !split || strings.Contains(minor, ".") || !isDigits(major) || !isDigits(minor) {
-		return version, unsupported("format_version", "must be written as major.minor, got %q", version)
+		return version, unsupported("format_version", "must be written as major.minor, got %s", safeToken(version))
 	}
 	if major != supportedMajorVersion {
 		return version, unsupported("format_version",
-			"major version %q is not implemented by this build, which reads %s.x", version, supportedMajorVersion)
+			"major version %s is not implemented by this build, which reads %s.x", safeToken(version), supportedMajorVersion)
 	}
 	return version, nil
+}
+
+// safeToken bounds a value before it reaches a diagnostic. A plan is untrusted
+// input and its diagnostics land in CI logs, so a version string is echoed only
+// when it is short and plainly a version; anything else is described rather
+// than repeated. A real version is always reportable.
+func safeToken(s string) string {
+	const limit = 16
+
+	if s == "" || len(s) > limit {
+		return "an unreportable value"
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r == '.', r == '-', r == '_':
+		default:
+			return "an unreportable value"
+		}
+	}
+	return strconv.Quote(s)
 }
 
 func isDigits(s string) bool {
