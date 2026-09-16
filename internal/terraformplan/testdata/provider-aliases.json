@@ -9,10 +9,16 @@
       "name": "default_region",
       "provider_name": "registry.terraform.io/hashicorp/aws",
       "change": {
-        "actions": ["create"],
+        "actions": [
+          "create"
+        ],
         "before": null,
-        "after": {"bucket": "default-region"},
-        "after_unknown": {"id": true},
+        "after": {
+          "bucket": "default-region"
+        },
+        "after_unknown": {
+          "id": true
+        },
         "before_sensitive": false,
         "after_sensitive": {}
       }
@@ -24,10 +30,16 @@
       "name": "west_region",
       "provider_name": "registry.terraform.io/hashicorp/aws",
       "change": {
-        "actions": ["create"],
+        "actions": [
+          "create"
+        ],
         "before": null,
-        "after": {"bucket": "west-region"},
-        "after_unknown": {"id": true},
+        "after": {
+          "bucket": "west-region"
+        },
+        "after_unknown": {
+          "id": true
+        },
         "before_sensitive": false,
         "after_sensitive": {}
       }
@@ -41,10 +53,16 @@
       "index": 0,
       "provider_name": "registry.terraform.io/hashicorp/aws",
       "change": {
-        "actions": ["create"],
+        "actions": [
+          "create"
+        ],
         "before": null,
-        "after": {"bucket": "inner-0"},
-        "after_unknown": {"id": true},
+        "after": {
+          "bucket": "inner-0"
+        },
+        "after_unknown": {
+          "id": true
+        },
         "before_sensitive": false,
         "after_sensitive": {}
       }
@@ -55,19 +73,30 @@
       "aws": {
         "name": "aws",
         "full_name": "registry.terraform.io/hashicorp/aws",
-        "expressions": {"region": {"constant_value": "eu-west-1"}}
+        "expressions": {
+          "region": {
+            "constant_value": "eu-west-1"
+          }
+        },
+        "version_constraint": "~> 5.0"
       },
       "aws.west": {
         "name": "aws",
         "alias": "west",
         "full_name": "registry.terraform.io/hashicorp/aws",
-        "expressions": {"region": {"constant_value": "us-west-2"}}
+        "expressions": {
+          "region": {
+            "constant_value": "us-west-2"
+          }
+        },
+        "version_constraint": "~> 5.0"
       },
-      "storage:aws.inner": {
+      "module.storage:aws.inner": {
         "name": "aws",
         "alias": "inner",
         "full_name": "registry.terraform.io/hashicorp/aws",
-        "module_address": "module.storage"
+        "module_address": "module.storage",
+        "version_constraint": "~> 5.0"
       }
     },
     "root_module": {
@@ -99,7 +128,7 @@
                 "mode": "managed",
                 "type": "aws_s3_bucket",
                 "name": "inner",
-                "provider_config_key": "storage:aws.inner",
+                "provider_config_key": "module.storage:aws.inner",
                 "schema_version": 0
               }
             ]

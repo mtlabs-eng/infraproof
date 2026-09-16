@@ -14,7 +14,7 @@ const canary = "CANARY-SENSITIVE-VALUE-DO-NOT-LEAK"
 // the path of the first string containing the canary. Reflection is used rather
 // than a comparison against the public API so that a value hidden in an
 // unexported field cannot pass unnoticed.
-func findCanary(v reflect.Value, path string) string {
+func findCanary(v reflect.Value, path, canary string) string {
 	switch v.Kind() {
 	case reflect.String:
 		if strings.Contains(v.String(), canary) {
@@ -22,28 +22,28 @@ func findCanary(v reflect.Value, path string) string {
 		}
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
-			if found := findCanary(v.Field(i), path+"."+v.Type().Field(i).Name); found != "" {
+			if found := findCanary(v.Field(i), path+"."+v.Type().Field(i).Name, canary); found != "" {
 				return found
 			}
 		}
 	case reflect.Slice, reflect.Array:
 		for i := 0; i < v.Len(); i++ {
-			if found := findCanary(v.Index(i), path+"["+itoa(i)+"]"); found != "" {
+			if found := findCanary(v.Index(i), path+"["+itoa(i)+"]", canary); found != "" {
 				return found
 			}
 		}
 	case reflect.Map:
 		for _, key := range v.MapKeys() {
-			if found := findCanary(key, path+".<key>"); found != "" {
+			if found := findCanary(key, path+".<key>", canary); found != "" {
 				return found
 			}
-			if found := findCanary(v.MapIndex(key), path+"["+key.String()+"]"); found != "" {
+			if found := findCanary(v.MapIndex(key), path+"["+key.String()+"]", canary); found != "" {
 				return found
 			}
 		}
 	case reflect.Pointer, reflect.Interface:
 		if !v.IsNil() {
-			return findCanary(v.Elem(), path)
+			return findCanary(v.Elem(), path, canary)
 		}
 	}
 	return ""
@@ -76,7 +76,7 @@ func TestSensitiveValuesNeverEnterTheParsedPlan(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
-			if found := findCanary(reflect.ValueOf(plan), "plan"); found != "" {
+			if found := findCanary(reflect.ValueOf(plan), "plan", canary); found != "" {
 				t.Fatalf("a sensitive value was retained at %s", found)
 			}
 		})

@@ -41,7 +41,7 @@ func TestAliasResolvesThroughModuleCallsAndIndices(t *testing.T) {
 	plan := parseFixture(t, "provider-aliases")
 
 	inner := changeAt(t, plan, "module.storage.aws_s3_bucket.inner[0]")
-	if inner.ProviderConfigKey != "storage:aws.inner" {
+	if inner.ProviderConfigKey != "module.storage:aws.inner" {
 		t.Fatalf("module resource config key = %q", inner.ProviderConfigKey)
 	}
 	if inner.ProviderAlias != "inner" {
