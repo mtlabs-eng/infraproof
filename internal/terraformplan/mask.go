@@ -83,23 +83,17 @@ func (m mask) marks() bool {
 // Only a literal true marks the node it sits on.
 func (m mask) isSet() bool { return m.kind == maskFlag && m.flag }
 
-// contradicts reports whether a mask claims something beneath a value that
-// cannot hold it — an object mask over a string, say, or an array mask over a
-// null.
-//
-// Terraform derives its masks by walking the value, so their shapes always
-// agree and this never fires on real output. But plan JSON reaches this package
-// from coding agents and third-party tooling too, and there are only two ways
-// to read a contradiction: as "nothing is marked", which discloses the value
-// the producer asked to have protected, or as "this is marked", which withholds
-// a value that may have been safe. Only the second is safe to be wrong about.
 // masksDisagree reports whether two masks describe incompatible container
 // shapes. It only matters where the value is absent, because there the shape
 // comes from the masks themselves and there is no third opinion to settle it.
+//
+// Whether either mask actually marks anything is deliberately not considered.
+// The node's shape is taken from whichever mask is an object, and that choice
+// is independent of which mask marks, so a mask that claims nothing could
+// otherwise take the shape and leave a differently shaped marking mask with
+// nowhere to apply. merge re-checks marks() per flag, so widening here cannot
+// mark anything a mask did not claim.
 func masksDisagree(unknown, sensitive mask) bool {
-	if !unknown.marks() || !sensitive.marks() {
-		return false
-	}
 	if !unknown.isContainer() || !sensitive.isContainer() {
 		return false
 	}
@@ -112,6 +106,16 @@ func (m mask) isContainer() bool {
 	return m.kind == maskObject || m.kind == maskArray
 }
 
+// contradicts reports whether a mask claims something beneath a value that
+// cannot hold it — an object mask over a string, say, or an array mask over a
+// null.
+//
+// Terraform derives its masks by walking the value, so their shapes always
+// agree and this never fires on real output. But plan JSON reaches this package
+// from coding agents and third-party tooling too, and there are only two ways
+// to read a contradiction: as "nothing is marked", which discloses the value
+// the producer asked to have protected, or as "this is marked", which withholds
+// a value that may have been safe. Only the second is safe to be wrong about.
 func contradicts(raw any, rawPresent bool, m mask) bool {
 	if m.isSet() || !m.marks() {
 		return false

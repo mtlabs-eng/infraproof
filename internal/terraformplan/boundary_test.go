@@ -548,3 +548,94 @@ func TestDisagreementOnlyArbitratesWhenTheValueIsAbsent(t *testing.T) {
 		t.Fatal("the unknown mask fits the value and must not be marked by the disagreement")
 	}
 }
+
+// TestANonMarkingMaskCannotHideAMarkingOne closes the last route by which a
+// claim disappears. Over an absent value the node's shape comes from whichever
+// mask is an object, and that choice is independent of which mask actually
+// marks something — so an empty object mask could take the shape and leave a
+// differently-shaped marking mask with nowhere to apply.
+func TestANonMarkingMaskCannotHideAMarkingOne(t *testing.T) {
+	cases := map[string]struct {
+		unknown, sensitive string
+		wantState          State
+	}{
+		"empty object hides a marking array (sensitive)": {`{"f": {}}`, `{"f": [true]}`, StateRedacted},
+		"empty object hides a marking array (unknown)":   {`{"f": [true]}`, `{"f": {}}`, StateUnknown},
+		"non-marking object hides a marking array":       {`{"f": {"a": false}}`, `{"f": [true]}`, StateRedacted},
+		"empty array hides a marking object":             {`{"f": []}`, `{"f": {"a": true}}`, StateRedacted},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			plan, _ := Parse(planWithMasks(`{}`, c.unknown, c.sensitive))
+
+			f := plan.ResourceChanges[0].After.Field("f")
+			if f.State() != c.wantState {
+				t.Fatalf("state = %q, want %q — a claim was dropped", f.State(), c.wantState)
+			}
+		})
+	}
+}
+
+// TestDecodeErrorsNeverQuoteTheDecoder keeps every branch of the decode
+// diagnostic content-free. The decoder's own messages are safe today only
+// because the decode target is a map; forwarding them would make that an
+// accident rather than a property.
+func TestDecodeErrorsNeverQuoteTheDecoder(t *testing.T) {
+	inputs := map[string]string{
+		"top-level number":  `7`,
+		"top-level string":  `"QQLEAKQQ"`,
+		"top-level array":   `["QQLEAKQQ"]`,
+		"top-level bool":    `true`,
+		"unrepresentable":   `1e99999`,
+		"bad token":         `{"a": QQLEAKQQ}`,
+		"truncated":         `{"a":`,
+		"empty":             ``,
+		"unterminated text": `{"a": "QQLEAKQQ`,
+	}
+
+	for name, input := range inputs {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(input))
+			if err == nil {
+				t.Fatalf("input %q should be rejected", input)
+			}
+			message := err.Error()
+			if strings.Contains(message, "QQLEAKQQ") {
+				t.Fatalf("the diagnostic quoted the input: %q", message)
+			}
+			// Forwarding the decoder's own error would drag its vocabulary in
+			// along with whatever it chose to quote.
+			if strings.Contains(message, "interface {}") || strings.Contains(message, "cannot unmarshal") {
+				t.Fatalf("the diagnostic forwarded the decoder's message: %q", message)
+			}
+		})
+	}
+}
+
+// TestAFlagMaskIsNotAContainer pins a deliberate narrowing. A mask set to true
+// already marks its whole node, so there is nothing beneath it for a
+// differently shaped mask to disagree about; the node is unreadable either way.
+// Treating a flag as a container would attach a second label to a node that
+// already carries one, which says more than the plan does.
+//
+// This is the shape Terraform actually emits for a field it omits from the
+// value: a bare true in after_unknown beside an empty container in
+// after_sensitive.
+func TestAFlagMaskIsNotAContainer(t *testing.T) {
+	plan, err := Parse(planWithMasks(`{}`, `{"l": true}`, `{"l": [true]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	l := plan.ResourceChanges[0].After.Field("l")
+	if l.State() != StateUnknown {
+		t.Fatalf("state = %q, want %q", l.State(), StateUnknown)
+	}
+	if l.Sensitive() {
+		t.Fatal("a node already marked unknown outright must not also be labelled sensitive by a disagreement")
+	}
+	if l.Len() != 0 {
+		t.Fatalf("an unknown node has no readable children, got %d", l.Len())
+	}
+}
