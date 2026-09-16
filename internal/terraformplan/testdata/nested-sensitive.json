@@ -1,0 +1,47 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.0",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.assets",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "bucket": "example-assets",
+          "previous_token": "CANARY-SENSITIVE-VALUE-DO-NOT-LEAK"
+        },
+        "after": {
+          "bucket": "example-assets",
+          "tags": {
+            "owner": "platform",
+            "secret": "CANARY-SENSITIVE-VALUE-DO-NOT-LEAK"
+          },
+          "credentials": {
+            "username": "CANARY-SENSITIVE-VALUE-DO-NOT-LEAK",
+            "password": "CANARY-SENSITIVE-VALUE-DO-NOT-LEAK",
+            "rotation": {"days": 30}
+          },
+          "rules": [
+            {"name": "first", "token": "CANARY-SENSITIVE-VALUE-DO-NOT-LEAK"},
+            {"name": "second", "token": "CANARY-SENSITIVE-VALUE-DO-NOT-LEAK"}
+          ]
+        },
+        "after_unknown": {
+          "credentials": {"fingerprint": true}
+        },
+        "before_sensitive": {
+          "previous_token": true
+        },
+        "after_sensitive": {
+          "tags": {"secret": true},
+          "credentials": true,
+          "rules": [{"token": true}, {"token": true}]
+        }
+      }
+    }
+  ]
+}

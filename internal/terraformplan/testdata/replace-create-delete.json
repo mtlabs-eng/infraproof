@@ -1,0 +1,29 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.0",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.assets",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create", "delete"],
+        "before": {
+          "bucket": "example-assets"
+        },
+        "after": {
+          "bucket": "example-assets-renamed"
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": {},
+        "after_sensitive": {},
+        "replace_paths": [["bucket"]]
+      },
+      "action_reason": "replace_because_cannot_update"
+    }
+  ]
+}

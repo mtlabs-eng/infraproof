@@ -1,0 +1,25 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.0",
+  "resource_changes": [
+    {
+      "address": "data.aws_caller_identity.current",
+      "mode": "data",
+      "type": "aws_caller_identity",
+      "name": "current",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["read"],
+        "before": null,
+        "after": {},
+        "after_unknown": {
+          "account_id": true,
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      },
+      "action_reason": "read_because_config_unknown"
+    }
+  ]
+}

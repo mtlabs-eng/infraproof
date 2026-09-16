@@ -1,0 +1,111 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.0",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.default_region",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "default_region",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"bucket": "default-region"},
+        "after_unknown": {"id": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket.west_region",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "west_region",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"bucket": "west-region"},
+        "after_unknown": {"id": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.storage.aws_s3_bucket.inner[0]",
+      "module_address": "module.storage",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "inner",
+      "index": 0,
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"bucket": "inner-0"},
+        "after_unknown": {"id": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "configuration": {
+    "provider_config": {
+      "aws": {
+        "name": "aws",
+        "full_name": "registry.terraform.io/hashicorp/aws",
+        "expressions": {"region": {"constant_value": "eu-west-1"}}
+      },
+      "aws.west": {
+        "name": "aws",
+        "alias": "west",
+        "full_name": "registry.terraform.io/hashicorp/aws",
+        "expressions": {"region": {"constant_value": "us-west-2"}}
+      },
+      "storage:aws.inner": {
+        "name": "aws",
+        "alias": "inner",
+        "full_name": "registry.terraform.io/hashicorp/aws",
+        "module_address": "module.storage"
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_s3_bucket.default_region",
+          "mode": "managed",
+          "type": "aws_s3_bucket",
+          "name": "default_region",
+          "provider_config_key": "aws",
+          "schema_version": 0
+        },
+        {
+          "address": "aws_s3_bucket.west_region",
+          "mode": "managed",
+          "type": "aws_s3_bucket",
+          "name": "west_region",
+          "provider_config_key": "aws.west",
+          "schema_version": 0
+        }
+      ],
+      "module_calls": {
+        "storage": {
+          "source": "./modules/storage",
+          "module": {
+            "resources": [
+              {
+                "address": "aws_s3_bucket.inner",
+                "mode": "managed",
+                "type": "aws_s3_bucket",
+                "name": "inner",
+                "provider_config_key": "storage:aws.inner",
+                "schema_version": 0
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

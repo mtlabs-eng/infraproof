@@ -1,0 +1,35 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.0",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.assets",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "null_field": null,
+          "false_field": false,
+          "true_field": true,
+          "zero_field": 0,
+          "big_number": 9007199254740993,
+          "empty_string": "",
+          "empty_object": {},
+          "empty_array": [],
+          "redacted_field": "CANARY-SENSITIVE-VALUE-DO-NOT-LEAK"
+        },
+        "after_unknown": {
+          "unknown_field": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "redacted_field": true
+        }
+      }
+    }
+  ]
+}
