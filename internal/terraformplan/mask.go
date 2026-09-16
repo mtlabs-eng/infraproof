@@ -93,6 +93,25 @@ func (m mask) isSet() bool { return m.kind == maskFlag && m.flag }
 // to read a contradiction: as "nothing is marked", which discloses the value
 // the producer asked to have protected, or as "this is marked", which withholds
 // a value that may have been safe. Only the second is safe to be wrong about.
+// masksDisagree reports whether two masks describe incompatible container
+// shapes. It only matters where the value is absent, because there the shape
+// comes from the masks themselves and there is no third opinion to settle it.
+func masksDisagree(unknown, sensitive mask) bool {
+	if !unknown.marks() || !sensitive.marks() {
+		return false
+	}
+	if !unknown.isContainer() || !sensitive.isContainer() {
+		return false
+	}
+	return unknown.kind != sensitive.kind
+}
+
+// isContainer reports whether the mask describes a structure rather than
+// marking a node outright.
+func (m mask) isContainer() bool {
+	return m.kind == maskObject || m.kind == maskArray
+}
+
 func contradicts(raw any, rawPresent bool, m mask) bool {
 	if m.isSet() || !m.marks() {
 		return false
@@ -164,10 +183,15 @@ func merge(raw any, rawPresent bool, unknown, sensitive mask) Value {
 		return Value{}
 	}
 
+	// With no value at this node the masks supply its shape, so neither can
+	// contradict the value — but they can contradict each other, and building
+	// the node from one of them would discard the other's claim in silence.
+	disagree := !rawPresent && masksDisagree(unknown, sensitive)
+
 	value := Value{
 		present:   true,
-		unknown:   unknown.isSet() || contradicts(raw, rawPresent, unknown),
-		sensitive: sensitive.isSet() || contradicts(raw, rawPresent, sensitive),
+		unknown:   unknown.isSet() || contradicts(raw, rawPresent, unknown) || (disagree && unknown.marks()),
+		sensitive: sensitive.isSet() || contradicts(raw, rawPresent, sensitive) || (disagree && sensitive.marks()),
 	}
 	if value.sensitive || value.unknown {
 		// Nothing readable exists here, so there is nothing to descend into.

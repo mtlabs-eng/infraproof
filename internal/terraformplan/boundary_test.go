@@ -252,14 +252,47 @@ func TestShortVersionsAreStillReported(t *testing.T) {
 }
 
 // TestJSONSyntaxErrorLocatesTheOffset gives a reader something to act on
-// without quoting content.
+// without quoting content. The decoder supplies a position only for a document
+// it read up to a bad token, so the two failure modes are reported differently
+// rather than one of them being given a position of zero that means nothing.
 func TestJSONSyntaxErrorLocatesTheOffset(t *testing.T) {
+	_, err := Parse([]byte(`{"format_version": "1.2", "resource_changes": [ @ ]}`))
+	if err == nil {
+		t.Fatal("a bad token should be rejected")
+	}
+	if !strings.Contains(err.Error(), "offset") {
+		t.Fatalf("error %q does not locate the bad token", err.Error())
+	}
+}
+
+// TestSyntaxErrorOffsetIsTheRealPosition checks the offset is computed rather
+// than constant: two documents failing at different places report differently.
+func TestSyntaxErrorOffsetIsTheRealPosition(t *testing.T) {
+	_, early := Parse([]byte(`{@}`))
+	_, late := Parse([]byte(`{"format_version": "1.2", "terraform_version": "1.12.0", "resource_changes": [ @ ]}`))
+	if early == nil || late == nil {
+		t.Fatal("both documents contain a bad token and should be rejected")
+	}
+	if early.Error() == late.Error() {
+		t.Fatalf("both failures reported the same position: %v", early)
+	}
+	if strings.Contains(late.Error(), "offset 0") || strings.Contains(late.Error(), "offset 1") {
+		t.Fatalf("a failure deep in the document was reported at the start: %v", late)
+	}
+}
+
+// TestTruncatedInputIsNamedNotPositioned covers the other failure mode. A
+// document that simply stops has no meaningful position to report.
+func TestTruncatedInputIsNamedNotPositioned(t *testing.T) {
 	_, err := Parse([]byte(`{"format_version": "1.2", "resource_changes": [`))
 	if err == nil {
 		t.Fatal("truncated JSON should be rejected")
 	}
-	if !strings.Contains(err.Error(), "offset") {
-		t.Fatalf("error %q does not locate the failure", err.Error())
+	if strings.Contains(err.Error(), "offset 0") {
+		t.Fatalf("a truncated document should not be given a position: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "ended before") {
+		t.Fatalf("error %q does not say the input ended early", err.Error())
 	}
 }
 
@@ -395,5 +428,123 @@ func TestUnsupportedVersionReportsOnlyThatProblem(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "format_version") {
 		t.Fatalf("the single reported problem should be the format version: %v", err)
+	}
+}
+
+// TestDisagreeingMasksOverAnAbsentValueMarkBoth covers the one remaining place
+// where a mask that marks something could be read as marking nothing. With no
+// value at the node the masks supply its shape, so they cannot contradict the
+// value — but they can contradict each other, and building the node from one
+// of them would silently discard the other's claim.
+func TestDisagreeingMasksOverAnAbsentValueMarkBoth(t *testing.T) {
+	cases := map[string]struct{ unknown, sensitive string }{
+		"unknown object, sensitive array": {`{"f": {"a": true}}`, `{"f": [true]}`},
+		"unknown array, sensitive object": {`{"f": [true]}`, `{"f": {"a": true}}`},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			plan, _ := Parse(planWithMasks(`{}`, c.unknown, c.sensitive))
+
+			f := plan.ResourceChanges[0].After.Field("f")
+			if f.State() != StateRedacted {
+				t.Fatalf("state = %q, want %q", f.State(), StateRedacted)
+			}
+			if !f.Unknown() {
+				t.Fatal("the unknown claim was discarded")
+			}
+			if !f.Sensitive() {
+				t.Fatal("the sensitive claim was discarded")
+			}
+		})
+	}
+}
+
+// TestAgreeingMasksOverAnAbsentValueAreHonoured is the counterweight: two masks
+// of the same shape describe the same structure and must still be merged rather
+// than treated as a disagreement.
+func TestAgreeingMasksOverAnAbsentValueAreHonoured(t *testing.T) {
+	plan, err := Parse(planWithMasks(`{}`, `{"f": {"a": true}}`, `{"f": {"b": true}}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	f := plan.ResourceChanges[0].After.Field("f")
+	if f.State() != StateKnown || f.Kind() != KindObject {
+		t.Fatalf("f state = %q kind = %q, want a known object", f.State(), f.Kind())
+	}
+	if got := f.Field("a").State(); got != StateUnknown {
+		t.Fatalf("f.a state = %q, want %q", got, StateUnknown)
+	}
+	if got := f.Field("b").State(); got != StateRedacted {
+		t.Fatalf("f.b state = %q, want %q", got, StateRedacted)
+	}
+}
+
+// TestShortUnknownMaskArrayFailsClosed is the unknown half of the tail rule.
+// "Preserve unknown values as unknown" is the same instruction as the one
+// covering sensitive values, and an undescribed element is not a known one.
+func TestShortUnknownMaskArrayFailsClosed(t *testing.T) {
+	plan, _ := Parse(planWithMasks(`{"list": ["first", "second"]}`, `{"list": [false]}`, `{}`))
+
+	list := plan.ResourceChanges[0].After.Field("list")
+	if got := list.At(0).Text(); got != "first" {
+		t.Fatalf("the described element was altered: %q", got)
+	}
+	if got := list.At(1).State(); got != StateUnknown {
+		t.Fatalf("the undescribed element state = %q, want %q", got, StateUnknown)
+	}
+}
+
+// TestNonArrayMaskDoesNotTruncateAnArray keeps the tail rule scoped to array
+// masks. A mask of false, or an object mask, describes nothing positionally, so
+// it must not be read as an empty array that leaves every element undescribed.
+func TestNonArrayMaskDoesNotTruncateAnArray(t *testing.T) {
+	plan, err := Parse(planWithMasks(`{"list": ["first", "second"]}`, `{"list": false}`, `{"list": false}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	list := plan.ResourceChanges[0].After.Field("list")
+	for i, want := range []string{"first", "second"} {
+		if got := list.At(i).Text(); got != want {
+			t.Fatalf("list[%d] = %q, want %q — a false mask marks nothing", i, got, want)
+		}
+	}
+}
+
+// TestSafeTokenBoundary pins the length limit itself rather than only its
+// effect on obviously oversized input.
+func TestSafeTokenBoundary(t *testing.T) {
+	sixteen := "1234567890123456"
+	seventeen := sixteen + "7"
+
+	if got := safeToken(sixteen); got != `"`+sixteen+`"` {
+		t.Fatalf("a sixteen-character token should be reported, got %s", got)
+	}
+	if got := safeToken(seventeen); got == `"`+seventeen+`"` {
+		t.Fatalf("a seventeen-character token should not be reported, got %s", got)
+	}
+}
+
+// TestDisagreementOnlyArbitratesWhenTheValueIsAbsent keeps the rule from
+// over-marking. Where a value exists it settles the disagreement by itself:
+// each mask is judged against the value, and only the one that cannot apply is
+// marked. Treating the other as marked too would withhold a field the plan
+// describes perfectly well.
+func TestDisagreementOnlyArbitratesWhenTheValueIsAbsent(t *testing.T) {
+	// The value is an object. The unknown mask is an object and fits it; the
+	// sensitive mask is an array and does not.
+	plan, _ := Parse(planWithMasks(
+		`{"f": {"a": "visible"}}`,
+		`{"f": {"b": true}}`,
+		`{"f": [true]}`))
+
+	f := plan.ResourceChanges[0].After.Field("f")
+	if f.State() != StateRedacted {
+		t.Fatalf("state = %q, want %q — the array mask cannot apply to an object", f.State(), StateRedacted)
+	}
+	if f.Unknown() {
+		t.Fatal("the unknown mask fits the value and must not be marked by the disagreement")
 	}
 }

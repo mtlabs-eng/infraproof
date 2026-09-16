@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -44,7 +45,7 @@ func parseDocument(raw []byte) (Plan, error) {
 
 	var document map[string]any
 	if err := decoder.Decode(&document); err != nil {
-		return Plan{}, invalid("", "input is not valid JSON at byte offset %d", decoder.InputOffset())
+		return Plan{}, decodeError(err)
 	}
 	// A file holding a second document would otherwise be read as the first one
 	// alone, so the change a human reviews and the change this tool reads would
@@ -97,6 +98,24 @@ func formatVersion(document map[string]any) (string, error) {
 			"major version %s is not implemented by this build, which reads %s.x", safeToken(version), supportedMajorVersion)
 	}
 	return version, nil
+}
+
+// decodeError describes why a document could not be read, locating the failure
+// without quoting any of it.
+//
+// The decoder reports a byte offset only for a document it could read up to a
+// bad token; one that simply stops early leaves the offset at zero, so that
+// case is named rather than given a position that means nothing.
+func decodeError(err error) error {
+	var syntax *json.SyntaxError
+	switch {
+	case errors.As(err, &syntax):
+		return invalid("", "input is not valid JSON at byte offset %d", syntax.Offset)
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+		return invalid("", "input ended before the JSON document was complete")
+	default:
+		return invalid("", "input is not a JSON object describing a plan")
+	}
 }
 
 // safeToken bounds a value before it reaches a diagnostic. A plan is untrusted
