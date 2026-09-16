@@ -133,7 +133,7 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 				}
 				byAddress[joinAddress(addressPrefix, address)] = configResource{
 					providerConfigKey: optionalString(fields, "provider_config_key", entryPath+".provider_config_key", errs),
-					references:        parseExpressions(entryPath+".expressions", fields, addressPrefix, errs),
+					references:        parseExpressions(entryPath, fields, addressPrefix, errs),
 				}
 			}
 		}
@@ -168,48 +168,135 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 	}
 }
 
-// parseExpressions reads the references a resource's arguments make. Targets
-// are qualified with the module the resource sits in, because configuration
-// addresses are module-relative.
+// parseExpressions reads every reference a resource's configuration makes:
+// its arguments, the blocks nested inside them, and the meta-arguments.
+//
+// Targets are qualified with the module the resource sits in, because
+// configuration addresses are module-relative.
 func parseExpressions(path string, fields map[string]any, addressPrefix string, errs *[]error) []ExpressionReference {
-	raw, present := fields["expressions"]
-	if !present || raw == nil {
+	var refs []ExpressionReference
+
+	if raw, present := fields["expressions"]; present && raw != nil {
+		expressionsPath := path + ".expressions"
+		body, ok := raw.(map[string]any)
+		if !ok {
+			*errs = append(*errs, invalid(expressionsPath, "must be an object"))
+		} else {
+			refs = append(refs, expressionBlock(expressionsPath, "", body, addressPrefix, errs)...)
+		}
+	}
+
+	// A control resource often names the resource it controls only through a
+	// meta-argument: "for_each = aws_s3_bucket.b" leaves its own arguments
+	// referring to each.value, which names nothing. Missing these loses the
+	// only link there is.
+	for name, attribute := range map[string]string{
+		"for_each_expression": "for_each",
+		"count_expression":    "count",
+	} {
+		raw, present := fields[name]
+		if !present || raw == nil {
+			continue
+		}
+		body, ok := raw.(map[string]any)
+		if !ok {
+			*errs = append(*errs, invalid(path+"."+name, "must be an object"))
+			continue
+		}
+		refs = append(refs, expressionReferences(path+"."+name, attribute, body, addressPrefix, errs)...)
+	}
+
+	refs = append(refs, dependsOnReferences(path, fields, addressPrefix, errs)...)
+	return refs
+}
+
+// expressionBlock walks one level of a configuration body. An attribute is an
+// object; a nested block is an array of objects, one per block written, and may
+// nest further.
+func expressionBlock(path, prefix string, body map[string]any, addressPrefix string, errs *[]error) []ExpressionReference {
+	var refs []ExpressionReference
+
+	for name, entry := range body {
+		attribute := name
+		if prefix != "" {
+			attribute = prefix + "." + name
+		}
+		entryPath := path + "." + name
+
+		switch typed := entry.(type) {
+		case map[string]any:
+			refs = append(refs, expressionReferences(entryPath, attribute, typed, addressPrefix, errs)...)
+		case []any:
+			for i, element := range typed {
+				nested, ok := element.(map[string]any)
+				if !ok {
+					// A block whose elements are not objects is a shape this
+					// build does not read. It is not an unreadable plan.
+					continue
+				}
+				refs = append(refs, expressionBlock(entryPath+indexPath(i), attribute, nested, addressPrefix, errs)...)
+			}
+		default:
+			// An entry is an attribute expression or a nested block, and
+			// nothing else. A scalar here is a malformed configuration rather
+			// than a shape this build has yet to learn.
+			*errs = append(*errs, invalid(entryPath, "must be an object or an array of blocks"))
+		}
+	}
+	return refs
+}
+
+// expressionReferences reads the references of one attribute expression.
+func expressionReferences(path, attribute string, body map[string]any, addressPrefix string, errs *[]error) []ExpressionReference {
+	listRaw, present := body["references"]
+	if !present || listRaw == nil {
 		return nil
 	}
-	expressions, ok := raw.(map[string]any)
+	list, ok := listRaw.([]any)
 	if !ok {
-		*errs = append(*errs, invalid(path, "must be an object"))
+		*errs = append(*errs, invalid(path+".references", "must be an array"))
 		return nil
 	}
 
-	var refs []ExpressionReference
-	for attribute, entry := range expressions {
-		attributePath := path + "." + attribute
-		body, ok := entry.(map[string]any)
+	refs := make([]ExpressionReference, 0, len(list))
+	for i, item := range list {
+		target, ok := item.(string)
 		if !ok {
-			*errs = append(*errs, invalid(attributePath, "must be an object"))
+			*errs = append(*errs, invalid(path+".references"+indexPath(i), "must be a string"))
 			continue
 		}
-		listRaw, present := body["references"]
-		if !present || listRaw == nil {
-			continue
-		}
-		list, ok := listRaw.([]any)
+		refs = append(refs, ExpressionReference{
+			Attribute: attribute,
+			Target:    joinAddress(addressPrefix, stripIndexKeys(target)),
+		})
+	}
+	return refs
+}
+
+// dependsOnReferences reads an explicit dependency list, which is a plain array
+// of addresses rather than an expression.
+func dependsOnReferences(path string, fields map[string]any, addressPrefix string, errs *[]error) []ExpressionReference {
+	raw, present := fields["depends_on"]
+	if !present || raw == nil {
+		return nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		*errs = append(*errs, invalid(path+".depends_on", "must be an array"))
+		return nil
+	}
+
+	refs := make([]ExpressionReference, 0, len(list))
+	for i, item := range list {
+		target, ok := item.(string)
 		if !ok {
-			*errs = append(*errs, invalid(attributePath+".references", "must be an array"))
+			*errs = append(*errs, invalid(path+".depends_on"+indexPath(i), "must be a string"))
 			continue
 		}
-		for i, item := range list {
-			target, ok := item.(string)
-			if !ok {
-				*errs = append(*errs, invalid(attributePath+".references"+indexPath(i), "must be a string"))
-				continue
-			}
-			refs = append(refs, ExpressionReference{
-				Attribute: attribute,
-				Target:    joinAddress(addressPrefix, target),
-			})
-		}
+		refs = append(refs, ExpressionReference{
+			Attribute: "depends_on",
+			Target:    joinAddress(addressPrefix, stripIndexKeys(target)),
+		})
 	}
 	return refs
 }
@@ -241,6 +328,52 @@ func joinAddress(prefix, address string) string {
 		return address
 	}
 	return prefix + "." + address
+}
+
+// indexKeys returns the contents of every bracketed key in an address,
+// outermost first, with surrounding quotes removed. It is the complement of
+// stripIndexKeys: one gives the configuration address, the other says which
+// instance of it this is.
+func indexKeys(address string) []string {
+	var (
+		keys    []string
+		current []byte
+	)
+
+	depth, inQuotes, escaped := 0, false, false
+	for i := 0; i < len(address); i++ {
+		c := address[i]
+		if depth == 0 {
+			if c == '[' {
+				depth, current = 1, nil
+			}
+			continue
+		}
+		switch {
+		case escaped:
+			escaped = false
+			current = append(current, c)
+		case c == '\\':
+			escaped = true
+		case c == '"':
+			inQuotes = !inQuotes
+		case inQuotes:
+			current = append(current, c)
+		case c == '[':
+			depth++
+			current = append(current, c)
+		case c == ']':
+			depth--
+			if depth == 0 {
+				keys = append(keys, string(current))
+				continue
+			}
+			current = append(current, c)
+		default:
+			current = append(current, c)
+		}
+	}
+	return keys
 }
 
 // stripIndexKeys removes every bracketed count or for_each key from an address,

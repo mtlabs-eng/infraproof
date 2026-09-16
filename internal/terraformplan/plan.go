@@ -145,6 +145,19 @@ func (c ResourceChange) ConfigAddress() string {
 	return stripIndexKeys(c.Address)
 }
 
+// InstanceKeys returns the count and for_each keys along the address, outermost
+// first, with quotes removed. A resource with no repetition anywhere returns
+// nil.
+//
+// ConfigAddress deliberately discards these so that an address can be matched
+// against the configuration block, which has none. Correlation then needs them
+// back: every instance of a repeated resource shares one configuration address,
+// so without the keys one instance's controls are indistinguishable from
+// another's.
+func (c ResourceChange) InstanceKeys() []string {
+	return indexKeys(c.Address)
+}
+
 // IsReplace reports whether the object is destroyed and recreated.
 func (c ResourceChange) IsReplace() bool {
 	return slices.Contains(c.Actions, ActionDelete) && slices.Contains(c.Actions, ActionCreate)

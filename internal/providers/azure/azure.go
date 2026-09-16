@@ -32,13 +32,30 @@ func (Mapper) Interprets(resourceType string) bool {
 	return resourceType == typeAccount || resourceType == typeContainer
 }
 
-// IsSubject reports that the container is the thing exposed, not the account.
-func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeContainer }
+// IsSubject reports that a container is exposed, and so is an account whose
+// containers this plan does not contain — otherwise an account opened up for
+// anonymous access would be reported nowhere at all.
+func (Mapper) IsSubject(resourceType string) bool {
+	return resourceType == typeContainer || resourceType == typeAccount
+}
 
-// Map normalizes a container together with the account that gates it.
+// Map normalizes a container together with the account that gates it, or an
+// account that has no container here to speak for it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
-	account := findType(related, typeAccount)
+	resource := model.NormalizedResource{
+		Address:     subject.Address,
+		Provider:    subject.ProviderName,
+		Cloud:       model.CloudAzure,
+		Family:      model.FamilyObjectStorage,
+		Destructive: subject.IsDestructive(),
+	}
 
+	if subject.Type == typeAccount {
+		resource.ObjectStorage = accountCapabilities(subject, related)
+		return resource
+	}
+
+	account := findType(related, typeAccount)
 	capabilities := model.ObjectStorageCapabilities{
 		PublicAccess: publicAccess(subject, account),
 	}
@@ -49,15 +66,39 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 			Cloud:   model.CloudAzure,
 		}}
 	}
+	resource.ObjectStorage = &capabilities
+	return resource
+}
 
-	return model.NormalizedResource{
-		Address:       subject.Address,
-		Provider:      subject.ProviderName,
-		Cloud:         model.CloudAzure,
-		Family:        model.FamilyObjectStorage,
-		Destructive:   subject.IsDestructive(),
-		ObjectStorage: &capabilities,
+// accountCapabilities describes an account in its own right.
+//
+// With a container in the plan, the container carries the verdict and the
+// account defers; reporting both would say the same thing twice. Without one,
+// the account is the only thing there is to report, and an account permitting
+// anonymous access is not a conclusion that nothing is exposed.
+func accountCapabilities(account terraformplan.ResourceChange, related []terraformplan.ResourceChange) *model.ObjectStorageCapabilities {
+	if findType(related, typeContainer) != nil {
+		return nil
 	}
+
+	gate, sources := accountAllowsPublic(&account)
+	if gate == answerNo {
+		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, sources...).Canonical()}
+	}
+
+	capabilities := &model.ObjectStorageCapabilities{
+		Unresolved: []model.MissingControl{{
+			CheckID: "AZURE_CONTAINER_NOT_IN_PLAN",
+			Reason:  "This storage account permits anonymous access and no container of it is part of this plan.",
+			Cloud:   model.CloudAzure,
+		}},
+	}
+	if gate == answerRedacted {
+		capabilities.PublicAccess = model.Redacted[bool](sources...).Canonical()
+	} else {
+		capabilities.PublicAccess = model.Unknown[bool](sources...).Canonical()
+	}
+	return capabilities
 }
 
 // answer keeps "no" apart from "cannot tell" and from "the source was
@@ -142,13 +183,23 @@ func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.
 	}
 }
 
+// findType returns the single resource of a kind attached to a subject. Two
+// storage accounts gating one container is a contradiction, and choosing
+// between them would state a determination the plan does not support; an
+// absent account already degrades to UNKNOWN, which is the right answer here
+// too.
 func findType(changes []terraformplan.ResourceChange, resourceType string) *terraformplan.ResourceChange {
+	var found *terraformplan.ResourceChange
 	for i := range changes {
-		if changes[i].Type == resourceType {
-			return &changes[i]
+		if changes[i].Type != resourceType {
+			continue
 		}
+		if found != nil {
+			return nil
+		}
+		found = &changes[i]
 	}
-	return nil
+	return found
 }
 
 func provenance(address, attribute string) model.Provenance {

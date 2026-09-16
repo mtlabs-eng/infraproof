@@ -109,3 +109,51 @@ func TestEveryFactNamesItsProvenance(t *testing.T) {
 		})
 	}
 }
+
+// TestADefiniteGrantOutranksAnUnreadableOne keeps the worst answer from
+// winning. An IAM resource nobody can read leaves the question open, but a
+// definite allUsers grant elsewhere closes it — reporting UNKNOWN there would
+// withhold a finding the plan proves.
+func TestADefiniteGrantOutranksAnUnreadableOne(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed", "type": "google_storage_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "a", "public_access_prevention": "inherited"}}},
+	    {"address": "google_storage_bucket_iam_member.aaa_unreadable", "mode": "managed",
+	     "type": "google_storage_bucket_iam_member", "name": "aaa_unreadable", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {},
+	                "after_unknown": {"member": true}}},
+	    {"address": "google_storage_bucket_iam_member.zzz_public", "mode": "managed",
+	     "type": "google_storage_bucket_iam_member", "name": "zzz_public", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"role": "roles/storage.objectViewer", "member": "allUsers"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed", "type": "google_storage_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "google_storage_bucket_iam_member.aaa_unreadable", "mode": "managed",
+	     "type": "google_storage_bucket_iam_member", "name": "aaa_unreadable",
+	     "expressions": {"bucket": {"references": ["google_storage_bucket.assets.name", "google_storage_bucket.assets"]}}},
+	    {"address": "google_storage_bucket_iam_member.zzz_public", "mode": "managed",
+	     "type": "google_storage_bucket_iam_member", "name": "zzz_public",
+	     "expressions": {"bucket": {"references": ["google_storage_bucket.assets.name", "google_storage_bucket.assets"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resource, ok := providers.Normalize(plan, providers.Default()).At("google_storage_bucket.assets")
+	if !ok || resource.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+
+	fact := resource.ObjectStorage.PublicAccess
+	if !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("state=%q grants=%v, want a known true", fact.State, fact.Get())
+	}
+}

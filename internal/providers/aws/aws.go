@@ -46,7 +46,7 @@ func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeB
 // Map normalizes a bucket together with the controls that refer to it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	capabilities := model.ObjectStorageCapabilities{
-		PublicAccess: m.publicAccess(subject, related),
+		PublicAccess: m.publicAccess(subject, related, scope),
 		Unresolved:   unresolvedControls(scope),
 	}
 	return model.NormalizedResource{
@@ -83,10 +83,14 @@ type channel struct {
 // Known(true) means a grant is present and nothing in the plan blocks it.
 // Known(false) means the plan proves prevention. Anything else means a control
 // the answer depends on could not be read.
-func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related []terraformplan.ResourceChange) model.Fact[bool] {
+func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.Fact[bool] {
 	block := findType(related, typePublicAccessBlock)
-	acl := aclChannel(related, block)
-	policy := policyChannel(related, block)
+	// The account-wide block overrides every bucket-level setting, so a route
+	// it shuts is shut for this bucket too.
+	account := findType(scope, typeAccountBlock)
+
+	acl := aclChannel(related, block, account)
+	policy := policyChannel(related, block, account)
 
 	sources := append(acl.sources, policy.sources...)
 	sources = append(sources, provenance(subject.Address, "bucket"))
@@ -123,15 +127,25 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related []ter
 	// No route grants access. That only proves the bucket is not public if the
 	// plan also blocks the routes it cannot see — a policy or ACL applied
 	// outside this change.
-	if blocksEveryRoute(block) {
-		return model.Known(false, blockProvenance(block)...).Canonical()
+	if blocksEveryRoute(block) || blocksEveryRoute(account) {
+		proven := block
+		if !blocksEveryRoute(proven) {
+			proven = account
+		}
+		return model.Known(false, blockProvenance(proven)...).Canonical()
 	}
 	return model.Unknown[bool](sources...).Canonical()
 }
 
-// aclChannel reads the bucket ACL and whether ACLs are blocked.
-func aclChannel(related []terraformplan.ResourceChange, block *terraformplan.ResourceChange) channel {
-	c := channel{blocked: blockedBy(block, "block_public_acls", "ignore_public_acls")}
+// aclChannel reads the bucket ACL and everything that can stop it taking
+// effect: the bucket block, the account block, and ownership controls, which
+// can disable ACLs for the bucket outright.
+func aclChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
+	c := channel{blocked: strongest(
+		blockedBy(block, "block_public_acls", "ignore_public_acls"),
+		blockedBy(account, "block_public_acls", "ignore_public_acls"),
+		aclsDisabled(findType(related, typeOwnershipControls)),
+	)}
 	if block != nil {
 		c.sources = blockProvenance(block)
 	}
@@ -156,9 +170,13 @@ func aclChannel(related []terraformplan.ResourceChange, block *terraformplan.Res
 	return c
 }
 
-// policyChannel reads the bucket policy and whether policies are blocked.
-func policyChannel(related []terraformplan.ResourceChange, block *terraformplan.ResourceChange) channel {
-	c := channel{blocked: blockedBy(block, "block_public_policy", "restrict_public_buckets")}
+// policyChannel reads the bucket policy and whether policies are blocked, at
+// either the bucket or the account level.
+func policyChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
+	c := channel{blocked: strongest(
+		blockedBy(block, "block_public_policy", "restrict_public_buckets"),
+		blockedBy(account, "block_public_policy", "restrict_public_buckets"),
+	)}
 	if block != nil {
 		c.sources = blockProvenance(block)
 	}
@@ -212,6 +230,67 @@ func blockedBy(block *terraformplan.ResourceChange, flags ...string) answer {
 	return result
 }
 
+// strongest combines several independent blocks. A definite yes from any of
+// them shuts the route; otherwise the least readable answer wins, because a
+// control that could not be read is not a control that permits.
+func strongest(answers ...answer) answer {
+	result := answerNo
+	for _, candidate := range answers {
+		switch {
+		case candidate == answerYes:
+			return answerYes
+		case candidate == answerRedacted:
+			result = answerRedacted
+		case candidate == answerUnknown && result != answerRedacted:
+			result = answerUnknown
+		}
+	}
+	return result
+}
+
+// aclsDisabled reports whether ownership controls turn ACLs off for the bucket.
+// BucketOwnerEnforced makes an ACL impossible to apply at all, so an ACL
+// granting public access cannot take effect and the apply would fail.
+func aclsDisabled(controls *terraformplan.ResourceChange) answer {
+	if controls == nil {
+		return answerNo
+	}
+
+	rules := controls.After.Field("rule")
+	if rules.Kind() != terraformplan.KindArray || rules.Len() == 0 {
+		return unreadable(rules)
+	}
+
+	result := answerNo
+	for i := range rules.Len() {
+		ownership := rules.At(i).Field("object_ownership")
+		switch ownership.State() {
+		case terraformplan.StateKnown:
+			if ownership.Text() == "BucketOwnerEnforced" {
+				return answerYes
+			}
+		case terraformplan.StateRedacted:
+			result = answerRedacted
+		default:
+			if result != answerRedacted {
+				result = answerUnknown
+			}
+		}
+	}
+	return result
+}
+
+func unreadable(value terraformplan.Value) answer {
+	switch value.State() {
+	case terraformplan.StateRedacted:
+		return answerRedacted
+	case terraformplan.StateKnown, terraformplan.StateAbsent:
+		return answerNo
+	default:
+		return answerUnknown
+	}
+}
+
 // blocksEveryRoute reports whether the block shuts both routes, which is what
 // makes prevention provable without seeing the policies and ACLs that already
 // exist on the bucket.
@@ -242,13 +321,32 @@ func unresolvedControls(scope []terraformplan.ResourceChange) []model.MissingCon
 	}}
 }
 
+// findType returns the single control of a kind attached to a subject.
+//
+// Two controls of one kind on one bucket is a configuration that will fail at
+// apply, and there is no principled way to choose between them. Reporting the
+// contradiction as ambiguous is the only honest answer; picking one would state
+// a determination the plan does not support.
 func findType(changes []terraformplan.ResourceChange, resourceType string) *terraformplan.ResourceChange {
-	for i := range changes {
-		if changes[i].Type == resourceType {
-			return &changes[i]
-		}
+	found, ambiguous := findOne(changes, resourceType)
+	if ambiguous {
+		return nil
 	}
-	return nil
+	return found
+}
+
+func findOne(changes []terraformplan.ResourceChange, resourceType string) (*terraformplan.ResourceChange, bool) {
+	var found *terraformplan.ResourceChange
+	for i := range changes {
+		if changes[i].Type != resourceType {
+			continue
+		}
+		if found != nil {
+			return nil, true
+		}
+		found = &changes[i]
+	}
+	return found, false
 }
 
 func blockProvenance(block *terraformplan.ResourceChange) []model.Provenance {

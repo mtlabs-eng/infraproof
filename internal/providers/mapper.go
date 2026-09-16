@@ -65,7 +65,7 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 				Interpreted: true,
 			}
 		}
-		resource := mapper.Map(change, edges[change.ConfigAddress()], scope)
+		resource := mapper.Map(change, edges[change.Address], scope)
 		resource.Interpreted = true
 		return resource
 	}
@@ -80,13 +80,17 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 }
 
 // relate groups changes joined by a configuration reference, in both
-// directions.
+// directions and instance by instance.
 //
 // Direction is not a property of the relationship, only of how a particular
 // provider happens to write it. An S3 public access block names its bucket,
 // while an Azure container names the storage account that gates it — the same
-// control relationship, pointing opposite ways. A one-directional index would
-// silently work for one cloud and silently fail for the other.
+// control relationship, pointing opposite ways.
+//
+// Instances matter just as much. A reference targets a configuration address,
+// which every instance of a repeated resource shares, so matching on it alone
+// hands one bucket's public access block to its sibling. Two resources are
+// related only when their instance keys agree as far as both have them.
 func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.ResourceChange {
 	byConfigAddress := map[string][]terraformplan.ResourceChange{}
 	for _, change := range changes {
@@ -95,17 +99,18 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 	}
 
 	edges := map[string][]terraformplan.ResourceChange{}
-	join := func(from string, to terraformplan.ResourceChange) {
-		edges[from] = append(edges[from], to)
+	join := func(from, to terraformplan.ResourceChange) {
+		if !sameInstance(from, to) {
+			return
+		}
+		edges[from.Address] = append(edges[from.Address], to)
+		edges[to.Address] = append(edges[to.Address], from)
 	}
 
 	for _, change := range changes {
 		for _, reference := range change.References {
-			// The referring resource is related to its target...
-			join(reference.Target, change)
-			// ...and the target is related to what it refers to.
 			for _, target := range byConfigAddress[reference.Target] {
-				join(change.ConfigAddress(), target)
+				join(change, target)
 			}
 		}
 	}
@@ -119,4 +124,20 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 		})
 	}
 	return edges
+}
+
+// sameInstance reports whether two changes belong to the same repetition of
+// their configuration.
+//
+// Keys are compared as far as both resources have them, so an unrepeated bucket
+// still relates to controls created with for_each — a real and common shape —
+// while two instances of one bucket never relate to each other's controls.
+func sameInstance(a, b terraformplan.ResourceChange) bool {
+	left, right := a.InstanceKeys(), b.InstanceKeys()
+	for i := 0; i < len(left) && i < len(right); i++ {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }

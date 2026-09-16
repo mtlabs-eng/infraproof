@@ -261,3 +261,149 @@ func TestEveryInstanceSharesOneConfigAddress(t *testing.T) {
 		t.Fatalf("%q and %q should share a configuration address", first.ConfigAddress(), second.ConfigAddress())
 	}
 }
+
+// TestNestedBlockExpressionsParse covers the shape that broke the canonical S3
+// stack. In the configuration representation an attribute is an object but a
+// nested block is an array of objects, and rejecting the array turns a
+// best-practice plan into invalid input.
+func TestNestedBlockExpressionsParse(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}},
+	    {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {"bucket": {"constant_value": "example"}}},
+	    {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "assets",
+	     "expressions": {
+	       "bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]},
+	       "rule": [{"object_ownership": {"constant_value": "BucketOwnerPreferred"}}]
+	     }}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("a nested block should not make a plan unreadable: %v", err)
+	}
+	controls := changeAt(t, plan, "aws_s3_bucket_ownership_controls.assets")
+	if len(controls.References) != 1 || controls.References[0].Target != "aws_s3_bucket.assets" {
+		t.Fatalf("references = %v", controls.References)
+	}
+}
+
+// TestReferencesInsideNestedBlocksAreFound keeps the recursion honest: a
+// reference buried in a block is still a reference.
+func TestReferencesInsideNestedBlocksAreFound(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "a.target", "mode": "managed", "type": "a", "name": "target", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}},
+	    {"address": "b.holder", "mode": "managed", "type": "b", "name": "holder", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "a.target", "mode": "managed", "type": "a", "name": "target", "expressions": {}},
+	    {"address": "b.holder", "mode": "managed", "type": "b", "name": "holder",
+	     "expressions": {"outer": [{"inner": [{"deep": {"references": ["a.target.id", "a.target"]}}]}]}}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	refs := changeAt(t, plan, "b.holder").References
+	if len(refs) != 1 || refs[0].Target != "a.target" {
+		t.Fatalf("references = %v", refs)
+	}
+	if refs[0].Attribute != "outer.inner.deep" {
+		t.Fatalf("attribute = %q, want the nested path", refs[0].Attribute)
+	}
+}
+
+// TestMetaArgumentReferencesAreCaptured covers the idiomatic
+// "for_each = aws_s3_bucket.b" pattern, where the only link between a control
+// and the resource it controls is the meta-argument: its bucket attribute
+// refers to each.value, which names nothing.
+func TestMetaArgumentReferencesAreCaptured(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"one\"]", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "b", "index": "one", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}},
+	    {"address": "aws_s3_bucket_public_access_block.b[\"one\"]", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "b", "index": "one", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}},
+	    {"address": "a.dependent", "mode": "managed", "type": "a", "name": "dependent", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {"bucket": {"references": ["each.key"]}}},
+	    {"address": "aws_s3_bucket_public_access_block.b", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "b",
+	     "for_each_expression": {"references": ["aws_s3_bucket.b"]},
+	     "expressions": {"bucket": {"references": ["each.value.id", "each.value"]}}},
+	    {"address": "a.dependent", "mode": "managed", "type": "a", "name": "dependent",
+	     "depends_on": ["aws_s3_bucket.b"],
+	     "expressions": {}}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	block := changeAt(t, plan, `aws_s3_bucket_public_access_block.b["one"]`)
+	if len(block.References) != 1 || block.References[0].Target != "aws_s3_bucket.b" {
+		t.Fatalf("for_each references = %v", block.References)
+	}
+	if block.References[0].Attribute != "for_each" {
+		t.Fatalf("attribute = %q, want for_each", block.References[0].Attribute)
+	}
+
+	dependent := changeAt(t, plan, "a.dependent")
+	if len(dependent.References) != 1 || dependent.References[0].Attribute != "depends_on" {
+		t.Fatalf("depends_on references = %v", dependent.References)
+	}
+}
+
+// TestInstanceKeysSeparateSiblings is what stops one instance's controls being
+// read as another's. Every instance of a configuration block shares one
+// configuration address, so the address alone cannot tell them apart.
+func TestInstanceKeysSeparateSiblings(t *testing.T) {
+	cases := map[string][]string{
+		"aws_s3_bucket.b":                         nil,
+		`aws_s3_bucket.b["one"]`:                  {"one"},
+		"aws_s3_bucket.b[0]":                      {"0"},
+		`module.m["eu"].aws_s3_bucket.b`:          {"eu"},
+		`module.m["eu"].aws_s3_bucket.b["one"]`:   {"eu", "one"},
+		`module.m[0].module.n[1].aws_s3_bucket.b`: {"0", "1"},
+		`aws_s3_bucket.b["a]b"]`:                  {"a]b"},
+	}
+
+	for address, want := range cases {
+		t.Run(address, func(t *testing.T) {
+			got := ResourceChange{Address: address}.InstanceKeys()
+			if len(got) != len(want) {
+				t.Fatalf("keys = %v, want %v", got, want)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("keys = %v, want %v", got, want)
+				}
+			}
+		})
+	}
+}

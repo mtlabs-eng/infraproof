@@ -1,6 +1,7 @@
 package aws_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -227,5 +228,288 @@ func TestAResourceNoMapperClaimsStaysOpaque(t *testing.T) {
 	}
 	if !resource.Destructive {
 		t.Fatal("a delete is destructive whether or not any mapper understood it")
+	}
+}
+
+// TestThreeOfFourFlagsDoNotProvePrevention pins why all four are required.
+// restrict_public_buckets is the flag that neutralises a policy that already
+// exists on the bucket; block_public_policy only rejects new ones. Proving
+// prevention on three flags would claim more than the plan shows.
+func TestThreeOfFourFlagsDoNotProvePrevention(t *testing.T) {
+	flags := []string{"block_public_acls", "block_public_policy", "ignore_public_acls", "restrict_public_buckets"}
+
+	for _, omitted := range flags {
+		t.Run("without "+omitted, func(t *testing.T) {
+			set := map[string]bool{}
+			for _, flag := range flags {
+				set[flag] = flag != omitted
+			}
+			fact := bucketFromBlock(t, set, "")
+			if fact.IsKnown() && !fact.Get() {
+				t.Fatalf("prevention was proved with %s false", omitted)
+			}
+		})
+	}
+
+	all := map[string]bool{}
+	for _, flag := range flags {
+		all[flag] = true
+	}
+	if fact := bucketFromBlock(t, all, ""); !fact.IsKnown() || fact.Get() {
+		t.Fatalf("all four flags true should prove prevention, got state=%q grants=%v", fact.State, fact.Get())
+	}
+}
+
+// TestANonPublicAclIsNotAGrant covers the ACL negative on its own, with a
+// permissive block, so the ACL reading is exercised rather than masked.
+func TestANonPublicAclIsNotAGrant(t *testing.T) {
+	permissive := map[string]bool{
+		"block_public_acls": false, "block_public_policy": false,
+		"ignore_public_acls": false, "restrict_public_buckets": false,
+	}
+
+	if fact := bucketFromBlock(t, permissive, "private"); fact.IsKnown() && fact.Get() {
+		t.Fatal("a private ACL was read as a grant")
+	}
+	if fact := bucketFromBlock(t, permissive, "public-read"); !fact.IsKnown() || !fact.Get() {
+		t.Fatal("this test is only meaningful if a public ACL is still detected")
+	}
+}
+
+// TestASubjectReportsItselfInterpreted keeps "a mapper understood this" visible
+// on the normalized resource, not only on the control resources.
+func TestASubjectReportsItselfInterpreted(t *testing.T) {
+	graph := normalize(t, "private")
+
+	resource, ok := graph.At("aws_s3_bucket.assets")
+	if !ok {
+		t.Fatal("no bucket in the graph")
+	}
+	if !resource.Interpreted {
+		t.Fatal("a normalized subject must report itself understood")
+	}
+}
+
+// bucketFromBlock builds a one-bucket plan with a public access block set to
+// the given flags, and optionally an ACL.
+func bucketFromBlock(t *testing.T, flags map[string]bool, acl string) model.Fact[bool] {
+	t.Helper()
+
+	block := ""
+	for flag, value := range flags {
+		if block != "" {
+			block += ", "
+		}
+		block += fmt.Sprintf("%q: %v", flag, value)
+	}
+
+	changes := fmt.Sprintf(`
+	  {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	   "provider_name": "p", "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	  {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	   "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": {%s}}}`, block)
+	configs := `
+	  {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	   "expressions": {}},
+	  {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	   "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+
+	if acl != "" {
+		changes += fmt.Sprintf(`,
+	  {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	   "name": "assets", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": {"acl": %q}}}`, acl)
+		configs += `,
+	  {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	   "name": "assets",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+	}
+
+	raw := []byte(fmt.Sprintf(`{"format_version": "1.2", "resource_changes": [%s],
+	  "configuration": {"root_module": {"resources": [%s]}}}`, changes, configs))
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resource, ok := providers.Normalize(plan, providers.Default()).At("aws_s3_bucket.assets")
+	if !ok || resource.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	return resource.ObjectStorage.PublicAccess
+}
+
+// TestOwnershipControlsDisableAcls covers a resource the mapper claimed to
+// interpret but never read. BucketOwnerEnforced turns ACLs off for the bucket,
+// so an ACL granting public access cannot take effect — and the apply would
+// fail. Reporting it as public is a finding nobody can act on.
+func TestOwnershipControlsDisableAcls(t *testing.T) {
+	permissive := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+
+	enforced := bucketWithOwnership(t, permissive, "public-read", "BucketOwnerEnforced")
+	if enforced.IsKnown() && enforced.Get() {
+		t.Fatal("an ACL cannot grant access on a bucket where ACLs are disabled")
+	}
+
+	preferred := bucketWithOwnership(t, permissive, "public-read", "BucketOwnerPreferred")
+	if !preferred.IsKnown() || !preferred.Get() {
+		t.Fatalf("BucketOwnerPreferred leaves ACLs working: state=%q grants=%v", preferred.State, preferred.Get())
+	}
+}
+
+// TestTheAccountBlockIsReadNotJustCounted covers the control that overrides
+// every bucket-level setting. Treating its presence as reassurance while
+// ignoring its contents gets it backwards in both directions: a plan that
+// switches it off loses the caveat, and one that switches it on proves
+// prevention the mapper never used.
+func TestTheAccountBlockIsReadNotJustCounted(t *testing.T) {
+	permissive := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+	blocking := `{"block_public_acls": true, "block_public_policy": true,
+	              "ignore_public_acls": true, "restrict_public_buckets": true}`
+
+	t.Run("an account block that blocks everything proves prevention", func(t *testing.T) {
+		fact := bucketWithAccountBlock(t, permissive, "public-read", blocking)
+		if !fact.IsKnown() || fact.Get() {
+			t.Fatalf("state=%q grants=%v, want a known false", fact.State, fact.Get())
+		}
+	})
+
+	t.Run("an account block that blocks nothing does not", func(t *testing.T) {
+		fact := bucketWithAccountBlock(t, permissive, "public-read", permissive)
+		if !fact.IsKnown() || !fact.Get() {
+			t.Fatalf("state=%q grants=%v, want a known true", fact.State, fact.Get())
+		}
+	})
+}
+
+func bucketWithOwnership(t *testing.T, block, acl, ownership string) model.Fact[bool] {
+	t.Helper()
+	extra := fmt.Sprintf(`,
+	  {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	   "type": "aws_s3_bucket_ownership_controls", "name": "assets", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null,
+	              "after": {"rule": [{"object_ownership": %q}]}}}`, ownership)
+	extraCfg := `,
+	  {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	   "type": "aws_s3_bucket_ownership_controls", "name": "assets",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+	return bucketPlan(t, block, acl, extra, extraCfg)
+}
+
+func bucketWithAccountBlock(t *testing.T, block, acl, account string) model.Fact[bool] {
+	t.Helper()
+	extra := fmt.Sprintf(`,
+	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "this", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": %s}}`, account)
+	extraCfg := `,
+	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "this", "expressions": {}}`
+	return bucketPlan(t, block, acl, extra, extraCfg)
+}
+
+// bucketPlan builds a bucket with a public access block, an ACL, and whatever
+// extra resource a case needs.
+func bucketPlan(t *testing.T, block, acl, extraChange, extraConfig string) model.Fact[bool] {
+	t.Helper()
+
+	raw := []byte(fmt.Sprintf(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	     "provider_name": "p", "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": %s}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": %q}}}%s
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}%s
+	  ]}}
+	}`, block, acl, extraChange, extraConfig))
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resource, ok := providers.Normalize(plan, providers.Default()).At("aws_s3_bucket.assets")
+	if !ok || resource.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	return resource.ObjectStorage.PublicAccess
+}
+
+// TestTheAccountBlockShutsThePolicyRouteToo covers the other half of the
+// account-level control. A public bucket policy is stopped by the account
+// block just as an ACL is, and testing only one route leaves the other
+// unexercised.
+func TestTheAccountBlockShutsThePolicyRouteToo(t *testing.T) {
+	permissive := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+	blocking := `{"block_public_acls": true, "block_public_policy": true,
+	              "ignore_public_acls": true, "restrict_public_buckets": true}`
+	publicPolicy := `{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\"}]}`
+
+	policyChange := fmt.Sprintf(`,
+	  {"address": "aws_s3_bucket_policy.assets", "mode": "managed", "type": "aws_s3_bucket_policy",
+	   "name": "assets", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": {"policy": "%s"}}}`, publicPolicy)
+	policyConfig := `,
+	  {"address": "aws_s3_bucket_policy.assets", "mode": "managed", "type": "aws_s3_bucket_policy",
+	   "name": "assets",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+
+	accountChange := fmt.Sprintf(`,
+	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "this", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": %s}}`, blocking)
+	accountConfig := `,
+	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "this", "expressions": {}}`
+
+	withAccount := bucketPlan(t, permissive, "private", policyChange+accountChange, policyConfig+accountConfig)
+	if !withAccount.IsKnown() || withAccount.Get() {
+		t.Fatalf("the account block shuts the policy route: state=%q grants=%v", withAccount.State, withAccount.Get())
+	}
+
+	without := bucketPlan(t, permissive, "private", policyChange, policyConfig)
+	if !without.IsKnown() || !without.Get() {
+		t.Fatalf("without it the policy grants access: state=%q grants=%v", without.State, without.Get())
+	}
+}
+
+// TestTwoControlsOfOneKindCannotBeResolved covers a plan that contradicts
+// itself. Two ACLs on one bucket is a configuration that will fail at apply;
+// picking one of them arbitrarily would report a determination the plan does
+// not support.
+func TestTwoControlsOfOneKindCannotBeResolved(t *testing.T) {
+	permissive := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+
+	second := `,
+	  {"address": "aws_s3_bucket_acl.other", "mode": "managed", "type": "aws_s3_bucket_acl",
+	   "name": "other", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}`
+	secondConfig := `,
+	  {"address": "aws_s3_bucket_acl.other", "mode": "managed", "type": "aws_s3_bucket_acl",
+	   "name": "other",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+
+	fact := bucketPlan(t, permissive, "private", second, secondConfig)
+	if fact.IsKnown() {
+		t.Fatalf("two conflicting ACLs cannot yield a determination, got state=%q grants=%v", fact.State, fact.Get())
 	}
 }

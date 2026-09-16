@@ -4,6 +4,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/mtlabs-eng/infraproof/internal/providers"
 )
 
 // TestRulesDependOnNoProvider turns an acceptance criterion into something the
@@ -68,7 +70,9 @@ func TestAMapperIsReachableOnlyThroughTheRegistry(t *testing.T) {
 			clouds++
 		}
 	}
-	if clouds != 3 {
-		t.Fatalf("the registry reaches %d provider packages, want 3", clouds)
+	// Derived from the registry rather than hard-coded, so adding a cloud does
+	// not require editing the test that proves the boundary holds.
+	if want := len(providers.Default()); clouds != want {
+		t.Fatalf("the registry reaches %d provider packages, want %d", clouds, want)
 	}
 }

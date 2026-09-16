@@ -66,7 +66,7 @@ func publicFinding(resource model.NormalizedResource, capabilities model.ObjectS
 		Resource: &evidence.Resource{
 			Address:  resource.Address,
 			Provider: resource.Provider,
-			Cloud:    evidence.Cloud(resource.Cloud),
+			Cloud:    bundleCloud(resource.Cloud),
 		},
 		Expected: &evidence.ExpectedFact{
 			Path:  "object_storage.public_access",
@@ -112,6 +112,22 @@ func unresolvedUnknowns(resource model.NormalizedResource, capabilities model.Ob
 		})
 	}
 	return out
+}
+
+// bundleCloud converts a normalized cloud into the Evidence Bundle's closed
+// enumeration.
+//
+// The model deliberately does not constrain its clouds — a mapper for a cloud
+// this build has never heard of is the point of the design — but the bundle
+// contract does, and a finding the bundle refuses to validate is a finding that
+// cannot be rendered. An unrecognized cloud is reported as unknown rather than
+// smuggled through as a value the contract rejects.
+func bundleCloud(cloud model.Cloud) evidence.Cloud {
+	converted := evidence.Cloud(cloud)
+	if !converted.Valid() {
+		return evidence.CloudUnknown
+	}
+	return converted
 }
 
 // referencesOf turns a fact's provenance into evidence. A reference locates the

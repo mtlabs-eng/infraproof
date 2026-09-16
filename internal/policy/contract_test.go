@@ -204,3 +204,71 @@ func TestTheRuleReadsOnlyTheModel(t *testing.T) {
 		t.Fatalf("a cloud this build has never heard of should still be judged: %v", result.Findings)
 	}
 }
+
+// TestAFindingFromAnUnknownCloudStillValidates closes the gap between the
+// model, which deliberately does not constrain its clouds, and the Evidence
+// Bundle, whose cloud enumeration is closed. A finding the bundle refuses is a
+// finding that cannot be rendered, so an unrecognized cloud is reported as
+// unknown rather than smuggled through.
+func TestAFindingFromAnUnknownCloudStillValidates(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{{
+		Address:     "invented.resource",
+		Provider:    "registry.example.com/vendor/vendor",
+		Cloud:       model.Cloud("newcloud"),
+		Family:      model.FamilyObjectStorage,
+		Interpreted: true,
+		ObjectStorage: &model.ObjectStorageCapabilities{
+			PublicAccess: model.Known(true, model.Provenance{
+				ResourceAddress: "invented.resource",
+				AttributePath:   "exposed",
+				Cloud:           model.Cloud("newcloud"),
+			}),
+		},
+	}}}
+
+	result := policy.StoragePublic(graph)
+	if len(result.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(result.Findings))
+	}
+	if got := result.Findings[0].Resource.Cloud; got != evidence.CloudUnknown {
+		t.Fatalf("cloud = %q, want %q", got, evidence.CloudUnknown)
+	}
+
+	bundle := evidence.Bundle{
+		SchemaVersion: evidence.SchemaVersion,
+		Decision:      evidence.DecisionBlock,
+		Summary:       "The change grants public access to object storage.",
+		Subject: evidence.Subject{
+			IntentSource: "intent.yaml", PlanFormatVersion: "1.2", PlanDigest: "sha256:example",
+		},
+		Verification: []evidence.Verification{
+			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},
+		},
+		Findings: result.Findings,
+		Unknowns: result.Unknowns,
+	}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("a finding from an unrecognized cloud must still render: %v", err)
+	}
+}
+
+// TestEveryRegisteredCloudIsCoveredHere keeps this table honest as the registry
+// grows. Adding a mapper must not require editing the universal rule — but it
+// must require proving the rule still covers it, and a silently skipped cloud
+// would let that slide.
+func TestEveryRegisteredCloudIsCoveredHere(t *testing.T) {
+	covered := map[string]bool{"aws": true, "azure": true, "gcp": true}
+
+	for _, mapper := range providers.Default() {
+		cloud := string(mapper.Cloud())
+		if !covered[cloud] {
+			t.Fatalf("mapper for %q is registered but has no scenarios in this contract test", cloud)
+		}
+		if _, err := os.Stat(filepath.Join("..", "providers", cloud, "testdata")); err != nil {
+			t.Fatalf("mapper for %q has no fixtures: %v", cloud, err)
+		}
+	}
+	if len(providers.Default()) != len(covered) {
+		t.Fatalf("registry has %d mappers, this test covers %d", len(providers.Default()), len(covered))
+	}
+}
