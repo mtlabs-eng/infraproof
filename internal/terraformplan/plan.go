@@ -112,8 +112,37 @@ type ResourceChange struct {
 	Before, After Value
 	// ReplacePaths are the attribute paths that forced a replacement.
 	ReplacePaths [][]string
+	// References are the resources this resource's configuration refers to, in
+	// deterministic order. They are the only dependable link between a resource
+	// and the resources that control it: an attribute holding another
+	// resource's id is unknown until apply, so matching on values would fail
+	// exactly where correlation matters. Empty when the plan carries no
+	// configuration block.
+	References []ExpressionReference
 	// ImportID is the import ID when this change imports an existing object.
 	ImportID string
+}
+
+// ExpressionReference is one resource named by another resource's
+// configuration.
+type ExpressionReference struct {
+	// Attribute is the configuration argument holding the reference, such as
+	// "bucket". It is what makes a correlation explainable to a reader.
+	Attribute string
+	// Target is the referenced resource's address, module-qualified and without
+	// count or for_each keys, matching the form the configuration block uses.
+	Target string
+}
+
+// ConfigAddress returns the address as the configuration block spells it:
+// module-qualified, without count or for_each keys. It is the form an
+// ExpressionReference targets, so correlating a resource with the resources
+// that refer to it means comparing this against ExpressionReference.Target.
+//
+// Every instance of a counted resource shares one configuration address, which
+// is what lets all of them correlate to the same referenced resource.
+func (c ResourceChange) ConfigAddress() string {
+	return stripIndexKeys(c.Address)
 }
 
 // IsReplace reports whether the object is destroyed and recreated.

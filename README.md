@@ -33,8 +33,17 @@ Markdown, with an exit-code contract.
 representation that keeps absent, null, false, zero, unknown, and sensitive values distinguishable.
 Values the plan marks sensitive are discarded while reading, so nothing downstream holds one.
 
-Intent loading, provider mappers, and policy evaluation are not implemented, so the `check` command
-below is not yet available.
+**Multi-cloud object storage** — AWS, Azure and GCP mappers normalize public exposure into one
+model, and a single rule reads it. The rule names no cloud; adding one is a new mapper and an entry
+in the registry.
+
+Public access is a correlation problem in every cloud, and the control that decides it often sits
+outside the plan — an account-level block on AWS, an organization policy behind GCP's inherited
+default. Where that is so, the answer is `UNKNOWN` and the missing control is named. That is the
+common case, not an edge one, and reporting `PASS` there would be a guess.
+
+Intent loading and the decision engine are not implemented, so the `check` command below is not yet
+available.
 
 ```sh
 go test ./...

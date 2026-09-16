@@ -1,6 +1,10 @@
 package terraformplan
 
-import "strings"
+import (
+	"cmp"
+	"slices"
+	"strings"
+)
 
 // parseConfiguration reads the plan's configuration block, which is the only
 // place a plan records which provider instance a resource uses.
@@ -10,9 +14,9 @@ import "strings"
 // are indistinguishable without this walk. Sanitized plans routinely omit the
 // block entirely; that loses alias information and is not an error.
 //
-// It returns the declared provider instances and a map from module-qualified
-// resource address to provider config key.
-func parseConfiguration(document map[string]any, errs *[]error) (map[string]ProviderConfig, map[string]string) {
+// It returns the declared provider instances and, for every configured
+// resource, its provider config key and the references its arguments make.
+func parseConfiguration(document map[string]any, errs *[]error) (map[string]ProviderConfig, map[string]configResource) {
 	raw, present := document["configuration"]
 	if !present || raw == nil {
 		return nil, nil
@@ -25,16 +29,54 @@ func parseConfiguration(document map[string]any, errs *[]error) (map[string]Prov
 
 	configs := parseProviderConfigs(configuration, errs)
 
-	keysByAddress := map[string]string{}
+	byAddress := map[string]configResource{}
 	if rootRaw, present := configuration["root_module"]; present && rootRaw != nil {
 		root, ok := rootRaw.(map[string]any)
 		if !ok {
 			*errs = append(*errs, invalid("configuration.root_module", "must be an object"))
 		} else {
-			walkModule("configuration.root_module", "", root, keysByAddress, errs)
+			walkModule("configuration.root_module", "", root, byAddress, errs)
 		}
 	}
-	return configs, keysByAddress
+	// A reference is only an address if the configuration declares a resource
+	// at it. Terraform emits the attribute form alongside the bare resource
+	// form of every reference, and also names variables, count.index and
+	// each.key, none of which is a resource.
+	for address, resource := range byAddress {
+		resource.references = resolveReferences(resource.references, byAddress)
+		byAddress[address] = resource
+	}
+	return configs, byAddress
+}
+
+// configResource is what the configuration block says about one resource.
+type configResource struct {
+	providerConfigKey string
+	references        []ExpressionReference
+}
+
+func resolveReferences(refs []ExpressionReference, byAddress map[string]configResource) []ExpressionReference {
+	if len(refs) == 0 {
+		return nil
+	}
+
+	out := make([]ExpressionReference, 0, len(refs))
+	for _, ref := range refs {
+		if _, declared := byAddress[ref.Target]; declared {
+			out = append(out, ref)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+
+	slices.SortFunc(out, func(a, b ExpressionReference) int {
+		if c := cmp.Compare(a.Attribute, b.Attribute); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Target, b.Target)
+	})
+	return slices.Compact(out)
 }
 
 func parseProviderConfigs(configuration map[string]any, errs *[]error) map[string]ProviderConfig {
@@ -72,7 +114,7 @@ func parseProviderConfigs(configuration map[string]any, errs *[]error) map[strin
 // walkModule records the provider config key of every resource in a module and
 // descends into its module calls. Configuration addresses are module-relative,
 // so the qualified address is rebuilt on the way down.
-func walkModule(path, addressPrefix string, module map[string]any, keysByAddress map[string]string, errs *[]error) {
+func walkModule(path, addressPrefix string, module map[string]any, byAddress map[string]configResource, errs *[]error) {
 	if resourcesRaw, present := module["resources"]; present && resourcesRaw != nil {
 		resources, ok := resourcesRaw.([]any)
 		if !ok {
@@ -89,8 +131,10 @@ func walkModule(path, addressPrefix string, module map[string]any, keysByAddress
 				if address == "" {
 					continue
 				}
-				key := optionalString(fields, "provider_config_key", entryPath+".provider_config_key", errs)
-				keysByAddress[joinAddress(addressPrefix, address)] = key
+				byAddress[joinAddress(addressPrefix, address)] = configResource{
+					providerConfigKey: optionalString(fields, "provider_config_key", entryPath+".provider_config_key", errs),
+					references:        parseExpressions(entryPath+".expressions", fields, addressPrefix, errs),
+				}
 			}
 		}
 	}
@@ -120,8 +164,54 @@ func walkModule(path, addressPrefix string, module map[string]any, keysByAddress
 			*errs = append(*errs, invalid(callPath+".module", "must be an object"))
 			continue
 		}
-		walkModule(callPath+".module", joinAddress(addressPrefix, "module."+name), inner, keysByAddress, errs)
+		walkModule(callPath+".module", joinAddress(addressPrefix, "module."+name), inner, byAddress, errs)
 	}
+}
+
+// parseExpressions reads the references a resource's arguments make. Targets
+// are qualified with the module the resource sits in, because configuration
+// addresses are module-relative.
+func parseExpressions(path string, fields map[string]any, addressPrefix string, errs *[]error) []ExpressionReference {
+	raw, present := fields["expressions"]
+	if !present || raw == nil {
+		return nil
+	}
+	expressions, ok := raw.(map[string]any)
+	if !ok {
+		*errs = append(*errs, invalid(path, "must be an object"))
+		return nil
+	}
+
+	var refs []ExpressionReference
+	for attribute, entry := range expressions {
+		attributePath := path + "." + attribute
+		body, ok := entry.(map[string]any)
+		if !ok {
+			*errs = append(*errs, invalid(attributePath, "must be an object"))
+			continue
+		}
+		listRaw, present := body["references"]
+		if !present || listRaw == nil {
+			continue
+		}
+		list, ok := listRaw.([]any)
+		if !ok {
+			*errs = append(*errs, invalid(attributePath+".references", "must be an array"))
+			continue
+		}
+		for i, item := range list {
+			target, ok := item.(string)
+			if !ok {
+				*errs = append(*errs, invalid(attributePath+".references"+indexPath(i), "must be a string"))
+				continue
+			}
+			refs = append(refs, ExpressionReference{
+				Attribute: attribute,
+				Target:    joinAddress(addressPrefix, target),
+			})
+		}
+	}
+	return refs
 }
 
 // resolveProviderInstances attaches the provider instance to each change.
@@ -130,18 +220,19 @@ func walkModule(path, addressPrefix string, module map[string]any, keysByAddress
 // configuration block does not, so the key is stripped before matching. A
 // resource whose address is not in the configuration keeps an empty key rather
 // than being guessed at.
-func resolveProviderInstances(plan *Plan, keysByAddress map[string]string) {
-	if len(keysByAddress) == 0 {
+func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
+	if len(byAddress) == 0 {
 		return
 	}
 	for i := range plan.ResourceChanges {
 		change := &plan.ResourceChanges[i]
-		key, found := keysByAddress[stripIndexKeys(change.Address)]
+		configured, found := byAddress[stripIndexKeys(change.Address)]
 		if !found {
 			continue
 		}
-		change.ProviderConfigKey = key
-		change.ProviderAlias = plan.ProviderConfigs[key].Alias
+		change.ProviderConfigKey = configured.providerConfigKey
+		change.ProviderAlias = plan.ProviderConfigs[configured.providerConfigKey].Alias
+		change.References = configured.references
 	}
 }
 

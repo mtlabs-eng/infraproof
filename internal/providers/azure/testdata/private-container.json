@@ -1,0 +1,90 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.0",
+  "resource_changes": [
+    {
+      "address": "azurerm_storage_account.example",
+      "mode": "managed",
+      "type": "azurerm_storage_account",
+      "name": "example",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "examplestore",
+          "account_tier": "Standard",
+          "allow_nested_items_to_be_public": true
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "azurerm_storage_container.assets",
+      "mode": "managed",
+      "type": "azurerm_storage_container",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "assets",
+          "container_access_type": "private"
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "configuration": {
+    "provider_config": {
+      "azurerm": {
+        "name": "azurerm",
+        "full_name": "registry.terraform.io/hashicorp/azurerm"
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "azurerm_storage_account.example",
+          "mode": "managed",
+          "type": "azurerm_storage_account",
+          "name": "example",
+          "provider_config_key": "azurerm",
+          "expressions": {
+            "name": {
+              "constant_value": "examplestore"
+            }
+          }
+        },
+        {
+          "address": "azurerm_storage_container.assets",
+          "mode": "managed",
+          "type": "azurerm_storage_container",
+          "name": "assets",
+          "provider_config_key": "azurerm",
+          "expressions": {
+            "storage_account_id": {
+              "references": [
+                "azurerm_storage_account.example.id",
+                "azurerm_storage_account.example"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

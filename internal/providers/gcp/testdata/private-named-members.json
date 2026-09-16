@@ -1,0 +1,100 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.0",
+  "resource_changes": [
+    {
+      "address": "google_storage_bucket.assets",
+      "mode": "managed",
+      "type": "google_storage_bucket",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "example-assets",
+          "location": "EU",
+          "uniform_bucket_level_access": true,
+          "public_access_prevention": "enforced"
+        },
+        "after_unknown": {
+          "id": true,
+          "self_link": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "google_storage_bucket_iam_binding.readers",
+      "mode": "managed",
+      "type": "google_storage_bucket_iam_binding",
+      "name": "readers",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "role": "roles/storage.objectViewer",
+          "members": [
+            "user:jane@example.com"
+          ]
+        },
+        "after_unknown": {
+          "etag": true,
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "configuration": {
+    "provider_config": {
+      "google": {
+        "name": "google",
+        "full_name": "registry.terraform.io/hashicorp/google"
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_storage_bucket.assets",
+          "mode": "managed",
+          "type": "google_storage_bucket",
+          "name": "assets",
+          "provider_config_key": "google",
+          "expressions": {
+            "name": {
+              "constant_value": "example-assets"
+            }
+          }
+        },
+        {
+          "address": "google_storage_bucket_iam_binding.readers",
+          "mode": "managed",
+          "type": "google_storage_bucket_iam_binding",
+          "name": "readers",
+          "provider_config_key": "google",
+          "expressions": {
+            "bucket": {
+              "references": [
+                "google_storage_bucket.assets.name",
+                "google_storage_bucket.assets"
+              ]
+            },
+            "members": {
+              "constant_value": [
+                "user:jane@example.com"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

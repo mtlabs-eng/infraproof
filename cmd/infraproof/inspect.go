@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
+	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -37,6 +39,17 @@ type inspectChange struct {
 	Destructive   bool     `json:"destructive"`
 	UnknownPaths  []string `json:"unknown_paths"`
 	RedactedPaths []string `json:"redacted_paths"`
+	// ObjectStorage appears only for a resource a mapper normalized. It reports
+	// what was understood about exposure and what could not be determined; it
+	// is not a verdict, and inspect still reaches none.
+	ObjectStorage *inspectObjectStorage `json:"object_storage,omitempty"`
+}
+
+type inspectObjectStorage struct {
+	PublicAccess       string   `json:"public_access"`
+	GrantsPublicAccess bool     `json:"grants_public_access"`
+	DeterminedFrom     []string `json:"determined_from"`
+	Unresolved         []string `json:"unresolved_controls"`
 }
 
 // runInspect parses a plan and prints what it found. It verifies nothing.
@@ -67,7 +80,9 @@ func runInspect(args []string, stdout, stderr io.Writer) int {
 		return evidence.ExitInvalidInput
 	}
 
-	encoded, err := json.MarshalIndent(buildInspectReport(plan), "", "  ")
+	graph := providers.Normalize(plan, providers.Default())
+
+	encoded, err := json.MarshalIndent(buildInspectReport(plan, graph), "", "  ")
 	if err != nil {
 		fmt.Fprintf(stderr, "infraproof: cannot render the report: %v\n", err)
 		return evidence.ExitInternal
@@ -76,7 +91,7 @@ func runInspect(args []string, stdout, stderr io.Writer) int {
 	return evidence.ExitPass
 }
 
-func buildInspectReport(plan terraformplan.Plan) inspectReport {
+func buildInspectReport(plan terraformplan.Plan, graph model.Graph) inspectReport {
 	report := inspectReport{
 		FormatVersion:    plan.FormatVersion,
 		TerraformVersion: plan.TerraformVersion,
@@ -96,6 +111,11 @@ func buildInspectReport(plan terraformplan.Plan) inspectReport {
 		slices.Sort(unknown)
 		slices.Sort(redacted)
 
+		var storage *inspectObjectStorage
+		if normalized, ok := graph.At(change.Address); ok {
+			storage = describeObjectStorage(normalized)
+		}
+
 		report.ResourceChanges = append(report.ResourceChanges, inspectChange{
 			Address:       change.Address,
 			ModuleAddress: change.ModuleAddress,
@@ -108,6 +128,7 @@ func buildInspectReport(plan terraformplan.Plan) inspectReport {
 			Destructive:   change.IsDestructive(),
 			UnknownPaths:  orEmpty(unknown),
 			RedactedPaths: orEmpty(redacted),
+			ObjectStorage: storage,
 		})
 	}
 
@@ -115,6 +136,30 @@ func buildInspectReport(plan terraformplan.Plan) inspectReport {
 		return strings.Compare(a.Address, b.Address)
 	})
 	return report
+}
+
+// describeObjectStorage reports what a mapper made of a resource. It shows the
+// state of the determination and the provider attributes it rested on, so a
+// reader can see both what was concluded and how far the evidence reached.
+func describeObjectStorage(resource model.NormalizedResource) *inspectObjectStorage {
+	if resource.ObjectStorage == nil {
+		return nil
+	}
+	capabilities := resource.ObjectStorage.PublicAccess.Canonical()
+
+	out := &inspectObjectStorage{
+		PublicAccess:       string(capabilities.State),
+		GrantsPublicAccess: capabilities.Get(),
+		DeterminedFrom:     []string{},
+		Unresolved:         []string{},
+	}
+	for _, source := range capabilities.Sources {
+		out.DeterminedFrom = append(out.DeterminedFrom, source.ResourceAddress+"."+source.AttributePath)
+	}
+	for _, control := range resource.ObjectStorage.Unresolved {
+		out.Unresolved = append(out.Unresolved, control.CheckID)
+	}
+	return out
 }
 
 // collectPaths records where a value is unreadable. A path locates a field; it

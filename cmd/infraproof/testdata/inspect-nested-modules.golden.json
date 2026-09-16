@@ -17,7 +17,17 @@
       "unknown_paths": [
         "after.id"
       ],
-      "redacted_paths": []
+      "redacted_paths": [],
+      "object_storage": {
+        "public_access": "UNKNOWN",
+        "grants_public_access": false,
+        "determined_from": [
+          "module.storage.aws_s3_bucket.assets.bucket"
+        ],
+        "unresolved_controls": [
+          "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK"
+        ]
+      }
     },
     {
       "address": "module.storage.aws_s3_bucket.replicas[0]",
@@ -33,7 +43,17 @@
       "unknown_paths": [
         "after.id"
       ],
-      "redacted_paths": []
+      "redacted_paths": [],
+      "object_storage": {
+        "public_access": "UNKNOWN",
+        "grants_public_access": false,
+        "determined_from": [
+          "module.storage.aws_s3_bucket.replicas[0].bucket"
+        ],
+        "unresolved_controls": [
+          "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK"
+        ]
+      }
     },
     {
       "address": "module.storage.module.inner.aws_s3_bucket.logs",
@@ -49,7 +69,17 @@
       "unknown_paths": [
         "after.id"
       ],
-      "redacted_paths": []
+      "redacted_paths": [],
+      "object_storage": {
+        "public_access": "UNKNOWN",
+        "grants_public_access": false,
+        "determined_from": [
+          "module.storage.module.inner.aws_s3_bucket.logs.bucket"
+        ],
+        "unresolved_controls": [
+          "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK"
+        ]
+      }
     },
     {
       "address": "module.storage[\"eu\"].aws_s3_bucket.keyed",
@@ -65,7 +95,17 @@
       "unknown_paths": [
         "after.id"
       ],
-      "redacted_paths": []
+      "redacted_paths": [],
+      "object_storage": {
+        "public_access": "UNKNOWN",
+        "grants_public_access": false,
+        "determined_from": [
+          "module.storage[\"eu\"].aws_s3_bucket.keyed.bucket"
+        ],
+        "unresolved_controls": [
+          "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK"
+        ]
+      }
     }
   ]
 }
