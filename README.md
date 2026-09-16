@@ -24,16 +24,27 @@ The initial product is an offline CLI. It consumes a structured intent contract 
 
 ## Status
 
-Milestone 01 (Evidence Bundle foundation) is implemented: the Evidence Bundle is modelled,
-validated, ordered canonically, and rendered as stable JSON and Markdown, with an exit-code
-contract. Plan parsing, intent loading, provider mappers, and policy evaluation are not implemented,
-so the `check` command below is not yet available.
+Two milestones are implemented.
+
+**Evidence Bundle** — modelled, validated, ordered canonically, and rendered as stable JSON and
+Markdown, with an exit-code contract.
+
+**Plan parser** — Terraform and OpenTofu plan JSON is parsed into a provider-neutral change
+representation that keeps absent, null, false, zero, unknown, and sensitive values distinguishable.
+Values the plan marks sensitive are discarded while reading, so nothing downstream holds one.
+
+Intent loading, provider mappers, and policy evaluation are not implemented, so the `check` command
+below is not yet available.
 
 ```sh
 go test ./...
 go vet ./...
 go run ./cmd/infraproof --version
+go run ./cmd/infraproof inspect --plan internal/terraformplan/testdata/nested-sensitive.json
 ```
+
+`inspect` is a development aid: it reports addresses, actions, and which fields are unknown or
+redacted, and reaches no verdict.
 
 ## Planned user experience
 

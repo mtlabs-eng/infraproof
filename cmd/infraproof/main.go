@@ -1,9 +1,11 @@
 // Command infraproof is the InfraProof command-line entry point.
 //
-// This build implements the Evidence Bundle contract only. It can report its
-// version and usage; it cannot yet read a plan or an intent contract, so no
-// verification command is registered. It is the only place in the program that
-// terminates the process.
+// This build can model an Evidence Bundle and parse a Terraform or OpenTofu
+// plan, but it cannot yet compare the two: intent loading and policy evaluation
+// are not implemented, so no verification command is registered. The inspect
+// command reports what the parser understood and decides nothing.
+//
+// This is the only place in the program that terminates the process.
 package main
 
 import (
@@ -21,11 +23,16 @@ const version = "0.1.0"
 const usage = `InfraProof verifies Terraform and OpenTofu changes against declared intent.
 
 Usage:
+  infraproof inspect --plan <path>
   infraproof --version
   infraproof --help
 
-Verification is not available in this build: plan and intent parsing are not
-implemented yet, so no check command is registered.
+Verification is not available in this build: intent parsing and policy
+evaluation are not implemented yet, so no check command is registered.
+
+inspect parses a plan and reports what was understood — addresses, actions, and
+which fields are unknown or redacted. It is a development aid, it reaches no
+verdict, and it never prints a value the plan marked sensitive.
 
 Exit codes:
   0   PASS
@@ -44,19 +51,27 @@ func main() {
 // the exit behavior is directly testable. Diagnostics go to stderr; stdout
 // carries only requested output.
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		return usageError(stderr, "expected exactly one argument")
+	if len(args) == 0 {
+		return usageError(stderr, "expected a command or a flag")
 	}
 
 	switch args[0] {
 	case "--help", "-h":
+		if len(args) != 1 {
+			return usageError(stderr, "--help takes no arguments")
+		}
 		fmt.Fprint(stdout, usage)
 		return evidence.ExitPass
 	case "--version":
+		if len(args) != 1 {
+			return usageError(stderr, "--version takes no arguments")
+		}
 		fmt.Fprintf(stdout, "infraproof %s (evidence bundle schema %s)\n", version, evidence.SchemaVersion)
 		return evidence.ExitPass
+	case "inspect":
+		return runInspect(args[1:], stdout, stderr)
 	default:
-		return usageError(stderr, fmt.Sprintf("unrecognized argument %q", args[0]))
+		return usageError(stderr, fmt.Sprintf("unrecognized command or flag %q", args[0]))
 	}
 }
 

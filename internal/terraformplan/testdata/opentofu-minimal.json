@@ -1,0 +1,21 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.8.0",
+  "resource_changes": [
+    {
+      "address": "random_pet.name",
+      "mode": "managed",
+      "type": "random_pet",
+      "name": "name",
+      "provider_name": "registry.opentofu.org/hashicorp/random",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"length": 2},
+        "after_unknown": {"id": true},
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}
