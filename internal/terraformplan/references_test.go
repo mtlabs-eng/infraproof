@@ -527,20 +527,28 @@ func TestKeyedAndBareReferencesToDifferentInstancesBothSurvive(t *testing.T) {
 	}
 }
 
-// TestAReferenceRecordsHowItIndexes is the fact the correlation layer needs to
-// stop assuming. Terraform writes the index expression's own references
-// alongside the resource reference, so a plan says whether an argument indexes
-// its target by the referring resource's own key or by something else entirely.
+// TestAReferenceRecordsHowItIndexes pins what the plan can and cannot tell us.
+//
+// Terraform writes the index expression's own references beside the resource
+// reference. That is enough to see that an argument uses its own key — but only
+// if nothing else takes part, because a derivation such as
+// "b[local.swap[each.key]]" mentions each.key and still permutes. count.index
+// carries no signal at all: "b[count.index]" and "b[count.index + 1]" emit the
+// same list, since the format records references rather than expressions.
 func TestAReferenceRecordsHowItIndexes(t *testing.T) {
 	cases := map[string]struct {
 		references string
 		positional bool
 	}{
 		"indexed by the resource's own key": {`["aws_s3_bucket.b", "each.key"]`, true},
-		"indexed by count.index":            {`["aws_s3_bucket.b", "count.index"]`, true},
+		"indexed by an attribute of it":     {`["aws_s3_bucket.b.id", "aws_s3_bucket.b", "each.key"]`, true},
 		"indexed by the value":              {`["aws_s3_bucket.b", "each.value"]`, false},
-		"indexed through a lookup table":    {`["aws_s3_bucket.b", "local.m", "each.key"]`, true},
-		"no index at all":                   {`["aws_s3_bucket.b"]`, false},
+		// A derivation can permute: local.m may be a swap map.
+		"indexed through a lookup table": {`["aws_s3_bucket.b", "local.m", "each.key"]`, false},
+		"built by a for expression":      {`["local.m", "each.key", "aws_s3_bucket.b"]`, false},
+		// "b[count.index]" and "b[count.index + 1]" are indistinguishable here.
+		"indexed by count.index": {`["aws_s3_bucket.b", "count.index"]`, false},
+		"no index at all":        {`["aws_s3_bucket.b"]`, false},
 	}
 
 	for name, c := range cases {

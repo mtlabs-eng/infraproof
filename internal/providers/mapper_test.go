@@ -741,14 +741,22 @@ func TestPreferKeyedIsScopedToItsTarget(t *testing.T) {
 }
 
 // TestEveryIndexFormIsAccountedFor is the stopping condition for this class of
-// defect. Five review rounds each found the same mistake — the plan encodes a
+// defect. Six review rounds each found the same mistake — the plan encodes a
 // relationship the configuration does not resolve, and the code filled the gap
-// with an assumption — so rather than wait for a sixth reviewer to find a sixth
-// door, this enumerates every way Terraform can write an index and states what
-// correlation does with each.
+// with an assumption — so this enumerates every way Terraform can write an
+// index and states what correlation does with each, and why.
 //
-// A new form appearing means this table fails to compile out of date, rather
-// than a public bucket being reported private.
+// Two rows here were wrong in the unsafe direction before the sixth round, and
+// that is the table doing its job: the failing rows could be named rather than
+// rediscovered. The rule they produced is narrow enough to state as a property
+// of the plan format rather than of this code — an argument pairs instance to
+// instance only when its references are the target and the resource's own key,
+// and nothing else.
+//
+// Two forms are absent because the plan cannot express them: a reference inside
+// a dynamic block produces no expressions entry at all, and a control reaching
+// its subject through a module output names the output rather than a resource.
+// Both cost correlation and yield UNKNOWN, which is the safe direction.
 func TestEveryIndexFormIsAccountedFor(t *testing.T) {
 	cases := map[string]struct {
 		references string
@@ -759,15 +767,23 @@ func TestEveryIndexFormIsAccountedFor(t *testing.T) {
 	}{
 		"the resource's own key": {
 			`["aws_s3_bucket.b", "each.key"]`, true,
-			"b[each.key] lines the instances up one to one",
+			"b[each.key] lines the instances up one to one and nothing else takes part",
 		},
-		"the count index": {
-			`["aws_s3_bucket.b", "count.index"]`, true,
-			"b[count.index] is the same statement for a counted resource",
+		"an attribute of the target, keyed by the own key": {
+			`["aws_s3_bucket.b.id", "aws_s3_bucket.b", "each.key"]`, true,
+			"the extra entry is the target itself, not another input",
 		},
 		"a lookup keyed by the resource's own key": {
-			`["aws_s3_bucket.b", "local.m", "each.key"]`, true,
-			"the index still derives from this resource's key",
+			`["aws_s3_bucket.b", "local.m", "each.key"]`, false,
+			"a derivation can permute: local.m may map each key to a different one",
+		},
+		"a for expression over a lookup": {
+			`["local.m", "each.key", "aws_s3_bucket.b"]`, false,
+			"same permutation, reached through a comprehension",
+		},
+		"the count index": {
+			`["aws_s3_bucket.b", "count.index"]`, false,
+			"b[count.index] and b[count.index + 1] emit the same list; the format records references, not expressions",
 		},
 		"the for_each value": {
 			`["aws_s3_bucket.b", "each.value"]`, false,
@@ -873,5 +889,169 @@ func TestAControlMayBeRepeatedMoreDeeplyThanItsTarget(t *testing.T) {
 	elsewhere := publicAccess(t, graph, `module.m["us"].aws_s3_bucket.b`)
 	if elsewhere.IsKnown() && elsewhere.Get() {
 		t.Fatal("a control in one module instance must not reach into another")
+	}
+}
+
+// TestRealPermutedIndexPlans are the two shapes the enumeration got wrong, as
+// Terraform wrote them. One indexes through a swap map keyed by the resource's
+// own key; the other does arithmetic on count.index. In both the public bucket
+// was reported provably private, citing the block that governs its sibling.
+func TestRealPermutedIndexPlans(t *testing.T) {
+	t.Run("a lookup table that permutes", func(t *testing.T) {
+		graph := normalize(t, "real-aws-permuting-lookup-terraform-1.14")
+
+		public := publicAccess(t, graph, `aws_s3_bucket.b["a"]`)
+		if !public.IsKnown() || !public.Get() {
+			t.Fatalf(`b["a"] carries the public ACL: state=%q grants=%v`, public.State, public.Get())
+		}
+		for _, source := range public.Sources {
+			if contains(source.ResourceAddress, "pab") {
+				t.Fatalf("a block reached through a swap map was read as this bucket's: %s", source.ResourceAddress)
+			}
+		}
+		if other := publicAccess(t, graph, `aws_s3_bucket.b["z"]`); other.IsKnown() {
+			t.Fatalf(`b["z"] is governed by a block the plan does not resolve: state=%q`, other.State)
+		}
+	})
+
+	t.Run("arithmetic on the count index", func(t *testing.T) {
+		graph := normalize(t, "real-aws-count-arithmetic-terraform-1.14")
+
+		public := publicAccess(t, graph, "aws_s3_bucket.b[1]")
+		if !public.IsKnown() || !public.Get() {
+			t.Fatalf("b[1] carries the public ACL: state=%q grants=%v", public.State, public.Get())
+		}
+		for _, source := range public.Sources {
+			if contains(source.ResourceAddress, "pab") {
+				t.Fatalf("a counted block was paired by position: %s", source.ResourceAddress)
+			}
+		}
+		if other := publicAccess(t, graph, "aws_s3_bucket.b[0]"); other.IsKnown() {
+			t.Fatalf("b[0] is governed by a block the plan does not resolve: state=%q", other.State)
+		}
+	})
+}
+
+// TestADeeperTargetIsNotReachedFromOutside covers the depth guard, which valid
+// Terraform cannot reach: a resource in an outer module can only see a nested
+// module's outputs, never its resources. A plan whose configuration and
+// resource_changes disagree can present the shape anyway, and the guard is what
+// stops a control being paired with a resource nested below it.
+func TestADeeperTargetIsNotReachedFromOutside(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "module.m[\"eu\"].module.n[\"x\"].aws_s3_bucket.b",
+	     "module_address": "module.m[\"eu\"].module.n[\"x\"]",
+	     "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "x"}}},
+	    {"address": "module.m[\"eu\"].module.n[\"y\"].aws_s3_bucket.b",
+	     "module_address": "module.m[\"eu\"].module.n[\"y\"]",
+	     "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "y"}}},
+	    {"address": "module.m[\"eu\"].aws_s3_bucket_public_access_block.outer",
+	     "module_address": "module.m[\"eu\"]",
+	     "mode": "managed", "type": "aws_s3_bucket_public_access_block", "name": "outer",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "module.m[\"eu\"].module.n[\"x\"].aws_s3_bucket_acl.open",
+	     "module_address": "module.m[\"eu\"].module.n[\"x\"]",
+	     "mode": "managed", "type": "aws_s3_bucket_acl", "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"module_calls": {"m": {"source": "./m", "module": {
+	    "resources": [
+	      {"address": "aws_s3_bucket_public_access_block.outer", "mode": "managed",
+	       "type": "aws_s3_bucket_public_access_block", "name": "outer",
+	       "expressions": {"bucket": {"references": ["module.n.aws_s3_bucket.b"]}}}
+	    ],
+	    "module_calls": {"n": {"source": "./n", "module": {"resources": [
+	      {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	       "expressions": {}},
+	      {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	       "name": "open",
+	       "expressions": {"bucket": {"references": ["aws_s3_bucket.b.id", "aws_s3_bucket.b"]}}}
+	    ]}}}
+	  }}}}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	public := publicAccess(t, graph, `module.m["eu"].module.n["x"].aws_s3_bucket.b`)
+	if !public.IsKnown() || !public.Get() {
+		t.Fatalf("the bucket's own ACL grants public access: state=%q grants=%v", public.State, public.Get())
+	}
+	for _, source := range public.Sources {
+		if contains(source.ResourceAddress, "outer") {
+			t.Fatalf("a control outside the module governed a resource inside it: %s", source.ResourceAddress)
+		}
+	}
+}
+
+// TestCountingOverAResourceIsNotPairing covers the meta-argument form of the
+// same undecidability. "for_each = aws_s3_bucket.b" states that the instances
+// correspond by key. "count = length(aws_s3_bucket.b)" states a length, and the
+// index that uses it is exactly the one the plan cannot record — so counting
+// over a resource cannot carry the pairing either.
+func TestCountingOverAResourceIsNotPairing(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[0]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": 0, "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "zero"}}},
+	    {"address": "aws_s3_bucket.b[1]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": 1, "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "one"}}},
+	    {"address": "aws_s3_bucket_public_access_block.pab[0]", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "pab", "index": 0, "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "aws_s3_bucket_public_access_block.pab[1]", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "pab", "index": 1, "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.pab", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "pab",
+	     "count_expression": {"references": ["aws_s3_bucket.b"]},
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.b", "count.index"]}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b[1].id", "aws_s3_bucket.b[1]", "aws_s3_bucket.b"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	// b[1] has a public ACL through a literal key. Whether either counted block
+	// governs it is not something the plan records.
+	public := publicAccess(t, graph, "aws_s3_bucket.b[1]")
+	if !public.IsKnown() || !public.Get() {
+		t.Fatalf("b[1] carries the public ACL: state=%q grants=%v", public.State, public.Get())
+	}
+	for _, source := range public.Sources {
+		if contains(source.ResourceAddress, "pab") {
+			t.Fatalf("a counted block was paired by position: %s", source.ResourceAddress)
+		}
 	}
 }

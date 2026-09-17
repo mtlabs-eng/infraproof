@@ -10,6 +10,8 @@ These plans were produced by Terraform 1.14.0 itself, not written by hand.
 | `real-aws-bare-depends-on-terraform-1.14.json` | the same, plus `depends_on = [aws_s3_bucket.b]` on the control |
 | `real-aws-ambiguous-reference-terraform-1.14.json` | the same, with the control reaching its bucket through `lookup(aws_s3_bucket.b, "a")` |
 | `real-aws-swapped-index-terraform-1.14.json` | controls repeated over a swap map, so each governs its sibling's bucket |
+| `real-aws-permuting-lookup-terraform-1.14.json` | the same permutation reached through `b[local.swap[each.key]]`, which mentions the own key and still permutes |
+| `real-aws-count-arithmetic-terraform-1.14.json` | `b[(count.index + 1) % 2]`, which the plan records identically to `b[count.index]` |
 
 Both came from throwaway configurations using the `aws` provider with
 `skip_credentials_validation`, `skip_requesting_account_id` and
@@ -18,7 +20,7 @@ placeholder key strings those settings require were removed from the committed
 files; no credential was involved at any point, and neither plan was applied.
 
 They exist because the hand-written fixtures in the provider subpackages missed
-seven shapes that only real output revealed: a nested block is an array of
+nine shapes that only real output revealed: a nested block is an array of
 objects rather than an object, a control resource often names the resource it
 controls through `for_each_expression` alone, every instance of a repeated
 resource shares one configuration address, a reference names the instance it

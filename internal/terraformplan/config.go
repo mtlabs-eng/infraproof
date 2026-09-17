@@ -214,6 +214,9 @@ func parseExpressions(path string, fields map[string]any, addressPrefix string, 
 		"for_each_expression": "for_each",
 		"count_expression":    "count",
 	} {
+		// Repeating over a resource with for_each pairs instance to instance by
+		// key. A count does not: it fixes a length, not an order.
+		positional := name == "for_each_expression"
 		raw, present := fields[name]
 		if !present || raw == nil {
 			continue
@@ -223,10 +226,8 @@ func parseExpressions(path string, fields map[string]any, addressPrefix string, 
 			*errs = append(*errs, invalid(path+"."+name, "must be an object"))
 			continue
 		}
-		// Repeating over a resource is the statement that the instances pair
-		// up, so it needs no index to say so.
 		for _, ref := range expressionReferences(path+"."+name, attribute, body, addressPrefix, errs) {
-			ref.Positional = true
+			ref.Positional = positional
 			refs = append(refs, ref)
 		}
 	}
@@ -283,34 +284,55 @@ func expressionReferences(path, attribute string, body map[string]any, addressPr
 		return nil
 	}
 
-	// An index written as the resource's own key is what makes pairing one
-	// instance with one instance meaningful. Anything else — the value, a
-	// lookup table, arithmetic — indexes somewhere the plan does not resolve.
-	positional := false
-	for _, item := range list {
-		if target, ok := item.(string); ok && indexesByOwnKey(target) {
-			positional = true
-		}
-	}
-
-	refs := make([]ExpressionReference, 0, len(list))
+	targets := make([]string, 0, len(list))
 	for i, item := range list {
 		target, ok := item.(string)
 		if !ok {
 			*errs = append(*errs, invalid(path+".references"+indexPath(i), "must be a string"))
 			continue
 		}
+		targets = append(targets, target)
+	}
+
+	refs := make([]ExpressionReference, 0, len(targets))
+	for _, target := range targets {
 		ref := reference(attribute, target, addressPrefix)
-		ref.Positional = positional
+		ref.Positional = indexesByOwnKey(targets, target)
 		refs = append(refs, ref)
 	}
 	return refs
 }
 
-// indexesByOwnKey reports whether a reference is the referring resource's own
-// repetition key.
-func indexesByOwnKey(target string) bool {
-	return target == "each.key" || target == "count.index"
+// indexesByOwnKey reports whether an argument indexes this target by the
+// referring resource's own repetition key, and nothing else.
+//
+// The presence of each.key is not enough. "b[each.key]" emits
+// [b, each.key]; "b[local.swap[each.key]]" emits [b, local.swap, each.key], and
+// the second permutes — a swap map pairs every control with its sibling's
+// resource. So the list must contain the target, the own-key token, and no
+// third thing that could be doing the indexing.
+//
+// count.index is deliberately absent. "b[count.index]" and "b[count.index + 1]"
+// emit identical reference lists, because the configuration records references
+// rather than expressions, so no discriminator exists in the plan format. For a
+// verifier whose premise is never answering PASS on a public bucket, that
+// choice has to fall on the side of UNKNOWN.
+func indexesByOwnKey(all []string, target string) bool {
+	const ownKey = "each.key"
+
+	if target == ownKey || !slices.Contains(all, ownKey) {
+		return false
+	}
+	resource := stripIndexKeys(target)
+	for _, other := range all {
+		if other == ownKey || strings.HasPrefix(stripIndexKeys(other), resource) {
+			continue
+		}
+		// Something else takes part in this argument, and it may be what
+		// selects the instance.
+		return false
+	}
+	return true
 }
 
 // reference builds one reference, keeping the instance the target names.
