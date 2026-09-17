@@ -112,8 +112,78 @@ type ResourceChange struct {
 	Before, After Value
 	// ReplacePaths are the attribute paths that forced a replacement.
 	ReplacePaths [][]string
+	// DeclaredRepeated reports that the configuration declares this resource
+	// with count or for_each, whether or not every instance reached the plan.
+	//
+	// It says something the surviving instances cannot: a plan holding one
+	// instance of a repeated resource looks unambiguous by count and is not,
+	// because a reference naming no instance may have meant one that is absent.
+	DeclaredRepeated bool
+	// References are the resources this resource's configuration refers to, in
+	// deterministic order. They are the only dependable link between a resource
+	// and the resources that control it: an attribute holding another
+	// resource's id is unknown until apply, so matching on values would fail
+	// exactly where correlation matters. Empty when the plan carries no
+	// configuration block.
+	References []ExpressionReference
 	// ImportID is the import ID when this change imports an existing object.
 	ImportID string
+}
+
+// ExpressionReference is one resource named by another resource's
+// configuration.
+type ExpressionReference struct {
+	// Attribute is the configuration argument holding the reference, such as
+	// "bucket". It is what makes a correlation explainable to a reader.
+	Attribute string
+	// Target is the referenced resource's address, module-qualified and without
+	// count or for_each keys, matching the form the configuration block uses.
+	Target string
+	// TargetKeys are the count or for_each keys the reference named, or nil
+	// when it named the resource as a whole.
+	//
+	// Terraform writes both forms: an argument holding another instance's id
+	// produces the keyed reference and the bare one side by side, while a
+	// meta-argument such as "for_each = aws_s3_bucket.b" produces only the
+	// bare form. The difference is the only thing separating one instance's
+	// controls from its sibling's, so it is kept rather than normalized away.
+	TargetKeys []string
+}
+
+// ConfigAddress returns the address as the configuration block spells it:
+// module-qualified, without count or for_each keys. It is the form an
+// ExpressionReference targets, so correlating a resource with the resources
+// that refer to it means comparing this against ExpressionReference.Target.
+//
+// Every instance of a counted resource shares one configuration address, which
+// is what lets all of them correlate to the same referenced resource.
+func (c ResourceChange) ConfigAddress() string {
+	return stripIndexKeys(c.Address)
+}
+
+// ModuleKeys returns the repetition keys of the modules containing this
+// resource.
+//
+// They are structural: everything inside module.m["eu"] shares that key, and a
+// resource there can only refer to resources there. Pairing on a module key
+// therefore asserts nothing. A resource's own key is different — each resource
+// chooses its own for_each independently, so pairing on it is an assumption
+// that needs evidence.
+func (c ResourceChange) ModuleKeys() []string {
+	return indexKeys(c.ModuleAddress)
+}
+
+// InstanceKeys returns the count and for_each keys along the address, outermost
+// first, with quotes removed. A resource with no repetition anywhere returns
+// nil.
+//
+// ConfigAddress deliberately discards these so that an address can be matched
+// against the configuration block, which has none. Correlation then needs them
+// back: every instance of a repeated resource shares one configuration address,
+// so without the keys one instance's controls are indistinguishable from
+// another's.
+func (c ResourceChange) InstanceKeys() []string {
+	return indexKeys(c.Address)
 }
 
 // IsReplace reports whether the object is destroyed and recreated.

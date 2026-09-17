@@ -68,9 +68,9 @@ func parseDocument(raw []byte) (Plan, error) {
 
 	plan.ResourceChanges = parseResourceChanges(document, &errs)
 
-	configs, keysByAddress := parseConfiguration(document, &errs)
+	configs, byAddress := parseConfiguration(document, &errs)
 	plan.ProviderConfigs = configs
-	resolveProviderInstances(&plan, keysByAddress)
+	resolveProviderInstances(&plan, byAddress)
 
 	if len(errs) > 0 {
 		return Plan{}, errors.Join(errs...)

@@ -293,3 +293,112 @@ func TestInspectSortsPathsAcrossBothSides(t *testing.T) {
 		t.Fatalf("this test is only meaningful with paths from both sides, got %v", paths)
 	}
 }
+
+// TestInspectReportsWhatTheMappersUnderstood makes the normalization visible to
+// a human without inspect reaching a verdict. It reports the state of the
+// determination and the attributes it rested on; whether that is acceptable is
+// the check command's question, and this build has none.
+func TestInspectReportsWhatTheMappersUnderstood(t *testing.T) {
+	cases := map[string]struct {
+		fixture, address, state string
+		grants                  bool
+		unresolved              string
+	}{
+		"aws public": {
+			filepath.Join("..", "..", "internal", "providers", "aws", "testdata", "public-acl.json"),
+			"aws_s3_bucket.assets", "KNOWN", true, "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK",
+		},
+		"gcp undetermined": {
+			filepath.Join("..", "..", "internal", "providers", "gcp", "testdata", "unknown-inherited-no-grant.json"),
+			"google_storage_bucket.assets", "UNKNOWN", false, "GCP_ORGANIZATION_PUBLIC_ACCESS_POLICY",
+		},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			if code := run([]string{"inspect", "--plan", c.fixture}, &stdout, &stderr); code != evidence.ExitPass {
+				t.Fatalf("exit code = %d (stderr: %s)", code, stderr.String())
+			}
+
+			var report struct {
+				ResourceChanges []struct {
+					Address       string `json:"address"`
+					ObjectStorage *struct {
+						PublicAccess       string   `json:"public_access"`
+						GrantsPublicAccess bool     `json:"grants_public_access"`
+						DeterminedFrom     []string `json:"determined_from"`
+						Unresolved         []string `json:"unresolved_controls"`
+					} `json:"object_storage"`
+				} `json:"resource_changes"`
+			}
+			if err := json.Unmarshal([]byte(stdout.String()), &report); err != nil {
+				t.Fatalf("output is not valid JSON: %v", err)
+			}
+
+			var found bool
+			for _, change := range report.ResourceChanges {
+				if change.Address != c.address {
+					if change.ObjectStorage != nil && change.ObjectStorage.PublicAccess != "" {
+						continue
+					}
+					continue
+				}
+				found = true
+				if change.ObjectStorage == nil {
+					t.Fatalf("%s reported no normalized capabilities:\n%s", c.address, stdout.String())
+				}
+				if change.ObjectStorage.PublicAccess != c.state {
+					t.Fatalf("public access = %q, want %q", change.ObjectStorage.PublicAccess, c.state)
+				}
+				if change.ObjectStorage.GrantsPublicAccess != c.grants {
+					t.Fatalf("grants = %v, want %v", change.ObjectStorage.GrantsPublicAccess, c.grants)
+				}
+				if len(change.ObjectStorage.DeterminedFrom) == 0 {
+					t.Fatal("the determination names no provider attribute")
+				}
+				if len(change.ObjectStorage.Unresolved) != 1 || change.ObjectStorage.Unresolved[0] != c.unresolved {
+					t.Fatalf("unresolved = %v, want %q", change.ObjectStorage.Unresolved, c.unresolved)
+				}
+			}
+			if !found {
+				t.Fatalf("%s is missing from the report:\n%s", c.address, stdout.String())
+			}
+		})
+	}
+}
+
+// TestInspectStillReachesNoVerdict keeps the command's promise intact now that
+// it shows normalized capabilities. The check is on the report's structure
+// rather than on substrings: a check identifier such as
+// AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK legitimately contains the word BLOCK.
+func TestInspectStillReachesNoVerdict(t *testing.T) {
+	stdout, _, code := runInspectFixture(t, "nested-sensitive")
+	if code != evidence.ExitPass {
+		t.Fatalf("exit code = %d", code)
+	}
+
+	var report map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	for _, key := range []string{"decision", "findings", "verdict", "summary"} {
+		if _, present := report[key]; present {
+			t.Fatalf("inspect reported %q, which is a verdict this build cannot reach", key)
+		}
+	}
+
+	var changes struct {
+		ResourceChanges []map[string]json.RawMessage `json:"resource_changes"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &changes); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	for _, change := range changes.ResourceChanges {
+		for _, key := range []string{"severity", "disposition", "decision", "claim"} {
+			if _, present := change[key]; present {
+				t.Fatalf("a resource entry reported %q, which belongs to a finding", key)
+			}
+		}
+	}
+}
