@@ -52,6 +52,7 @@ func parseConfiguration(document map[string]any, errs *[]error) (map[string]Prov
 // configResource is what the configuration block says about one resource.
 type configResource struct {
 	providerConfigKey string
+	repeated          bool
 	references        []ExpressionReference
 }
 
@@ -137,8 +138,11 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 				if address == "" {
 					continue
 				}
+				_, byForEach := fields["for_each_expression"]
+				_, byCount := fields["count_expression"]
 				byAddress[joinAddress(addressPrefix, address)] = configResource{
 					providerConfigKey: optionalString(fields, "provider_config_key", entryPath+".provider_config_key", errs),
+					repeated:          byForEach || byCount,
 					references:        parseExpressions(entryPath, fields, addressPrefix, errs),
 				}
 			}
@@ -363,6 +367,7 @@ func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
 		}
 		change.ProviderConfigKey = configured.providerConfigKey
 		change.ProviderAlias = plan.ProviderConfigs[configured.providerConfigKey].Alias
+		change.DeclaredRepeated = configured.repeated
 		change.References = configured.references
 	}
 }

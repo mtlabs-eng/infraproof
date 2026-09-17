@@ -693,3 +693,134 @@ func TestTwoAccountBlocksForOneProviderCannotBeResolved(t *testing.T) {
 			fact.State, fact.Get())
 	}
 }
+
+// TestAControlBeingDestroyedDoesNotProtect covers a change the mapper was
+// reading backwards. A public access block the plan destroys will not exist
+// after apply, so it cannot block anything — and the plan that removes it while
+// granting a public ACL is exactly the change worth reporting.
+func TestAControlBeingDestroyedDoesNotProtect(t *testing.T) {
+	blocking := `{"block_public_acls": true, "block_public_policy": true,
+	              "ignore_public_acls": true, "restrict_public_buckets": true}`
+
+	destroyed := fmt.Sprintf(`,
+	  {"address": "aws_s3_bucket_public_access_block.going", "mode": "managed",
+	   "type": "aws_s3_bucket_public_access_block", "name": "going", "provider_name": "p",
+	   "change": {"actions": ["delete"], "before": %s, "after": null}}`, blocking)
+	destroyedConfig := `,
+	  {"address": "aws_s3_bucket_public_access_block.going", "mode": "managed",
+	   "type": "aws_s3_bucket_public_access_block", "name": "going",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+
+	fact := bucketPlanNoBlock(t, "public-read", destroyed, destroyedConfig)
+	if !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("removing the block while granting a public ACL is public: state=%q grants=%v",
+			fact.State, fact.Get())
+	}
+}
+
+// TestOwnershipControlsAreReadOrNotConcluded covers the resource that can turn
+// ACLs off, in both directions. A rule nobody can read leaves the ACL route in
+// doubt; a rule that is simply not there does not disable anything, so the ACL
+// still grants — a false alarm if the setting was enforced elsewhere, which is
+// the safe way to be wrong here.
+func TestOwnershipControlsAreReadOrNotConcluded(t *testing.T) {
+	cases := map[string]struct {
+		body   string
+		public bool
+	}{
+		"the rule is not yet known": {`"after": {}, "after_unknown": {"rule": true}`, false},
+		"the rule is sensitive": {
+			`"after": {"rule": [{"object_ownership": "x"}]}, "after_sensitive": {"rule": true}`, false,
+		},
+		"the rule is absent":   {`"after": {}`, true},
+		"the rule is a scalar": {`"after": {"rule": "BucketOwnerEnforced"}`, true},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			controls := fmt.Sprintf(`,
+			  {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+			   "type": "aws_s3_bucket_ownership_controls", "name": "assets", "provider_name": "p",
+			   "change": {"actions": ["create"], "before": null, %s}}`, c.body)
+			controlsConfig := `,
+			  {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+			   "type": "aws_s3_bucket_ownership_controls", "name": "assets",
+			   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+
+			fact := bucketPlanNoBlock(t, "public-read", controls, controlsConfig)
+			if got := fact.IsKnown() && fact.Get(); got != c.public {
+				t.Fatalf("public = %v, want %v (state %q)", got, c.public, fact.State)
+			}
+			if !c.public && fact.IsKnown() {
+				t.Fatalf("an unreadable rule cannot settle the question, got state=%q", fact.State)
+			}
+		})
+	}
+}
+
+// bucketPlanNoBlock builds a bucket with an ACL and one extra resource, and no
+// public access block of its own.
+func bucketPlanNoBlock(t *testing.T, acl, extraChange, extraConfig string) model.Fact[bool] {
+	t.Helper()
+
+	raw := []byte(fmt.Sprintf(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	     "provider_name": "p", "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": %q}}}%s
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}%s
+	  ]}}
+	}`, acl, extraChange, extraConfig))
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resource, ok := providers.Normalize(plan, providers.Default()).At("aws_s3_bucket.assets")
+	if !ok || resource.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	return resource.ObjectStorage.PublicAccess
+}
+
+// TestASensitiveAccountFlagIsReportedAsRedacted keeps the two non-conclusive
+// states apart. Both prevent a conclusion, but a reader can act on "the plan
+// marked this sensitive" and cannot act on "the plan does not say".
+func TestASensitiveAccountFlagIsReportedAsRedacted(t *testing.T) {
+	permissive := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+	account := `,
+	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "this", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null,
+	              "after": {"block_public_acls": true, "block_public_policy": false,
+	                        "ignore_public_acls": false, "restrict_public_buckets": false},
+	              "after_sensitive": {"block_public_policy": true}}}`
+	accountConfig := `,
+	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "this", "expressions": {}}`
+
+	publicPolicy := `{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\"}]}`
+	policyChange := fmt.Sprintf(`,
+	  {"address": "aws_s3_bucket_policy.assets", "mode": "managed", "type": "aws_s3_bucket_policy",
+	   "name": "assets", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": {"policy": "%s"}}}`, publicPolicy)
+	policyConfig := `,
+	  {"address": "aws_s3_bucket_policy.assets", "mode": "managed", "type": "aws_s3_bucket_policy",
+	   "name": "assets",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+
+	fact := bucketPlan(t, permissive, "private", policyChange+account, policyConfig+accountConfig)
+	if fact.State != model.FactRedacted {
+		t.Fatalf("state = %q, want %q — the deciding flag was marked sensitive", fact.State, model.FactRedacted)
+	}
+}

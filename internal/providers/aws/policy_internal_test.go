@@ -111,3 +111,47 @@ func TestInterpretsCoversEveryControlItReadsAndNothingElse(t *testing.T) {
 		t.Fatal("a control resource is not a subject in its own right")
 	}
 }
+
+// TestConditionsThatRestrictNothing covers two readings of a policy that were
+// wrong in opposite directions. An empty condition block restricts nothing, and
+// treating it as a restriction suppressed a finding the plan supports. An
+// unconditional deny to everyone overrides an allow, and reading past it
+// reported a bucket public that is not.
+func TestConditionsThatRestrictNothing(t *testing.T) {
+	cases := map[string]struct {
+		document           string
+		grants, determined bool
+	}{
+		"an empty condition restricts nothing": {
+			`{"Statement":[{"Effect":"Allow","Principal":"*","Condition":{}}]}`, true, true,
+		},
+		"a condition with entries restricts something": {
+			`{"Statement":[{"Effect":"Allow","Principal":"*","Condition":{"StringEquals":{"a":"b"}}}]}`,
+			false, false,
+		},
+		"an unconditional deny to everyone overrides": {
+			`{"Statement":[{"Effect":"Allow","Principal":"*"},{"Effect":"Deny","Principal":"*"}]}`,
+			false, false,
+		},
+		"a conditional deny does not settle it": {
+			`{"Statement":[{"Effect":"Allow","Principal":"*"},` +
+				`{"Effect":"Deny","Principal":"*","Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}`,
+			true, true,
+		},
+		"a deny to someone else is irrelevant": {
+			`{"Statement":[{"Effect":"Allow","Principal":"*"},` +
+				`{"Effect":"Deny","Principal":{"AWS":"arn:example:iam::role/app"}}]}`,
+			true, true,
+		},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			grants, determined := policyGrantsPublic(c.document)
+			if grants != c.grants || determined != c.determined {
+				t.Fatalf("grants=%v determined=%v, want grants=%v determined=%v",
+					grants, determined, c.grants, c.determined)
+			}
+		})
+	}
+}

@@ -112,6 +112,13 @@ type ResourceChange struct {
 	Before, After Value
 	// ReplacePaths are the attribute paths that forced a replacement.
 	ReplacePaths [][]string
+	// DeclaredRepeated reports that the configuration declares this resource
+	// with count or for_each, whether or not every instance reached the plan.
+	//
+	// It says something the surviving instances cannot: a plan holding one
+	// instance of a repeated resource looks unambiguous by count and is not,
+	// because a reference naming no instance may have meant one that is absent.
+	DeclaredRepeated bool
 	// References are the resources this resource's configuration refers to, in
 	// deterministic order. They are the only dependable link between a resource
 	// and the resources that control it: an attribute holding another

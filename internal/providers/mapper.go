@@ -173,8 +173,10 @@ func relates(from, to terraformplan.ResourceChange, reference terraformplan.Expr
 	if len(reference.TargetKeys) > 0 {
 		return namesInstance(to, reference.TargetKeys)
 	}
-	if candidates == 1 {
-		// One instance, nothing to choose between.
+	if candidates == 1 && !to.DeclaredRepeated {
+		// One instance and one declared, so there is nothing to choose
+		// between. A repeated resource with a single instance in the plan is
+		// not the same thing: the reference may have meant one that is absent.
 		return true
 	}
 	if len(from.InstanceKeys()) < len(to.InstanceKeys()) {

@@ -281,3 +281,64 @@ func TestAnAccountWithSeveralContainersDefers(t *testing.T) {
 		}
 	}
 }
+
+// TestAValueOfTheWrongKindIsNotAnAnswer covers the one place a readable value
+// could be read as a definite no. Bool and Text return the zero value for a
+// mismatched kind, and for these two fields the zero value is exactly the
+// answer that proves a container private — so a plan stating an account that
+// permits anonymous access and a container set to blob was reporting it
+// provably private.
+//
+// AWS and GCP degrade correctly on the same input; Azure was the only mapper
+// that concluded from a kind it had not checked.
+func TestAValueOfTheWrongKindIsNotAnAnswer(t *testing.T) {
+	cases := map[string]struct{ allow, access string }{
+		"a boolean written as a string":   {`"true"`, `"blob"`},
+		"a boolean written as a number":   {`1`, `"blob"`},
+		"a boolean written as an object":  {`{"v": true}`, `"blob"`},
+		"a boolean written as null":       {`null`, `"blob"`},
+		"an access type written as array": {`true`, `["blob"]`},
+		"an access type written as bool":  {`true`, `true`},
+		"an access type written as null":  {`true`, `null`},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := []byte(fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "azurerm_storage_account.sa", "mode": "managed",
+			     "type": "azurerm_storage_account", "name": "sa", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"name": "s", "allow_nested_items_to_be_public": %s}}},
+			    {"address": "azurerm_storage_container.assets", "mode": "managed",
+			     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"name": "assets", "container_access_type": %s}}}
+			  ],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "azurerm_storage_account.sa", "mode": "managed",
+			     "type": "azurerm_storage_account", "name": "sa", "expressions": {}},
+			    {"address": "azurerm_storage_container.assets", "mode": "managed",
+			     "type": "azurerm_storage_container", "name": "assets",
+			     "expressions": {"storage_account_id": {"references": [
+			       "azurerm_storage_account.sa.id", "azurerm_storage_account.sa"]}}}
+			  ]}}
+			}`, c.allow, c.access))
+
+			plan, err := terraformplan.Parse(raw)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			resource, ok := providers.Normalize(plan, providers.Default()).At("azurerm_storage_container.assets")
+			if !ok || resource.ObjectStorage == nil {
+				t.Fatal("no normalized container")
+			}
+
+			fact := resource.ObjectStorage.PublicAccess
+			if fact.IsKnown() && !fact.Get() {
+				t.Fatal("a value of an unexpected kind cannot prove a container private")
+			}
+		})
+	}
+}

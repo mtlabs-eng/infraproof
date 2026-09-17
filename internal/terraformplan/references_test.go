@@ -555,3 +555,39 @@ func TestModuleKeysAreStructural(t *testing.T) {
 		})
 	}
 }
+
+// TestARepeatedDeclarationIsRecorded separates what the configuration declares
+// from what survives into the changes. A resource declared with for_each is
+// repeated whether or not every instance is present, and correlation needs the
+// declaration: counting surviving instances would call a partial plan
+// unambiguous.
+func TestARepeatedDeclarationIsRecorded(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"z\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "z", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "z"}}},
+	    {"address": "aws_s3_bucket.single", "mode": "managed", "type": "aws_s3_bucket", "name": "single",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "s"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "for_each_expression": {"constant_value": ["a", "z"]}, "expressions": {}},
+	    {"address": "aws_s3_bucket.single", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "single", "expressions": {}}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !changeAt(t, plan, `aws_s3_bucket.b["z"]`).DeclaredRepeated {
+		t.Fatal("a resource declared with for_each is repeated even when one instance is in the plan")
+	}
+	if changeAt(t, plan, "aws_s3_bucket.single").DeclaredRepeated {
+		t.Fatal("a resource declared without repetition is not repeated")
+	}
+}

@@ -330,7 +330,8 @@ func blocksEveryRoute(block *terraformplan.ResourceChange) bool {
 func accountBlockFor(subject terraformplan.ResourceChange, scope []terraformplan.ResourceChange) (*terraformplan.ResourceChange, bool) {
 	var found *terraformplan.ResourceChange
 	for i := range scope {
-		if scope[i].Type != typeAccountBlock || scope[i].ProviderConfigKey != subject.ProviderConfigKey {
+		if scope[i].Type != typeAccountBlock || beingRemoved(scope[i]) ||
+			scope[i].ProviderConfigKey != subject.ProviderConfigKey {
 			continue
 		}
 		if found != nil {
@@ -373,7 +374,7 @@ func findType(changes []terraformplan.ResourceChange, resourceType string) *terr
 func findOne(changes []terraformplan.ResourceChange, resourceType string) (*terraformplan.ResourceChange, bool) {
 	var found *terraformplan.ResourceChange
 	for i := range changes {
-		if changes[i].Type != resourceType {
+		if changes[i].Type != resourceType || beingRemoved(changes[i]) {
 			continue
 		}
 		if found != nil {
@@ -393,6 +394,14 @@ func blockProvenance(block *terraformplan.ResourceChange) []model.Provenance {
 		out = append(out, provenance(block.Address, flag))
 	}
 	return out
+}
+
+// beingRemoved reports that a change destroys its object outright. Such a
+// control will not exist after apply, so it protects nothing — and a plan that
+// removes a block while granting public access is exactly the change worth
+// reporting. A replacement is not a removal: the object is there afterwards.
+func beingRemoved(change terraformplan.ResourceChange) bool {
+	return change.IsDestructive() && !change.IsReplace()
 }
 
 func provenance(address, attribute string) model.Provenance {
@@ -431,12 +440,46 @@ func policyGrantsPublic(document string) (grants, determined bool) {
 		if !principalIsEveryone(statement.Principal) {
 			continue
 		}
-		if len(statement.Condition) > 0 {
+		if hasConditions(statement.Condition) {
+			return false, false
+		}
+		if deniesEveryone(statements) {
+			// An explicit deny overrides an allow, so this policy grants
+			// nothing to everyone — but which actions each statement covers
+			// decides the rest, and this build does not model that. A policy
+			// with no public allow at all needs none of this reasoning.
 			return false, false
 		}
 		return true, true
 	}
 	return false, true
+}
+
+// deniesEveryone reports an unconditional deny to everyone, which overrides any
+// allow and makes the policy's effect something this build does not model well
+// enough to call public.
+func deniesEveryone(statements []policyStatement) bool {
+	for _, statement := range statements {
+		if statement.Effect == "Deny" && principalIsEveryone(statement.Principal) &&
+			!hasConditions(statement.Condition) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasConditions reports whether a condition block actually restricts anything.
+// An empty block is written often enough, and it restricts nothing.
+func hasConditions(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var conditions map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &conditions); err != nil {
+		// Unreadable rather than absent: something is there.
+		return true
+	}
+	return len(conditions) > 0
 }
 
 type policyStatement struct {

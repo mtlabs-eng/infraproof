@@ -152,18 +152,18 @@ func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model
 
 	sources := []model.Provenance{provenance(account.Address, attrAllowPublic)}
 	value := account.After.Field(attrAllowPublic)
-	switch value.State() {
-	case terraformplan.StateKnown:
+	switch {
+	case value.Kind() == terraformplan.KindBool:
 		if value.Bool() {
 			return answerYes, sources
 		}
 		return answerNo, sources
-	case terraformplan.StateRedacted:
+	case value.State() == terraformplan.StateRedacted:
 		return answerRedacted, sources
 	default:
-		// Absent is not the provider default. The default happens to be safe,
-		// but reading absence as a value is exactly the mistake this model
-		// exists to prevent.
+		// Absent is not the provider default, and a readable value of the wrong
+		// kind is not an answer either: Bool returns false for both, and false
+		// here is what proves a container private.
 		return answerUnknown, sources
 	}
 }
@@ -174,13 +174,13 @@ func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.
 	sources := []model.Provenance{provenance(container.Address, attrAccessType)}
 
 	value := container.After.Field(attrAccessType)
-	switch value.State() {
-	case terraformplan.StateKnown:
+	switch {
+	case value.Kind() == terraformplan.KindString:
 		if value.Text() == accessTypePublic || value.Text() == accessTypeList {
 			return answerYes, sources
 		}
 		return answerNo, sources
-	case terraformplan.StateRedacted:
+	case value.State() == terraformplan.StateRedacted:
 		return answerRedacted, sources
 	default:
 		return answerUnknown, sources

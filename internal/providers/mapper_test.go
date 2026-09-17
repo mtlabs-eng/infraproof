@@ -1084,3 +1084,53 @@ func TestTheUndecidablePlans(t *testing.T) {
 		})
 	}
 }
+
+// TestAPartialPlanIsNotASingleInstance closes the last route into the
+// single-instance shortcut. Counting instances in resource_changes calls a plan
+// unambiguous when the configuration says the target is repeated and only one
+// instance survived — and a bare reference that meant the absent one is then
+// joined to the survivor.
+func TestAPartialPlanIsNotASingleInstance(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"z\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "z", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "z"}}},
+	    {"address": "aws_s3_bucket_public_access_block.p", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "p", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl", "name": "a",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "for_each_expression": {"constant_value": ["a", "z"]}, "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.p", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "p",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.b"]}}},
+	    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl", "name": "a",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b[\"z\"].id", "aws_s3_bucket.b[\"z\"]", "aws_s3_bucket.b"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	fact := publicAccess(t, graph, `aws_s3_bucket.b["z"]`)
+	if fact.IsKnown() && !fact.Get() {
+		t.Fatal("a block reaching a repeated resource without naming an instance cannot prove this one private")
+	}
+	for _, source := range fact.Sources {
+		if contains(source.ResourceAddress, "public_access_block") {
+			t.Fatalf("the block was applied anyway: %s", source.ResourceAddress)
+		}
+	}
+}
