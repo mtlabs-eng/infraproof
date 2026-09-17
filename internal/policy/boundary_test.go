@@ -57,22 +57,58 @@ func TestTheModelDependsOnNothingOfOurs(t *testing.T) {
 // TestAMapperIsReachableOnlyThroughTheRegistry records where the one place that
 // names a cloud is. Adding a fourth cloud must be an entry in the registry and
 // a new subpackage, nothing else.
+//
+// Counting subpackages is not enough on its own: a shared helper under
+// internal/providers is legitimate, and a cloud smuggled in as one would be a
+// back door through which policy could reach provider knowledge without any
+// registry entry. So both halves are checked — every cloud in the registry has
+// its own package, and every other reachable subpackage names no cloud at all.
 func TestAMapperIsReachableOnlyThroughTheRegistry(t *testing.T) {
-	out, err := exec.Command("go", "list", "-f", "{{join .Deps \"\\n\"}}",
-		"github.com/mtlabs-eng/infraproof/internal/providers").Output()
-	if err != nil {
-		t.Fatalf("go list: %v", err)
-	}
+	const root = "github.com/mtlabs-eng/infraproof/internal/providers/"
 
-	var clouds int
-	for _, dependency := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if strings.HasPrefix(dependency, "github.com/mtlabs-eng/infraproof/internal/providers/") {
-			clouds++
-		}
-	}
+	reachable := subpackagesOf(t, "github.com/mtlabs-eng/infraproof/internal/providers")
+
 	// Derived from the registry rather than hard-coded, so adding a cloud does
 	// not require editing the test that proves the boundary holds.
-	if want := len(providers.Default()); clouds != want {
-		t.Fatalf("the registry reaches %d provider packages, want %d", clouds, want)
+	clouds := map[string]bool{}
+	for _, mapper := range providers.Default() {
+		clouds[string(mapper.Cloud())] = true
+
+		pkg := root + string(mapper.Cloud())
+		if !reachable[pkg] {
+			t.Errorf("the registry declares %s but does not reach %s", mapper.Cloud(), pkg)
+		}
 	}
+
+	for pkg := range reachable {
+		if clouds[strings.TrimPrefix(pkg, root)] {
+			continue
+		}
+		// A shared helper. It may be reached, but it must not itself reach a
+		// cloud, or it becomes a second route to provider knowledge.
+		for dependency := range subpackagesOf(t, pkg) {
+			if clouds[strings.TrimPrefix(dependency, root)] {
+				t.Errorf("%s is not a cloud package but depends on %s", pkg, dependency)
+			}
+		}
+	}
+}
+
+// subpackagesOf returns the packages under internal/providers that a package
+// transitively depends on.
+func subpackagesOf(t *testing.T, pkg string) map[string]bool {
+	t.Helper()
+
+	out, err := exec.Command("go", "list", "-f", "{{join .Deps \"\\n\"}}", pkg).Output()
+	if err != nil {
+		t.Fatalf("go list %s: %v", pkg, err)
+	}
+
+	found := map[string]bool{}
+	for _, dependency := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.HasPrefix(dependency, "github.com/mtlabs-eng/infraproof/internal/providers/") {
+			found[dependency] = true
+		}
+	}
+	return found
 }

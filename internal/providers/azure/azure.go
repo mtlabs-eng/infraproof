@@ -8,6 +8,7 @@ package azure
 
 import (
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -41,6 +42,9 @@ func (Mapper) IsSubject(resourceType string) bool {
 
 // Map normalizes a container together with the account that gates it, or an
 // account that has no container here to speak for it.
+// attrTags is where Azure carries user-supplied labels.
+const attrTags = "tags"
+
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	resource := model.NormalizedResource{
 		Address:     subject.Address,
@@ -48,6 +52,7 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 		Cloud:       model.CloudAzure,
 		Family:      model.FamilyObjectStorage,
 		Destructive: subject.IsDestructive(),
+		Environment: declared.Environment(subject, attrTags, model.CloudAzure),
 	}
 
 	if subject.Type == typeAccount {

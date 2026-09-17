@@ -2,6 +2,7 @@ package policy
 
 import (
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
+	"github.com/mtlabs-eng/infraproof/internal/intent"
 	"github.com/mtlabs-eng/infraproof/internal/model"
 )
 
@@ -23,7 +24,7 @@ const (
 	CheckStoragePublicDeterminable = "STORAGE_PUBLIC_DETERMINABLE"
 )
 
-// StoragePublic reports object storage whose change grants public access.
+// StorageExposure compares declared exposure with what the plan proves.
 //
 // The claim is about the change, not about what will ultimately be reachable: a
 // plan can prove that a change asks for public access, while whether the
@@ -31,8 +32,23 @@ const (
 // policy that no plan contains. Those limits are reported as unknowns alongside
 // the finding rather than folded into it, so a reader sees both the violation
 // and the boundary of the evidence for it.
-func StoragePublic(graph model.Graph) Result {
+//
+// A contract entry carries no address, and docs/INTENT-CONTRACT.md defers
+// resource cardinality, so an entry constrains every resource of its family.
+// That is the only reading which does not require the cardinality the contract
+// cannot yet express, and it fails safe: adding a resource to a plan does not
+// escape a declared intent.
+func StorageExposure(contract intent.Contract, graph model.Graph) Result {
 	var result Result
+
+	declared, mentioned := contract.ExposureOf(intent.FamilyObjectStorage)
+	if !mentioned {
+		// The contract never addressed this family. The change is still
+		// reported, because a plan doing more than the contract described is
+		// exactly what a reader needs to see, but nothing here is a violation
+		// of an intent that was never stated.
+		declared = intent.ExposureUnspecified
+	}
 
 	for _, resource := range graph.OfFamily(model.FamilyObjectStorage) {
 		if resource.ObjectStorage == nil {
@@ -44,11 +60,21 @@ func StoragePublic(graph model.Graph) Result {
 
 		switch {
 		case capabilities.PublicAccess.IsKnown() && capabilities.PublicAccess.Get():
-			result.Findings = append(result.Findings, publicFinding(resource, capabilities))
+			if declared != intent.ExposurePublic {
+				result.Findings = append(result.Findings,
+					publicFinding(resource, capabilities, declared))
+			}
 		case capabilities.PublicAccess.IsKnown():
 			// The plan proves prevention. Nothing to report.
+		case declared == intent.ExposurePrivate:
+			// The contract requires private storage and the plan cannot show
+			// it. This is the case that separates this tool from one that
+			// reports whatever it happened to understand.
+			result.Unknowns = append(result.Unknowns, undeterminedUnknown(resource, capabilities, true))
 		default:
-			result.Unknowns = append(result.Unknowns, undeterminedUnknown(resource, capabilities))
+			// No private exposure was required, so the undetermined answer
+			// bounds the report rather than blocking a conclusion.
+			result.Unknowns = append(result.Unknowns, undeterminedUnknown(resource, capabilities, false))
 		}
 
 		result.Unknowns = append(result.Unknowns, unresolvedUnknowns(resource, capabilities)...)
@@ -57,12 +83,30 @@ func StoragePublic(graph model.Graph) Result {
 	return result
 }
 
-func publicFinding(resource model.NormalizedResource, capabilities model.ObjectStorageCapabilities) evidence.Finding {
+// publicFinding reports storage the change exposes publicly.
+//
+// Disposition follows what the contract declared, and severity does not: public
+// storage is equally exposed whether or not anyone wrote down that it should be
+// private. Where the contract committed to private, the evidence contradicts it
+// and that is a block. Where the author explicitly declined to commit, the
+// change still needs a human, because "I have not decided" is not "go ahead".
+func publicFinding(resource model.NormalizedResource, capabilities model.ObjectStorageCapabilities,
+	declared intent.Exposure) evidence.Finding {
+
+	disposition := evidence.DispositionWarn
+	claim := "The change grants public access to object storage, and the intent contract does not declare it."
+	remediation := "Declare the exposure in the intent contract, or remove the grant that exposes this storage publicly."
+	if declared == intent.ExposurePrivate {
+		disposition = evidence.DispositionBlock
+		claim = "The change grants public access to object storage the intent contract requires to be private."
+		remediation = "Remove the grant that exposes this storage publicly, or record the exposure as intended in the intent contract."
+	}
+
 	return evidence.Finding{
 		RuleID:      RuleStoragePublic,
 		Severity:    evidence.SeverityCritical,
-		Disposition: evidence.DispositionBlock,
-		Claim:       "The change grants public access to object storage.",
+		Disposition: disposition,
+		Claim:       claim,
 		Resource: &evidence.Resource{
 			Address:  resource.Address,
 			Provider: resource.Provider,
@@ -72,18 +116,24 @@ func publicFinding(resource model.NormalizedResource, capabilities model.ObjectS
 			Path:  "object_storage.public_access",
 			Value: evidence.Bool(false),
 		},
-		Observed: evidence.KnownFact("object_storage.public_access", evidence.Bool(true)),
-		Evidence: referencesOf(capabilities.PublicAccess),
-		Remediation: "Remove the grant that exposes this storage publicly, or record the exposure as " +
-			"intended in the intent contract.",
+		Observed:    evidence.KnownFact("object_storage.public_access", evidence.Bool(true)),
+		Evidence:    referencesOf(capabilities.PublicAccess),
+		Remediation: remediation,
 	}
 }
 
-func undeterminedUnknown(resource model.NormalizedResource, capabilities model.ObjectStorageCapabilities) evidence.Unknown {
+// undeterminedUnknown reports exposure the plan could not settle. It is
+// required only when the contract asked for private storage: an author who
+// declared public exposure, or none, is not waiting on evidence that it is
+// private, and raising a required unknown for them would make every
+// undetermined plan an UNKNOWN regardless of what was asked.
+func undeterminedUnknown(resource model.NormalizedResource, capabilities model.ObjectStorageCapabilities,
+	required bool) evidence.Unknown {
+
 	address := resource.Address
 	return evidence.Unknown{
 		CheckID:  CheckStoragePublicDeterminable,
-		Required: true,
+		Required: required,
 		Reason: "Public exposure could not be determined from the plan; the state of the deciding " +
 			"value is " + string(capabilities.PublicAccess.State) + ".",
 		ResourceAddress: &address,

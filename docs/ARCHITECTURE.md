@@ -21,12 +21,12 @@ Owns argument parsing, file access, output selection, exit codes, and user-facin
 Initial command:
 
 ```text
-infraproof check --intent <path> --plan <path> --format json|markdown
+infraproof check --intent <path> --plan <path> [--format json|markdown]
 ```
 
 ### Intent loader
 
-Loads and validates a versioned YAML or JSON Intent Contract. It rejects invalid structure and preserves omitted values as unspecified rather than inventing defaults.
+Loads and validates a versioned Intent Contract. It rejects invalid structure and preserves omitted values as unspecified rather than inventing defaults. This build reads JSON only; see `docs/INTENT-CONTRACT.md` for why YAML is deferred.
 
 ### Terraform plan loader
 

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -49,6 +50,10 @@ func (Mapper) Interprets(resourceType string) bool {
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
 // Map normalizes a bucket together with the IAM resources bound to it.
+// attrLabels is where GCP carries user-supplied labels; the other two clouds
+// call the same thing tags.
+const attrLabels = "labels"
+
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	prevention, preventionSources := preventionState(subject)
 
@@ -69,6 +74,7 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 		Cloud:         model.CloudGCP,
 		Family:        model.FamilyObjectStorage,
 		Destructive:   subject.IsDestructive(),
+		Environment:   declared.Environment(subject, attrLabels, model.CloudGCP),
 		ObjectStorage: &capabilities,
 	}
 }

@@ -1,9 +1,8 @@
 // Command infraproof is the InfraProof command-line entry point.
 //
-// This build can model an Evidence Bundle and parse a Terraform or OpenTofu
-// plan, but it cannot yet compare the two: intent loading and policy evaluation
-// are not implemented, so no verification command is registered. The inspect
-// command reports what the parser understood and decides nothing.
+// The check command compares a plan with a declared intent contract and reports
+// an Evidence Bundle. The inspect command reports what the parser understood and
+// decides nothing.
 //
 // This is the only place in the program that terminates the process.
 package main
@@ -23,12 +22,15 @@ const version = "0.1.0"
 const usage = `InfraProof verifies Terraform and OpenTofu changes against declared intent.
 
 Usage:
+  infraproof check --intent <path> --plan <path> [--format json|markdown]
   infraproof inspect --plan <path>
   infraproof --version
   infraproof --help
 
-Verification is not available in this build: intent parsing and policy
-evaluation are not implemented yet, so no check command is registered.
+check compares a Terraform or OpenTofu plan with a declared intent contract and
+reports an Evidence Bundle. It reads only the two files it is given, reaches no
+network, and never applies anything. The intent contract must be JSON; YAML is
+not supported in this build.
 
 inspect parses a plan and reports what was understood — addresses, actions, and
 which fields are unknown or redacted. It is a development aid, it reaches no
@@ -68,6 +70,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "infraproof %s (evidence bundle schema %s)\n", version, evidence.SchemaVersion)
 		return evidence.ExitPass
+	case "check":
+		return runCheck(args[1:], stdout, stderr)
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
 	default:

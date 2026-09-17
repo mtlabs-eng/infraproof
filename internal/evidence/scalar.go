@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -64,6 +65,49 @@ func (s *Scalar) MarshalJSON() ([]byte, error) {
 	default:
 		return nil, errUninitializedScalar
 	}
+}
+
+// errUnsupportedScalarKind reports a JSON value outside the closed set. Like
+// errUninitializedScalar it carries no payload: the rejected value may be a
+// plan value, and an error message is output.
+var errUnsupportedScalarKind = errors.New(
+	"evidence: fact values must be a boolean, a string, or an integer")
+
+// UnmarshalJSON reads a scalar back from its JSON primitive.
+//
+// A published format the package defining it cannot read is an output, not a
+// format: every consumer that branches on a decision must decode a bundle
+// first. The closed set stays closed in both directions — a float would round,
+// an object would vanish, and either would break the total ordering the
+// canonical form depends on, so both are refused rather than coerced.
+func (s *Scalar) UnmarshalJSON(raw []byte) error {
+	var decoded any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	// Numbers are read as text so that an integer outside int64 is refused
+	// rather than silently rounded through float64.
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+
+	switch value := decoded.(type) {
+	case bool:
+		*s = Scalar{kind: scalarBool, boolean: value}
+	case string:
+		*s = Scalar{kind: scalarString, text: value}
+	case json.Number:
+		number, err := strconv.ParseInt(value.String(), 10, 64)
+		if err != nil {
+			return errUnsupportedScalarKind
+		}
+		*s = Scalar{kind: scalarInt, number: number}
+	default:
+		// Objects, arrays, and null. A null reaches here only when decoded
+		// into a non-pointer Scalar; an absent fact value is a nil *Scalar,
+		// which encoding/json handles without calling this method.
+		return errUnsupportedScalarKind
+	}
+	return nil
 }
 
 // Display renders the scalar for human-facing output. It returns an empty

@@ -31,6 +31,17 @@ type NormalizedResource struct {
 	// matters: "understood, and folded into something else" is not the same
 	// claim as "no mapper recognized this".
 	Interpreted bool
+	// Environment is the environment the resource declares it belongs to,
+	// normalized from whatever the provider calls it: an AWS or Azure tag, a
+	// GCP label.
+	//
+	// Only an explicit declaration counts. A module named "staging" or a file
+	// called staging.tfplan is a guess about a name, and
+	// docs/INTENT-CONTRACT.md is explicit that guessing is not sufficient
+	// evidence for blocking. An absent declaration is Absent, never the
+	// contract's own environment: a resource that did not say where it belongs
+	// has not agreed with anything.
+	Environment Fact[string]
 	// ObjectStorage holds the normalized capabilities, and is nil for an opaque
 	// resource. Nil means "not interpreted", never "nothing to worry about".
 	ObjectStorage *ObjectStorageCapabilities

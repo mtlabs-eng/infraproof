@@ -1,0 +1,162 @@
+package intent
+
+// SchemaVersion is the contract version this build understands. The major
+// version is the compatibility boundary: a contract written against a later
+// major version is rejected rather than read partially.
+const SchemaVersion = "1.0"
+
+// Contract is a Version 1 Intent Contract.
+//
+// Every field a rule reads is required. An omitted required field is an invalid
+// contract rather than a defaulted one: a contract that did not say what it
+// permits must not be read as permitting anything.
+type Contract struct {
+	// SchemaVersion is the contract version, such as "1.0".
+	SchemaVersion string
+	// ChangeID is a human-readable identifier for the change. It is not
+	// authorization and carries no meaning beyond identification.
+	ChangeID string
+	// Environment is the target environment the change is written for.
+	Environment string
+	// AllowedClouds is the non-empty set of clouds the change may affect.
+	AllowedClouds []string
+	// DestructiveChanges is the policy for changes that destroy an object.
+	DestructiveChanges DestructivePolicy
+	// Resources are the declared capabilities the change is expected to have.
+	Resources []ResourceIntent
+	// Constraints are optional explicit restrictions. This build loads and
+	// validates them but evaluates none; see Unevaluated.
+	Constraints *Constraints
+	// Digest is "sha256:<hex>" over the exact contract bytes, so a report can
+	// identify the contract it compared against without copying it.
+	Digest string
+	// Source names where the contract was read from, for the bundle subject.
+	Source string
+
+	// present records which fields the file contained, so validation can tell
+	// an omitted field from one written empty.
+	present presence
+}
+
+// DestructivePolicy is what the contract permits for destructive changes.
+type DestructivePolicy string
+
+const (
+	// DestructiveForbidden blocks any change that destroys an object.
+	DestructiveForbidden DestructivePolicy = "forbidden"
+	// DestructiveAllowedWithWarning permits destruction but requires a human
+	// decision.
+	DestructiveAllowedWithWarning DestructivePolicy = "allowed_with_warning"
+)
+
+// Valid reports whether the policy is one this build understands.
+func (p DestructivePolicy) Valid() bool {
+	switch p {
+	case DestructiveForbidden, DestructiveAllowedWithWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// ResourceIntent is one declared resource capability.
+//
+// It carries no address. The contract describes what the change is for, not
+// which resource implements it, and docs/INTENT-CONTRACT.md defers resource
+// cardinality and scope. An entry therefore constrains every resource of its
+// family: that is the only reading which does not require the cardinality the
+// contract does not yet express, and it fails safe, since adding a resource to
+// a plan cannot escape a declared intent.
+type ResourceIntent struct {
+	// Family is the resource family, such as "object_storage".
+	Family string
+	// Exposure is the declared exposure of the family.
+	Exposure Exposure
+	// Purpose is an optional human note. No rule reads it.
+	Purpose string
+}
+
+// Exposure is a declared exposure requirement.
+type Exposure string
+
+const (
+	// ExposurePrivate requires that the change not grant public access.
+	ExposurePrivate Exposure = "private"
+	// ExposurePublic declares public access as intended.
+	ExposurePublic Exposure = "public"
+	// ExposureUnspecified is explicit uncertainty. It is not the same as an
+	// omitted field, which is invalid: this one says "the author considered
+	// exposure and declined to commit", and no exposure rule is applied.
+	ExposureUnspecified Exposure = "unspecified"
+)
+
+// Valid reports whether the exposure is one this build understands.
+func (e Exposure) Valid() bool {
+	switch e {
+	case ExposurePrivate, ExposurePublic, ExposureUnspecified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Families this build understands. A contract naming any other family is
+// invalid: silently accepting a family no rule evaluates would let a contract
+// appear to constrain something nothing checks.
+const FamilyObjectStorage = "object_storage"
+
+// Constraints are explicit restrictions the contract records.
+//
+// This build evaluates none of them. They are loaded and validated so that a
+// malformed constraint is still rejected, and reported through Unevaluated so
+// that a reader is never left believing a restriction was checked when it was
+// not.
+type Constraints struct {
+	// AllowedRegions restricts the regions the change may affect.
+	AllowedRegions []string
+	// RequiredTags are tags every affected resource must carry.
+	RequiredTags map[string]string
+}
+
+// Unevaluated names the contract fields this build loaded but did not evaluate,
+// in deterministic order. It is empty when the contract asks for nothing this
+// build cannot check.
+//
+// A contract that states a restriction no rule enforces is the product-level
+// form of reading absence as permission: the reader sees a constraint written
+// down and a PASS beside it, and concludes it held.
+func (c Contract) Unevaluated() []string {
+	if c.Constraints == nil {
+		return nil
+	}
+
+	var out []string
+	if len(c.Constraints.AllowedRegions) > 0 {
+		out = append(out, "constraints.allowed_regions")
+	}
+	if len(c.Constraints.RequiredTags) > 0 {
+		out = append(out, "constraints.required_tags")
+	}
+	return out
+}
+
+// ExposureOf returns the declared exposure for a family, and whether the
+// contract declared one at all.
+func (c Contract) ExposureOf(family string) (Exposure, bool) {
+	for _, resource := range c.Resources {
+		if resource.Family == family {
+			return resource.Exposure, true
+		}
+	}
+	return "", false
+}
+
+// AllowsCloud reports whether a cloud is in the allowed set.
+func (c Contract) AllowsCloud(cloud string) bool {
+	for _, allowed := range c.AllowedClouds {
+		if allowed == cloud {
+			return true
+		}
+	}
+	return false
+}
