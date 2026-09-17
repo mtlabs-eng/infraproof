@@ -660,3 +660,33 @@ func TestTwoPublicAccessBlocksCannotBeResolved(t *testing.T) {
 			fact.State, fact.Get())
 	}
 }
+
+// TestTwoAccountBlocksForOneProviderCannotBeResolved covers the ambiguity guard
+// on the account-wide control. One AWS account has one such block; a plan
+// declaring two for the same provider instance contradicts itself, and picking
+// one would state a determination about every bucket in the account.
+func TestTwoAccountBlocksForOneProviderCannotBeResolved(t *testing.T) {
+	permissive := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+	blocks := `,
+	  {"address": "aws_s3_account_public_access_block.first", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "first", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null,
+	              "after": {"block_public_acls": true, "block_public_policy": true,
+	                        "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	  {"address": "aws_s3_account_public_access_block.second", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "second", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null,
+	              "after": {"block_public_acls": false, "block_public_policy": false,
+	                        "ignore_public_acls": false, "restrict_public_buckets": false}}}`
+	blocksConfig := `,
+	  {"address": "aws_s3_account_public_access_block.first", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "first", "expressions": {}},
+	  {"address": "aws_s3_account_public_access_block.second", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "second", "expressions": {}}`
+
+	fact := bucketPlan(t, permissive, "private", blocks, blocksConfig)
+	if fact.IsKnown() && !fact.Get() {
+		t.Fatal("two contradictory account blocks cannot prove a bucket private")
+	}
+}

@@ -356,3 +356,297 @@ func TestAKeyedReferenceMatchesTheResourceKeyNotTheModuleKey(t *testing.T) {
 		t.Fatal("the unnamed instance must not inherit its sibling's ACL")
 	}
 }
+
+// TestABareDependsOnDoesNotReadmitSiblings covers the first door. A keyed
+// reference says which instance a control is about; an explicit depends_on on
+// the same resource says only that it comes after. Letting the second widen the
+// first turns adding one routine line into a silent loss of the distinction.
+func TestABareDependsOnDoesNotReadmitSiblings(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"a\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "example-a"}}},
+	    {"address": "aws_s3_bucket.b[\"z\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "z", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "example-z"}}},
+	    {"address": "aws_s3_bucket_public_access_block.locked", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "locked", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.locked", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "locked",
+	     "depends_on": ["aws_s3_bucket.b"],
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b[\"a\"].id", "aws_s3_bucket.b[\"a\"]", "aws_s3_bucket.b"]}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b[\"z\"].id", "aws_s3_bucket.b[\"z\"]", "aws_s3_bucket.b"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	open := publicAccess(t, graph, `aws_s3_bucket.b["z"]`)
+	if !open.IsKnown() || !open.Get() {
+		t.Fatalf(`b["z"] has a public ACL and no block of its own: state=%q grants=%v`, open.State, open.Get())
+	}
+	for _, source := range open.Sources {
+		if contains(source.ResourceAddress, "locked") {
+			t.Fatalf("a depends_on line re-admitted the sibling's block: %s", source.ResourceAddress)
+		}
+	}
+}
+
+// TestABareReferenceFromAnUnrepeatedControlIsAmbiguous covers the second door,
+// and the limit of positional pairing.
+//
+// "for_each = aws_s3_bucket.b" pairs by position because the control is
+// repeated in lockstep with its target. An unrepeated control reaching one
+// instance dynamically — lookup(aws_s3_bucket.b, "a").id — carries no key at
+// all, and the plan does not record which instance it chose. Pairing it with
+// every instance asserts a relationship the plan never states.
+func TestABareReferenceFromAnUnrepeatedControlIsAmbiguous(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"a\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "example-a"}}},
+	    {"address": "aws_s3_bucket.b[\"z\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "z", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "example-z"}}},
+	    {"address": "aws_s3_bucket_public_access_block.locked", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "locked", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.locked", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "locked",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.b"]}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b[\"z\"].id", "aws_s3_bucket.b[\"z\"]", "aws_s3_bucket.b"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	open := publicAccess(t, graph, `aws_s3_bucket.b["z"]`)
+	if !open.IsKnown() || !open.Get() {
+		t.Fatalf(`b["z"] has a public ACL: state=%q grants=%v`, open.State, open.Get())
+	}
+	for _, source := range open.Sources {
+		if contains(source.ResourceAddress, "locked") {
+			t.Fatalf("an ambiguous reference supplied a block: %s", source.ResourceAddress)
+		}
+	}
+
+	// The other instance is not thereby proved private either: the block might
+	// be its, and the plan does not say.
+	other := publicAccess(t, graph, `aws_s3_bucket.b["a"]`)
+	if other.IsKnown() && !other.Get() {
+		t.Fatal(`b["a"] cannot be proved private by a block that names no instance`)
+	}
+}
+
+// TestOneReferenceMayNameTwoInstances keeps two distinct links from collapsing
+// into one. An argument interpolating two buckets names both.
+func TestOneReferenceMayNameTwoInstances(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"a\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket.b[\"z\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "z", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "z"}}},
+	    {"address": "aws_s3_bucket_acl.both", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "both", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.both", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "both",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b[\"a\"].arn", "aws_s3_bucket.b[\"a\"]",
+	       "aws_s3_bucket.b[\"z\"].arn", "aws_s3_bucket.b[\"z\"]"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	refs := changeAtAddress(t, plan, "aws_s3_bucket_acl.both").References
+	if len(refs) != 2 {
+		t.Fatalf("references = %v, want one per named instance", refs)
+	}
+
+	graph := providers.Normalize(plan, providers.Default())
+	for _, address := range []string{`aws_s3_bucket.b["a"]`, `aws_s3_bucket.b["z"]`} {
+		fact := publicAccess(t, graph, address)
+		if !fact.IsKnown() || !fact.Get() {
+			t.Fatalf("%s is named by the public ACL: state=%q grants=%v", address, fact.State, fact.Get())
+		}
+	}
+}
+
+func changeAtAddress(t *testing.T, plan terraformplan.Plan, address string) terraformplan.ResourceChange {
+	t.Helper()
+	for _, change := range plan.ResourceChanges {
+		if change.Address == address {
+			return change
+		}
+	}
+	t.Fatalf("no change at %s", address)
+	return terraformplan.ResourceChange{}
+}
+
+// TestAReferenceToAnAddressWithFewerKeysDoesNotPanic covers a plan whose
+// configuration and resource_changes disagree: the reference names an instance
+// of something the changes record without one. CLAUDE.md requires data to be
+// validated at boundaries, and a verifier that panics on a malformed plan has
+// denied the verification.
+func TestAReferenceToAnAddressWithFewerKeysDoesNotPanic(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b[\"a\"].id", "aws_s3_bucket.b[\"a\"]"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("normalizing a self-inconsistent plan panicked: %v", r)
+		}
+	}()
+	graph := providers.Normalize(plan, providers.Default())
+
+	fact := publicAccess(t, graph, "aws_s3_bucket.b")
+	if fact.IsKnown() && fact.Get() {
+		t.Fatal("a reference naming an instance the plan does not contain should not bind")
+	}
+}
+
+// TestBothRealAmbiguityPlans is the pair of reproductions from the fourth
+// review round, as Terraform wrote them: one where an explicit depends_on
+// widened a keyed reference, and one where an unrepeated control reached a
+// repeated bucket dynamically.
+func TestBothRealAmbiguityPlans(t *testing.T) {
+	for _, fixture := range []string{
+		"real-aws-bare-depends-on-terraform-1.14",
+		"real-aws-ambiguous-reference-terraform-1.14",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			graph := normalize(t, fixture)
+
+			open := publicAccess(t, graph, `aws_s3_bucket.b["z"]`)
+			if !open.IsKnown() || !open.Get() {
+				t.Fatalf(`b["z"] has a public ACL: state=%q grants=%v`, open.State, open.Get())
+			}
+			for _, source := range open.Sources {
+				if contains(source.ResourceAddress, "locked") {
+					t.Fatalf("cited the block that names the sibling: %s", source.ResourceAddress)
+				}
+			}
+		})
+	}
+
+	// Where the control names its instance the other bucket is provably
+	// private; where it does not, nothing about it is proved either way.
+	named := publicAccess(t, normalize(t, "real-aws-bare-depends-on-terraform-1.14"), `aws_s3_bucket.b["a"]`)
+	if !named.IsKnown() || named.Get() {
+		t.Fatalf("a keyed block still proves its own bucket private: state=%q", named.State)
+	}
+	dynamic := publicAccess(t, normalize(t, "real-aws-ambiguous-reference-terraform-1.14"), `aws_s3_bucket.b["a"]`)
+	if dynamic.IsKnown() {
+		t.Fatalf("an ambiguous block proves nothing: state=%q grants=%v", dynamic.State, dynamic.Get())
+	}
+}
+
+// TestASingleInstanceLeavesNothingToChooseBetween is the limit of the
+// ambiguity rule. A bare reference from an unrepeated control is refused
+// because the plan does not record which instance it reached — but where the
+// target has exactly one instance there is nothing to record, and refusing
+// would discard a relationship the plan states plainly.
+func TestASingleInstanceLeavesNothingToChooseBetween(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"only\"]", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "b", "index": "only", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "only"}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.b"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	fact := publicAccess(t, graph, `aws_s3_bucket.b["only"]`)
+	if !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("the one instance there is carries the public ACL: state=%q grants=%v",
+			fact.State, fact.Get())
+	}
+}

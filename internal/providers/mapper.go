@@ -101,8 +101,9 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 	edges := map[string][]terraformplan.ResourceChange{}
 	for _, change := range changes {
 		for _, reference := range change.References {
-			for _, target := range byConfigAddress[reference.Target] {
-				if !relates(change, target, reference) {
+			candidates := byConfigAddress[reference.Target]
+			for _, target := range candidates {
+				if !relates(change, target, reference, len(candidates)) {
 					continue
 				}
 				edges[change.Address] = append(edges[change.Address], target)
@@ -124,23 +125,31 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 
 // relates reports whether a reference actually joins these two changes.
 //
-// The rule is exact where the plan is exact. A reference that names an instance
-// — aws_s3_bucket.b["a"] — joins that instance and no other, however few keys
-// the referring resource has of its own. Only a reference that names the
-// resource as a whole falls back to pairing by position, which is what a
-// meta-argument like "for_each = aws_s3_bucket.b" means.
+// The rule is exact where the plan is exact, and declines to guess where it is
+// not. A reference naming an instance — aws_s3_bucket.b["a"] — joins that
+// instance and no other. A bare reference joins by position, but only where
+// position means something: either the target has a single instance, so there
+// is nothing to choose between, or the referring resource is repeated at least
+// as deeply as its target and the two were written to pair up, which is what
+// "for_each = aws_s3_bucket.b" says.
 //
-// Reading a bare reference as "every instance" was the first defect here;
-// reading a keyed one that way was the second. Both came from treating absent
-// information as permission.
-func relates(from, to terraformplan.ResourceChange, reference terraformplan.ExpressionReference) bool {
+// What is left is the case this kept getting wrong: an unrepeated resource
+// making a bare reference to a repeated one — lookup(aws_s3_bucket.b, "a").id.
+// It reaches exactly one instance and the plan does not record which. Joining
+// it to all of them asserts a relationship the plan never states, and that
+// assertion has twice been enough to report a public bucket as provably
+// private. Absent information is not permission.
+func relates(from, to terraformplan.ResourceChange, reference terraformplan.ExpressionReference, candidates int) bool {
 	if !sameInstance(from, to) {
 		return false
 	}
-	if len(reference.TargetKeys) == 0 {
+	if len(reference.TargetKeys) > 0 {
+		return namesInstance(to, reference.TargetKeys)
+	}
+	if candidates == 1 {
 		return true
 	}
-	return namesInstance(to, reference.TargetKeys)
+	return len(from.InstanceKeys()) >= len(to.InstanceKeys())
 }
 
 // sameInstance reports whether two changes sit in the same repetition of their
