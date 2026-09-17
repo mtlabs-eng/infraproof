@@ -47,7 +47,7 @@ func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeB
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	capabilities := model.ObjectStorageCapabilities{
 		PublicAccess: m.publicAccess(subject, related, scope),
-		Unresolved:   unresolvedControls(scope),
+		Unresolved:   unresolvedControls(subject, scope),
 	}
 	return model.NormalizedResource{
 		Address:       subject.Address,
@@ -86,8 +86,9 @@ type channel struct {
 func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.Fact[bool] {
 	block := findType(related, typePublicAccessBlock)
 	// The account-wide block overrides every bucket-level setting, so a route
-	// it shuts is shut for this bucket too.
-	account := findType(scope, typeAccountBlock)
+	// it shuts is shut for this bucket too — but only if it is this bucket's
+	// account.
+	account := accountBlockFor(subject, scope)
 
 	acl := aclChannel(related, block, account)
 	policy := policyChannel(related, block, account)
@@ -307,11 +308,36 @@ func blocksEveryRoute(block *terraformplan.ResourceChange) bool {
 	return true
 }
 
+// accountBlockFor returns the account-wide block governing a bucket.
+//
+// The block belongs to the AWS account its provider instance points at. A
+// bucket created through a different instance is in a different account, and
+// the block says nothing about it — which matters most in exactly the plans
+// that use this resource, where an organization baseline sits alongside
+// workload buckets elsewhere.
+//
+// Two blocks for one provider instance contradict each other and settle
+// nothing.
+func accountBlockFor(subject terraformplan.ResourceChange, scope []terraformplan.ResourceChange) *terraformplan.ResourceChange {
+	var found *terraformplan.ResourceChange
+	for i := range scope {
+		if scope[i].Type != typeAccountBlock || scope[i].ProviderConfigKey != subject.ProviderConfigKey {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = &scope[i]
+	}
+	return found
+}
+
 // unresolvedControls reports the account-wide block when the plan does not
-// contain it. It overrides every bucket-level setting, so without it the plan
-// cannot prove what will actually be reachable — only what the change asks for.
-func unresolvedControls(scope []terraformplan.ResourceChange) []model.MissingControl {
-	if findType(scope, typeAccountBlock) != nil {
+// contain one for this bucket's account. It overrides every bucket-level
+// setting, so without it the plan cannot prove what will actually be reachable
+// — only what the change asks for.
+func unresolvedControls(subject terraformplan.ResourceChange, scope []terraformplan.ResourceChange) []model.MissingControl {
+	if accountBlockFor(subject, scope) != nil {
 		return nil
 	}
 	return []model.MissingControl{{

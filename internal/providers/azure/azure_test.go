@@ -222,3 +222,62 @@ func TestTwoAccountsGatingOneContainerCannotBeResolved(t *testing.T) {
 		t.Fatal("an unresolvable gate must be reported")
 	}
 }
+
+// TestAnAccountWithSeveralContainersDefers covers the most ordinary Azure shape
+// there is. Deferral asked "is there a container here", which is an existence
+// question; answering it with a rule that declines to choose between two made
+// an account with two containers announce that none was in the plan — a
+// required unknown, with a false reason, on a plan where every container is
+// provably private.
+func TestAnAccountWithSeveralContainersDefers(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.sa", "mode": "managed", "type": "azurerm_storage_account",
+	     "name": "sa", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "s", "allow_nested_items_to_be_public": true}}},
+	    {"address": "azurerm_storage_container.c[\"one\"]", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "c", "index": "one", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "one", "container_access_type": "private"}}},
+	    {"address": "azurerm_storage_container.c[\"two\"]", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "c", "index": "two", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "two", "container_access_type": "private"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.sa", "mode": "managed", "type": "azurerm_storage_account",
+	     "name": "sa", "expressions": {}},
+	    {"address": "azurerm_storage_container.c", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "c",
+	     "expressions": {"storage_account_id": {"references": [
+	       "azurerm_storage_account.sa.id", "azurerm_storage_account.sa"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	account, ok := graph.At("azurerm_storage_account.sa")
+	if !ok {
+		t.Fatal("the account is missing from the graph")
+	}
+	if account.ObjectStorage != nil {
+		t.Fatalf("with two containers in the plan the account must defer, got %+v", *account.ObjectStorage)
+	}
+
+	for _, address := range []string{`azurerm_storage_container.c["one"]`, `azurerm_storage_container.c["two"]`} {
+		resource, ok := graph.At(address)
+		if !ok || resource.ObjectStorage == nil {
+			t.Fatalf("%s produced no capabilities", address)
+		}
+		fact := resource.ObjectStorage.PublicAccess
+		if !fact.IsKnown() || fact.Get() {
+			t.Fatalf("%s is private: state=%q grants=%v", address, fact.State, fact.Get())
+		}
+	}
+}

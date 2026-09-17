@@ -74,9 +74,15 @@ func resolveReferences(refs []ExpressionReference, byAddress map[string]configRe
 		if c := cmp.Compare(a.Attribute, b.Attribute); c != 0 {
 			return c
 		}
-		return cmp.Compare(a.Target, b.Target)
+		if c := cmp.Compare(a.Target, b.Target); c != 0 {
+			return c
+		}
+		return slices.Compare(a.TargetKeys, b.TargetKeys)
 	})
-	return slices.Compact(out)
+	return slices.CompactFunc(out, func(a, b ExpressionReference) bool {
+		return a.Attribute == b.Attribute && a.Target == b.Target &&
+			slices.Equal(a.TargetKeys, b.TargetKeys)
+	})
 }
 
 func parseProviderConfigs(configuration map[string]any, errs *[]error) map[string]ProviderConfig {
@@ -265,12 +271,46 @@ func expressionReferences(path, attribute string, body map[string]any, addressPr
 			*errs = append(*errs, invalid(path+".references"+indexPath(i), "must be a string"))
 			continue
 		}
-		refs = append(refs, ExpressionReference{
-			Attribute: attribute,
-			Target:    joinAddress(addressPrefix, stripIndexKeys(target)),
-		})
+		refs = append(refs, reference(attribute, target, addressPrefix))
 	}
-	return refs
+	return preferKeyed(refs)
+}
+
+// reference builds one reference, keeping the instance the target names.
+func reference(attribute, target, addressPrefix string) ExpressionReference {
+	return ExpressionReference{
+		Attribute:  attribute,
+		Target:     joinAddress(addressPrefix, stripIndexKeys(target)),
+		TargetKeys: indexKeys(target),
+	}
+}
+
+// preferKeyed drops the bare form of a reference that also appears keyed.
+//
+// Terraform emits both: "aws_s3_bucket.b[\"a\"]" names the instance the
+// argument actually uses, and "aws_s3_bucket.b" records a dependency on the
+// resource as a whole. Keeping the bare one alongside would re-admit every
+// sibling through the back door, which is exactly what the keyed form exists to
+// prevent.
+func preferKeyed(refs []ExpressionReference) []ExpressionReference {
+	keyed := map[string]bool{}
+	for _, ref := range refs {
+		if len(ref.TargetKeys) > 0 {
+			keyed[ref.Attribute+"\x00"+ref.Target] = true
+		}
+	}
+	if len(keyed) == 0 {
+		return refs
+	}
+
+	out := refs[:0]
+	for _, ref := range refs {
+		if len(ref.TargetKeys) == 0 && keyed[ref.Attribute+"\x00"+ref.Target] {
+			continue
+		}
+		out = append(out, ref)
+	}
+	return out
 }
 
 // dependsOnReferences reads an explicit dependency list, which is a plain array
@@ -293,12 +333,9 @@ func dependsOnReferences(path string, fields map[string]any, addressPrefix strin
 			*errs = append(*errs, invalid(path+".depends_on"+indexPath(i), "must be a string"))
 			continue
 		}
-		refs = append(refs, ExpressionReference{
-			Attribute: "depends_on",
-			Target:    joinAddress(addressPrefix, stripIndexKeys(target)),
-		})
+		refs = append(refs, reference("depends_on", target, addressPrefix))
 	}
-	return refs
+	return preferKeyed(refs)
 }
 
 // resolveProviderInstances attaches the provider instance to each change.

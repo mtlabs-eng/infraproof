@@ -99,18 +99,14 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 	}
 
 	edges := map[string][]terraformplan.ResourceChange{}
-	join := func(from, to terraformplan.ResourceChange) {
-		if !sameInstance(from, to) {
-			return
-		}
-		edges[from.Address] = append(edges[from.Address], to)
-		edges[to.Address] = append(edges[to.Address], from)
-	}
-
 	for _, change := range changes {
 		for _, reference := range change.References {
 			for _, target := range byConfigAddress[reference.Target] {
-				join(change, target)
+				if !relates(change, target, reference) {
+					continue
+				}
+				edges[change.Address] = append(edges[change.Address], target)
+				edges[target.Address] = append(edges[target.Address], change)
 			}
 		}
 	}
@@ -126,16 +122,55 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 	return edges
 }
 
-// sameInstance reports whether two changes belong to the same repetition of
-// their configuration.
+// relates reports whether a reference actually joins these two changes.
 //
-// Keys are compared as far as both resources have them, so an unrepeated bucket
-// still relates to controls created with for_each — a real and common shape —
-// while two instances of one bucket never relate to each other's controls.
+// The rule is exact where the plan is exact. A reference that names an instance
+// — aws_s3_bucket.b["a"] — joins that instance and no other, however few keys
+// the referring resource has of its own. Only a reference that names the
+// resource as a whole falls back to pairing by position, which is what a
+// meta-argument like "for_each = aws_s3_bucket.b" means.
+//
+// Reading a bare reference as "every instance" was the first defect here;
+// reading a keyed one that way was the second. Both came from treating absent
+// information as permission.
+func relates(from, to terraformplan.ResourceChange, reference terraformplan.ExpressionReference) bool {
+	if !sameInstance(from, to) {
+		return false
+	}
+	if len(reference.TargetKeys) == 0 {
+		return true
+	}
+	return namesInstance(to, reference.TargetKeys)
+}
+
+// sameInstance reports whether two changes sit in the same repetition of their
+// enclosing modules and, where both are repeated, the same repetition of
+// themselves.
+//
+// Keys are compared as far as both have them, so an unrepeated control still
+// pairs with a repeated bucket — a real shape — while two instances of one
+// module never see into each other.
 func sameInstance(a, b terraformplan.ResourceChange) bool {
 	left, right := a.InstanceKeys(), b.InstanceKeys()
 	for i := 0; i < len(left) && i < len(right); i++ {
 		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// namesInstance reports whether a change is the instance a keyed reference
+// names. The reference is written inside some module, so its keys describe the
+// end of the address rather than the whole of it.
+func namesInstance(change terraformplan.ResourceChange, keys []string) bool {
+	actual := change.InstanceKeys()
+	if len(actual) < len(keys) {
+		return false
+	}
+	trailing := actual[len(actual)-len(keys):]
+	for i := range keys {
+		if trailing[i] != keys[i] {
 			return false
 		}
 	}

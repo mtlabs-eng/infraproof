@@ -77,7 +77,11 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 // the account is the only thing there is to report, and an account permitting
 // anonymous access is not a conclusion that nothing is exposed.
 func accountCapabilities(account terraformplan.ResourceChange, related []terraformplan.ResourceChange) *model.ObjectStorageCapabilities {
-	if findType(related, typeContainer) != nil {
+	// Whether any container is here is an existence question. findType declines
+	// to choose between two accounts, which is right, but applying that rule to
+	// counting containers made an account with two of them claim that none was
+	// in the plan.
+	if hasType(related, typeContainer) {
 		return nil
 	}
 
@@ -188,6 +192,16 @@ func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.
 // between them would state a determination the plan does not support; an
 // absent account already degrades to UNKNOWN, which is the right answer here
 // too.
+// hasType reports whether any resource of a kind is attached.
+func hasType(changes []terraformplan.ResourceChange, resourceType string) bool {
+	for i := range changes {
+		if changes[i].Type == resourceType {
+			return true
+		}
+	}
+	return false
+}
+
 func findType(changes []terraformplan.ResourceChange, resourceType string) *terraformplan.ResourceChange {
 	var found *terraformplan.ResourceChange
 	for i := range changes {

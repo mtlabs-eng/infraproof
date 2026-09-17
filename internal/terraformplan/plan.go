@@ -132,6 +132,15 @@ type ExpressionReference struct {
 	// Target is the referenced resource's address, module-qualified and without
 	// count or for_each keys, matching the form the configuration block uses.
 	Target string
+	// TargetKeys are the count or for_each keys the reference named, or nil
+	// when it named the resource as a whole.
+	//
+	// Terraform writes both forms: an argument holding another instance's id
+	// produces the keyed reference and the bare one side by side, while a
+	// meta-argument such as "for_each = aws_s3_bucket.b" produces only the
+	// bare form. The difference is the only thing separating one instance's
+	// controls from its sibling's, so it is kept rather than normalized away.
+	TargetKeys []string
 }
 
 // ConfigAddress returns the address as the configuration block spells it:

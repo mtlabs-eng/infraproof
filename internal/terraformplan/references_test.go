@@ -407,3 +407,122 @@ func TestInstanceKeysSeparateSiblings(t *testing.T) {
 		})
 	}
 }
+
+// TestAKeyedReferenceKeepsItsKey is the information the correlation layer was
+// missing. Terraform writes the instance a reference names — aws_s3_bucket.b["a"]
+// — alongside the bare resource form, and discarding the key leaves nothing to
+// tell one instance's controls from another's.
+func TestAKeyedReferenceKeepsItsKey(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"a\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b[\"a\"].id", "aws_s3_bucket.b[\"a\"]", "aws_s3_bucket.b"]}}}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	refs := changeAt(t, plan, "aws_s3_bucket_acl.open").References
+	if len(refs) != 1 {
+		t.Fatalf("references = %v, want one", refs)
+	}
+	if refs[0].Target != "aws_s3_bucket.b" {
+		t.Fatalf("target = %q", refs[0].Target)
+	}
+	if len(refs[0].TargetKeys) != 1 || refs[0].TargetKeys[0] != "a" {
+		t.Fatalf("target keys = %v, want [a] — the bare sibling must not erase the keyed form", refs[0].TargetKeys)
+	}
+}
+
+// TestABareReferenceCarriesNoKeys keeps the other form working. A meta-argument
+// such as "for_each = aws_s3_bucket.b" names the whole resource on purpose, and
+// inventing a key for it would break the pairing it exists to express.
+func TestABareReferenceCarriesNoKeys(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b[\"a\"]", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "index": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}},
+	    {"address": "aws_s3_bucket_acl.b[\"a\"]", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "b", "index": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.b", "mode": "managed", "type": "aws_s3_bucket_acl", "name": "b",
+	     "for_each_expression": {"references": ["aws_s3_bucket.b"]},
+	     "expressions": {"bucket": {"references": ["each.value.id", "each.value"]}}}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	refs := changeAt(t, plan, `aws_s3_bucket_acl.b["a"]`).References
+	if len(refs) != 1 || refs[0].Target != "aws_s3_bucket.b" {
+		t.Fatalf("references = %v", refs)
+	}
+	if len(refs[0].TargetKeys) != 0 {
+		t.Fatalf("target keys = %v, want none", refs[0].TargetKeys)
+	}
+}
+
+// TestKeyedAndBareReferencesToDifferentInstancesBothSurvive keeps two distinct
+// links distinct.
+func TestKeyedAndBareReferencesToDifferentInstancesBothSurvive(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "a.one", "mode": "managed", "type": "a", "name": "one", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "b.target", "mode": "managed", "type": "b", "name": "target", "expressions": {}},
+	    {"address": "a.one", "mode": "managed", "type": "a", "name": "one",
+	     "expressions": {
+	       "first":  {"references": ["b.target[\"x\"].id", "b.target[\"x\"]", "b.target"]},
+	       "second": {"references": ["b.target[\"y\"].id", "b.target[\"y\"]", "b.target"]}
+	     }}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	refs := changeAt(t, plan, "a.one").References
+	if len(refs) != 2 {
+		t.Fatalf("references = %v, want two", refs)
+	}
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if len(ref.TargetKeys) != 1 {
+			t.Fatalf("reference %v lost its key", ref)
+		}
+		seen[ref.TargetKeys[0]] = true
+	}
+	if !seen["x"] || !seen["y"] {
+		t.Fatalf("keys seen = %v, want x and y", seen)
+	}
+}

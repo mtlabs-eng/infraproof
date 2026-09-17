@@ -513,3 +513,150 @@ func TestTwoControlsOfOneKindCannotBeResolved(t *testing.T) {
 		t.Fatalf("two conflicting ACLs cannot yield a determination, got state=%q grants=%v", fact.State, fact.Get())
 	}
 }
+
+// TestTheAccountBlockAppliesOnlyToItsOwnAccount covers a control that reaches
+// across a boundary it does not have. An account-wide block belongs to the AWS
+// account its provider instance points at; a bucket created through a different
+// provider instance is in a different account, and the block proves nothing
+// about it. An organization baseline alongside workload buckets in another
+// account is an ordinary shape, and it is exactly when this resource gets used.
+func TestTheAccountBlockAppliesOnlyToItsOwnAccount(t *testing.T) {
+	plan := func(bucketKey, accountKey string) model.NormalizedResource {
+		t.Helper()
+		raw := []byte(fmt.Sprintf(`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.elsewhere", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "elsewhere", "provider_name": "registry.terraform.io/hashicorp/aws",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}},
+		    {"address": "aws_s3_bucket_acl.elsewhere", "mode": "managed", "type": "aws_s3_bucket_acl",
+		     "name": "elsewhere", "provider_name": "registry.terraform.io/hashicorp/aws",
+		     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+		    {"address": "aws_s3_account_public_access_block.baseline", "mode": "managed",
+		     "type": "aws_s3_account_public_access_block", "name": "baseline",
+		     "provider_name": "registry.terraform.io/hashicorp/aws",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"block_public_acls": true, "block_public_policy": true,
+		                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+		  ],
+		  "configuration": {
+		    "provider_config": {
+		      "aws": {"name": "aws", "full_name": "registry.terraform.io/hashicorp/aws"},
+		      "aws.other": {"name": "aws", "alias": "other",
+		                    "full_name": "registry.terraform.io/hashicorp/aws"}
+		    },
+		    "root_module": {"resources": [
+		      {"address": "aws_s3_bucket.elsewhere", "mode": "managed", "type": "aws_s3_bucket",
+		       "name": "elsewhere", "provider_config_key": %q, "expressions": {}},
+		      {"address": "aws_s3_bucket_acl.elsewhere", "mode": "managed", "type": "aws_s3_bucket_acl",
+		       "name": "elsewhere", "provider_config_key": %q,
+		       "expressions": {"bucket": {"references": ["aws_s3_bucket.elsewhere.id", "aws_s3_bucket.elsewhere"]}}},
+		      {"address": "aws_s3_account_public_access_block.baseline", "mode": "managed",
+		       "type": "aws_s3_account_public_access_block", "name": "baseline",
+		       "provider_config_key": %q, "expressions": {}}
+		    ]}
+		  }
+		}`, bucketKey, bucketKey, accountKey))
+
+		parsed, err := terraformplan.Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		resource, ok := providers.Normalize(parsed, providers.Default()).At("aws_s3_bucket.elsewhere")
+		if !ok || resource.ObjectStorage == nil {
+			t.Fatal("no normalized bucket")
+		}
+		return resource
+	}
+
+	t.Run("a different provider instance is a different account", func(t *testing.T) {
+		resource := plan("aws.other", "aws")
+
+		fact := resource.ObjectStorage.PublicAccess
+		if !fact.IsKnown() || !fact.Get() {
+			t.Fatalf("a public bucket in another account: state=%q grants=%v", fact.State, fact.Get())
+		}
+		if len(resource.ObjectStorage.Unresolved) != 1 {
+			t.Fatalf("the account-level control for this bucket's account is still unknown: %v",
+				resource.ObjectStorage.Unresolved)
+		}
+	})
+
+	t.Run("the same provider instance is the same account", func(t *testing.T) {
+		resource := plan("aws", "aws")
+
+		fact := resource.ObjectStorage.PublicAccess
+		if !fact.IsKnown() || fact.Get() {
+			t.Fatalf("the account block shuts every route: state=%q grants=%v", fact.State, fact.Get())
+		}
+		if len(resource.ObjectStorage.Unresolved) != 0 {
+			t.Fatalf("unresolved = %v, want none", resource.ObjectStorage.Unresolved)
+		}
+	})
+}
+
+// TestAnUnreadableBlockFlagDoesNotReadAsPermission covers the combinator. A
+// flag nobody can read is not a flag set to false, and treating it as one turns
+// an open question into a finding.
+func TestAnUnreadableBlockFlagDoesNotReadAsPermission(t *testing.T) {
+	unreadable := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+	accountChange := `,
+	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "this", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": {},
+	              "after_unknown": {"block_public_acls": true, "ignore_public_acls": true}}}`
+	accountConfig := `,
+	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "this", "expressions": {}}`
+
+	fact := bucketPlan(t, unreadable, "public-read", accountChange, accountConfig)
+	if fact.IsKnown() {
+		t.Fatalf("an account flag that is not yet known leaves the route open to doubt, got state=%q grants=%v",
+			fact.State, fact.Get())
+	}
+}
+
+// TestUnreadableOwnershipControlsLeaveTheAclRouteOpen covers the same rule for
+// the resource that can disable ACLs entirely.
+func TestUnreadableOwnershipControlsLeaveTheAclRouteOpen(t *testing.T) {
+	permissive := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+	controls := `,
+	  {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	   "type": "aws_s3_bucket_ownership_controls", "name": "assets", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": {}, "after_unknown": {"rule": true}}}`
+	controlsConfig := `,
+	  {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	   "type": "aws_s3_bucket_ownership_controls", "name": "assets",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+
+	fact := bucketPlan(t, permissive, "public-read", controls, controlsConfig)
+	if fact.IsKnown() {
+		t.Fatalf("ownership controls that are not yet known could still disable ACLs, got state=%q grants=%v",
+			fact.State, fact.Get())
+	}
+}
+
+// TestTwoPublicAccessBlocksCannotBeResolved covers the AWS ambiguity guard,
+// which had none of its own.
+func TestTwoPublicAccessBlocksCannotBeResolved(t *testing.T) {
+	blocking := `{"block_public_acls": true, "block_public_policy": true,
+	              "ignore_public_acls": true, "restrict_public_buckets": true}`
+	second := `,
+	  {"address": "aws_s3_bucket_public_access_block.other", "mode": "managed",
+	   "type": "aws_s3_bucket_public_access_block", "name": "other", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null,
+	              "after": {"block_public_acls": false, "block_public_policy": false,
+	                        "ignore_public_acls": false, "restrict_public_buckets": false}}}`
+	secondConfig := `,
+	  {"address": "aws_s3_bucket_public_access_block.other", "mode": "managed",
+	   "type": "aws_s3_bucket_public_access_block", "name": "other",
+	   "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}`
+
+	fact := bucketPlan(t, blocking, "private", second, secondConfig)
+	if fact.IsKnown() {
+		t.Fatalf("two contradictory blocks support no determination, got state=%q grants=%v",
+			fact.State, fact.Get())
+	}
+}
