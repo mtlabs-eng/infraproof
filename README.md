@@ -45,6 +45,10 @@ common case, not an edge one, and reporting `PASS` there would be a guess.
 Intent loading and the decision engine are not implemented, so the `check` command below is not yet
 available.
 
+**A result is about the plan, not about the infrastructure.** `PASS` means no plan-provable public
+exposure was found among the resource types this build understands — not that nothing is public. See
+[what a result means](docs/PRODUCT.md#what-a-result-means).
+
 ```sh
 go test ./...
 go vet ./...

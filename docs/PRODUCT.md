@@ -47,6 +47,25 @@ InfraProof independently verifies agent-generated Terraform and OpenTofu changes
 - JSON and Markdown Evidence Bundle output
 - Fixture-driven tests with no cloud accounts
 
+## What a result means
+
+InfraProof reports what a plan proves, not what is true about the infrastructure.
+
+A `PASS` means no plan-provable public exposure was found among the resource
+types this build understands. It is not a statement that nothing is public.
+Exposure routes outside the current model are not examined: Azure static
+websites and network rules, GCP IAM conditions and legacy ACLs, AWS inline
+bucket `acl`, `policy` and `grant` arguments, and any control applied outside
+the plan.
+
+Where the plan does not determine exposure, InfraProof answers `UNKNOWN`, and
+`UNKNOWN` is not `PASS`. It is the honest answer in more cases than a reader may
+expect, because a Terraform plan records which values take part in an expression
+and never how they are combined — so a control that reaches one instance of a
+repeated resource cannot be attributed to a particular one. Naming the instance
+in the configuration, rather than deriving it, is what makes such a plan
+answerable.
+
 ## Explicit non-goals
 
 - Generating Terraform code

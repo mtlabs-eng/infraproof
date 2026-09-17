@@ -155,3 +155,15 @@ func TestConditionsThatRestrictNothing(t *testing.T) {
 		})
 	}
 }
+
+// TestAnUnreadableConditionIsNotAnAbsentOne keeps the condition check from
+// failing open. Something is there; not being able to read it is a reason to
+// withhold the conclusion, not to conclude the statement is unconditional.
+func TestAnUnreadableConditionIsNotAnAbsentOne(t *testing.T) {
+	grants, determined := policyGrantsPublic(
+		`{"Statement":[{"Effect":"Allow","Principal":"*","Condition":"not-an-object"}]}`)
+
+	if grants || determined {
+		t.Fatalf("grants=%v determined=%v, want an undetermined answer", grants, determined)
+	}
+}

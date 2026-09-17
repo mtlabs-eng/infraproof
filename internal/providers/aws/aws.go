@@ -331,7 +331,7 @@ func accountBlockFor(subject terraformplan.ResourceChange, scope []terraformplan
 	var found *terraformplan.ResourceChange
 	for i := range scope {
 		if scope[i].Type != typeAccountBlock || beingRemoved(scope[i]) ||
-			scope[i].ProviderConfigKey != subject.ProviderConfigKey {
+			!sameProviderInstance(subject, scope[i]) {
 			continue
 		}
 		if found != nil {
@@ -394,6 +394,24 @@ func blockProvenance(block *terraformplan.ResourceChange) []model.Provenance {
 		out = append(out, provenance(block.Address, flag))
 	}
 	return out
+}
+
+// sameProviderInstance reports whether two changes were created through the
+// same provider configuration, and therefore in the same AWS account.
+//
+// An empty provider config key is not the default instance. It is the
+// configuration declining to say — which is what a sanitized plan with no
+// configuration block leaves behind for everything in it. Treating two
+// silences as a match attributed an account-wide block to a bucket in an
+// account nobody had named.
+//
+// The block's own account_id is not a second opinion: the plan never states
+// which account the bucket is in, so there is nothing to compare it against.
+func sameProviderInstance(subject, control terraformplan.ResourceChange) bool {
+	if subject.ProviderConfigKey == "" || control.ProviderConfigKey == "" {
+		return false
+	}
+	return subject.ProviderConfigKey == control.ProviderConfigKey
 }
 
 // beingRemoved reports that a change destroys its object outright. Such a

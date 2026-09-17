@@ -408,7 +408,8 @@ func bucketWithAccountBlock(t *testing.T, block, acl, account string) model.Fact
 	   "change": {"actions": ["create"], "before": null, "after": %s}}`, account)
 	extraCfg := `,
 	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
-	   "type": "aws_s3_account_public_access_block", "name": "this", "expressions": {}}`
+	   "type": "aws_s3_account_public_access_block", "name": "this",
+	   "provider_config_key": "aws", "expressions": {}}`
 	return bucketPlan(t, block, acl, extra, extraCfg)
 }
 
@@ -431,9 +432,9 @@ func bucketPlan(t *testing.T, block, acl, extraChange, extraConfig string) model
 	  ],
 	  "configuration": {"root_module": {"resources": [
 	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
-	     "expressions": {}},
+	     "provider_config_key": "aws", "expressions": {}},
 	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
-	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_config_key": "aws",
 	     "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
 	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
 	     "name": "assets",
@@ -478,7 +479,8 @@ func TestTheAccountBlockShutsThePolicyRouteToo(t *testing.T) {
 	   "change": {"actions": ["create"], "before": null, "after": %s}}`, blocking)
 	accountConfig := `,
 	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
-	   "type": "aws_s3_account_public_access_block", "name": "this", "expressions": {}}`
+	   "type": "aws_s3_account_public_access_block", "name": "this",
+	   "provider_config_key": "aws", "expressions": {}}`
 
 	withAccount := bucketPlan(t, permissive, "private", policyChange+accountChange, policyConfig+accountConfig)
 	if !withAccount.IsKnown() || withAccount.Get() {
@@ -608,7 +610,8 @@ func TestAnUnreadableBlockFlagDoesNotReadAsPermission(t *testing.T) {
 	              "after_unknown": {"block_public_acls": true, "ignore_public_acls": true}}}`
 	accountConfig := `,
 	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
-	   "type": "aws_s3_account_public_access_block", "name": "this", "expressions": {}}`
+	   "type": "aws_s3_account_public_access_block", "name": "this",
+	   "provider_config_key": "aws", "expressions": {}}`
 
 	fact := bucketPlan(t, unreadable, "public-read", accountChange, accountConfig)
 	if fact.IsKnown() {
@@ -683,9 +686,11 @@ func TestTwoAccountBlocksForOneProviderCannotBeResolved(t *testing.T) {
 	                        "ignore_public_acls": true, "restrict_public_buckets": true}}}`
 	blocksConfig := `,
 	  {"address": "aws_s3_account_public_access_block.first", "mode": "managed",
-	   "type": "aws_s3_account_public_access_block", "name": "first", "expressions": {}},
+	   "type": "aws_s3_account_public_access_block", "name": "first",
+	   "provider_config_key": "aws", "expressions": {}},
 	  {"address": "aws_s3_account_public_access_block.second", "mode": "managed",
-	   "type": "aws_s3_account_public_access_block", "name": "second", "expressions": {}}`
+	   "type": "aws_s3_account_public_access_block", "name": "second",
+	   "provider_config_key": "aws", "expressions": {}}`
 
 	fact := bucketPlan(t, permissive, "public-read", blocks, blocksConfig)
 	if fact.IsKnown() {
@@ -807,7 +812,8 @@ func TestASensitiveAccountFlagIsReportedAsRedacted(t *testing.T) {
 	              "after_sensitive": {"block_public_policy": true}}}`
 	accountConfig := `,
 	  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
-	   "type": "aws_s3_account_public_access_block", "name": "this", "expressions": {}}`
+	   "type": "aws_s3_account_public_access_block", "name": "this",
+	   "provider_config_key": "aws", "expressions": {}}`
 
 	publicPolicy := `{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\"}]}`
 	policyChange := fmt.Sprintf(`,
@@ -822,5 +828,148 @@ func TestASensitiveAccountFlagIsReportedAsRedacted(t *testing.T) {
 	fact := bucketPlan(t, permissive, "private", policyChange+account, policyConfig+accountConfig)
 	if fact.State != model.FactRedacted {
 		t.Fatalf("state = %q, want %q — the deciding flag was marked sensitive", fact.State, model.FactRedacted)
+	}
+}
+
+// TestAnUnattributedAccountBlockGovernsNothing covers the third dimension of
+// the same mistake. An empty provider config key does not mean "the default
+// instance" — it means the configuration did not say, which is what a sanitized
+// plan with no configuration block leaves behind for everything in it. Two
+// silences compared equal, so an account block that could not be attributed to
+// any account was applied to a bucket in an unknown one.
+func TestAnUnattributedAccountBlockGovernsNothing(t *testing.T) {
+	blocking := `{"block_public_acls": true, "block_public_policy": true,
+	              "ignore_public_acls": true, "restrict_public_buckets": true,
+	              "account_id": "999999999999"}`
+
+	t.Run("a plan with no configuration at all", func(t *testing.T) {
+		raw := []byte(fmt.Sprintf(`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+		     "provider_name": "p", "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}},
+		    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl", "name": "a",
+		     "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+		    {"address": "aws_s3_account_public_access_block.other", "mode": "managed",
+		     "type": "aws_s3_account_public_access_block", "name": "other", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": %s}}
+		  ]
+		}`, blocking))
+
+		plan, err := terraformplan.Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		resource, ok := providers.Normalize(plan, providers.Default()).At("aws_s3_bucket.b")
+		if !ok || resource.ObjectStorage == nil {
+			t.Fatal("no normalized bucket")
+		}
+
+		fact := resource.ObjectStorage.PublicAccess
+		if fact.IsKnown() && !fact.Get() {
+			t.Fatal("a block belonging to no stated account cannot prove this bucket private")
+		}
+		var named bool
+		for _, control := range resource.ObjectStorage.Unresolved {
+			if control.CheckID == "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK" {
+				named = true
+			}
+		}
+		if !named {
+			t.Fatalf("the account-level control is still unknown and must be reported: %v",
+				resource.ObjectStorage.Unresolved)
+		}
+	})
+
+	t.Run("an account block the configuration attributes", func(t *testing.T) {
+		permissive := `{"block_public_acls": false, "block_public_policy": false,
+		                "ignore_public_acls": false, "restrict_public_buckets": false}`
+		account := `,
+		  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+		   "type": "aws_s3_account_public_access_block", "name": "this", "provider_name": "p",
+		   "change": {"actions": ["create"], "before": null,
+		              "after": {"block_public_acls": true, "block_public_policy": true,
+		                        "ignore_public_acls": true, "restrict_public_buckets": true}}}`
+		accountConfig := `,
+		  {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+		   "type": "aws_s3_account_public_access_block", "name": "this",
+		   "provider_config_key": "aws", "expressions": {}}`
+
+		if fact := bucketPlan(t, permissive, "public-read", account, accountConfig); !fact.IsKnown() || fact.Get() {
+			t.Fatalf("an attributed block still governs its own account: state=%q grants=%v",
+				fact.State, fact.Get())
+		}
+	})
+}
+
+// TestADestroyedAccountBlockProtectsNothing covers the account-wide control on
+// its way out. A plan that removes it while granting a public ACL is the change
+// most worth reporting, and reading the block as still in force withheld the
+// finding.
+func TestADestroyedAccountBlockProtectsNothing(t *testing.T) {
+	permissive := `{"block_public_acls": false, "block_public_policy": false,
+	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+	blocking := `{"block_public_acls": true, "block_public_policy": true,
+	              "ignore_public_acls": true, "restrict_public_buckets": true}`
+
+	destroyed := fmt.Sprintf(`,
+	  {"address": "aws_s3_account_public_access_block.going", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "going", "provider_name": "p",
+	   "change": {"actions": ["delete"], "before": %s, "after": null}}`, blocking)
+	config := `,
+	  {"address": "aws_s3_account_public_access_block.going", "mode": "managed",
+	   "type": "aws_s3_account_public_access_block", "name": "going",
+	   "provider_config_key": "aws", "expressions": {}}`
+
+	if fact := bucketPlan(t, permissive, "public-read", destroyed, config); !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("removing the account block while granting a public ACL is public: state=%q grants=%v",
+			fact.State, fact.Get())
+	}
+}
+
+// TestAReplacedControlStillProtects is the counterweight. A replacement
+// destroys and recreates, and the object is there afterwards — so a block being
+// replaced is not a block going away.
+func TestAReplacedControlStillProtects(t *testing.T) {
+	blocking := `{"block_public_acls": true, "block_public_policy": true,
+	              "ignore_public_acls": true, "restrict_public_buckets": true}`
+
+	raw := []byte(fmt.Sprintf(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	     "provider_name": "p", "change": {"actions": ["no-op"], "before": {"bucket": "a"}, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["delete", "create"], "before": %s, "after": %s}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	     "provider_config_key": "aws", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_config_key": "aws",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_config_key": "aws",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`, blocking, blocking))
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resource, ok := providers.Normalize(plan, providers.Default()).At("aws_s3_bucket.assets")
+	if !ok || resource.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+
+	fact := resource.ObjectStorage.PublicAccess
+	if !fact.IsKnown() || fact.Get() {
+		t.Fatalf("a replaced block is in force after apply: state=%q grants=%v", fact.State, fact.Get())
 	}
 }
