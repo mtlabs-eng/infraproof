@@ -12,6 +12,8 @@ These plans were produced by Terraform 1.14.0 itself, not written by hand.
 | `real-aws-swapped-index-terraform-1.14.json` | controls repeated over a swap map, so each governs its sibling's bucket |
 | `real-aws-permuting-lookup-terraform-1.14.json` | the same permutation reached through `b[local.swap[each.key]]`, which mentions the own key and still permutes |
 | `real-aws-count-arithmetic-terraform-1.14.json` | `b[(count.index + 1) % 2]`, which the plan records identically to `b[count.index]` |
+| `real-aws-conditional-index-terraform-1.14.json` | `b[each.key == "a" ? "z" : "a"]`, whose reference list is identical to `b[each.key]` |
+| `real-aws-permuted-for-each-terraform-1.14.json` | the same permutation in the `for_each` itself, whose reference list is identical to `for_each = aws_s3_bucket.b` |
 
 Both came from throwaway configurations using the `aws` provider with
 `skip_credentials_validation`, `skip_requesting_account_id` and
@@ -20,7 +22,7 @@ placeholder key strings those settings require were removed from the committed
 files; no credential was involved at any point, and neither plan was applied.
 
 They exist because the hand-written fixtures in the provider subpackages missed
-nine shapes that only real output revealed: a nested block is an array of
+eleven shapes that only real output revealed: a nested block is an array of
 objects rather than an object, a control resource often names the resource it
 controls through `for_each_expression` alone, every instance of a repeated
 resource shares one configuration address, a reference names the instance it
@@ -32,6 +34,15 @@ canonical S3 stack unreadable; the other five each reported a public bucket as
 provably private, by five different routes.
 
 `internal/providers/mapper_test.go` enumerates every way Terraform can write an
-index and states what correlation does with each. That table, rather than "no
-reviewer found anything this round", is the stopping condition for this class of
-defect.
+index. The last two fixtures are why every row but one says the same thing: the
+configuration block records **which** values take part in an expression, never
+**how** they are combined, and a string literal takes part in nothing. So
+`b[each.key]` and `b[each.key == "a" ? "z" : "a"]` are indistinguishable, as are
+`for_each = aws_s3_bucket.b` and a comprehension over it that permutes the keys.
+
+Pairing repeated instances by position is therefore not attempted. What survives
+is what a plan states: a reference naming an instance outright, a target with a
+single instance, and the module keys two resources share by sitting in the same
+module instance. Where that leaves a question open, the answer is `UNKNOWN` and
+`CORRELATION_UNRESOLVED` says why — an argument written `b["a"]` rather than
+`b[each.key]` is resolvable, and the reader can act on that.

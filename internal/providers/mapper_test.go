@@ -35,34 +35,27 @@ func publicAccess(t *testing.T, graph model.Graph, address string) model.Fact[bo
 	return resource.ObjectStorage.PublicAccess
 }
 
-// TestInstancesDoNotShareControls is the defect that matters most in this
-// package. Every instance of a repeated resource shares one configuration
-// address, so correlating by that address alone hands one bucket's public
-// access block to its sibling — and reports a bucket with a public-read ACL and
-// no blocks as provably private, citing the other instance as evidence.
+// TestRepeatedInstancesReachNoVerdict records the cost of that decision on the
+// shape it falls hardest on: a for_each over buckets with controls repeated
+// alongside them. One instance is locked down and one is wide open, and the
+// plan cannot say which control belongs to which, so neither gets an answer.
 //
-// The fixture is a plan Terraform 1.14.0 produced from two for_each instances,
-// one locked down and one wide open.
-func TestInstancesDoNotShareControls(t *testing.T) {
+// This used to report both correctly, by an assumption that was wrong on two
+// real plans. A lost finding is recoverable; a bucket published to the internet
+// and reported provably private is not.
+func TestRepeatedInstancesReachNoVerdict(t *testing.T) {
 	graph := normalize(t, "real-aws-for-each-terraform-1.14")
 
-	open := publicAccess(t, graph, `aws_s3_bucket.b["z-public"]`)
-	if !open.IsKnown() || !open.Get() {
-		t.Fatalf(`b["z-public"] has a public-read ACL and no blocks: state=%q grants=%v`, open.State, open.Get())
-	}
-	for _, source := range open.Sources {
-		if contains(source.ResourceAddress, "a-private") {
-			t.Fatalf("the conclusion cites another instance's control: %s", source.ResourceAddress)
+	for _, address := range []string{`aws_s3_bucket.b["z-public"]`, `aws_s3_bucket.b["a-private"]`} {
+		fact := publicAccess(t, graph, address)
+		if fact.IsKnown() {
+			t.Fatalf("%s: state=%q grants=%v — the plan does not resolve which control is its own",
+				address, fact.State, fact.Get())
 		}
-	}
-
-	locked := publicAccess(t, graph, `aws_s3_bucket.b["a-private"]`)
-	if !locked.IsKnown() || locked.Get() {
-		t.Fatalf(`b["a-private"] is blocked on every route: state=%q grants=%v`, locked.State, locked.Get())
-	}
-	for _, source := range locked.Sources {
-		if contains(source.ResourceAddress, "z-public") {
-			t.Fatalf("the conclusion cites another instance's control: %s", source.ResourceAddress)
+		for _, source := range fact.Sources {
+			if contains(source.ResourceAddress, "public_access_block") {
+				t.Fatalf("%s cites a block that was not correlated: %s", address, source.ResourceAddress)
+			}
 		}
 	}
 }
@@ -680,22 +673,6 @@ func TestPositionalPairingNeedsThePlanToSaySo(t *testing.T) {
 	}
 }
 
-// TestPairingByOwnKeyStillWorks is the counterweight. The overwhelmingly common
-// shape indexes by each.key, and refusing it would make every for_each estate
-// unanalysable.
-func TestPairingByOwnKeyStillWorks(t *testing.T) {
-	graph := normalize(t, "real-aws-for-each-terraform-1.14")
-
-	open := publicAccess(t, graph, `aws_s3_bucket.b["z-public"]`)
-	if !open.IsKnown() || !open.Get() {
-		t.Fatalf("state=%q grants=%v, want a known true", open.State, open.Get())
-	}
-	locked := publicAccess(t, graph, `aws_s3_bucket.b["a-private"]`)
-	if !locked.IsKnown() || locked.Get() {
-		t.Fatalf("state=%q grants=%v, want a known false", locked.State, locked.Get())
-	}
-}
-
 // TestPreferKeyedIsScopedToItsTarget keeps the rule from over-reaching. A
 // resource that names one instance of A and the whole of B must keep its
 // reference to B.
@@ -740,54 +717,44 @@ func TestPreferKeyedIsScopedToItsTarget(t *testing.T) {
 	}
 }
 
-// TestEveryIndexFormIsAccountedFor is the stopping condition for this class of
-// defect. Six review rounds each found the same mistake — the plan encodes a
-// relationship the configuration does not resolve, and the code filled the gap
-// with an assumption — so this enumerates every way Terraform can write an
-// index and states what correlation does with each, and why.
+// TestNoIndexFormPairsRepeatedInstances is what seven review rounds arrived at.
 //
-// Two rows here were wrong in the unsafe direction before the sixth round, and
-// that is the table doing its job: the failing rows could be named rather than
-// rediscovered. The rule they produced is narrow enough to state as a property
-// of the plan format rather than of this code — an argument pairs instance to
-// instance only when its references are the target and the resource's own key,
-// and nothing else.
+// Six of them found the same defect through a new door, and the seventh found
+// that the door cannot be closed: Terraform's configuration block records which
+// values take part in an expression, never how they are combined, and a string
+// literal takes part in nothing. So "b[each.key]" and
+// "b[each.key == \"a\" ? \"z\" : \"a\"]" emit an identical reference list — one
+// pairs instance to instance, the other pairs every control with its sibling's
+// bucket, and the plan does not distinguish them.
 //
-// Two forms are absent because the plan cannot express them: a reference inside
-// a dynamic block produces no expressions entry at all, and a control reaching
-// its subject through a module output names the output rather than a resource.
-// Both cost correlation and yield UNKNOWN, which is the safe direction.
-func TestEveryIndexFormIsAccountedFor(t *testing.T) {
+// Pairing repeated resources by position is therefore not attempted at all. The
+// table is now a statement about what a plan can express rather than about what
+// this code assumes, and every row but the literal key says the same thing.
+func TestNoIndexFormPairsRepeatedInstances(t *testing.T) {
 	cases := map[string]struct {
 		references string
-		// pairs reports whether a control indexed this way is read as
-		// governing the instance that shares its key.
-		pairs bool
-		why   string
+		pairs      bool
+		why        string
 	}{
+		"a literal key": {
+			`["aws_s3_bucket.b[\"a\"].id", "aws_s3_bucket.b[\"a\"]", "aws_s3_bucket.b"]`, true,
+			"the instance is named outright, so nothing is assumed",
+		},
 		"the resource's own key": {
-			`["aws_s3_bucket.b", "each.key"]`, true,
-			"b[each.key] lines the instances up one to one and nothing else takes part",
-		},
-		"an attribute of the target, keyed by the own key": {
-			`["aws_s3_bucket.b.id", "aws_s3_bucket.b", "each.key"]`, true,
-			"the extra entry is the target itself, not another input",
-		},
-		"a lookup keyed by the resource's own key": {
-			`["aws_s3_bucket.b", "local.m", "each.key"]`, false,
-			"a derivation can permute: local.m may map each key to a different one",
-		},
-		"a for expression over a lookup": {
-			`["local.m", "each.key", "aws_s3_bucket.b"]`, false,
-			"same permutation, reached through a comprehension",
+			`["aws_s3_bucket.b", "each.key"]`, false,
+			"indistinguishable from any pure function of the own key, including one that permutes",
 		},
 		"the count index": {
 			`["aws_s3_bucket.b", "count.index"]`, false,
-			"b[count.index] and b[count.index + 1] emit the same list; the format records references, not expressions",
+			"indistinguishable from b[count.index + 1]",
+		},
+		"a lookup keyed by the own key": {
+			`["aws_s3_bucket.b", "local.m", "each.key"]`, false,
+			"local.m may map each key to a different one",
 		},
 		"the for_each value": {
 			`["aws_s3_bucket.b", "each.value"]`, false,
-			"b[each.value] may pair a control with any instance, including a sibling's",
+			"may reach any instance, including a sibling's",
 		},
 		"a value from elsewhere": {
 			`["aws_s3_bucket.b", "local.other"]`, false,
@@ -796,10 +763,6 @@ func TestEveryIndexFormIsAccountedFor(t *testing.T) {
 		"no index at all": {
 			`["aws_s3_bucket.b"]`, false,
 			"the control reaches one instance and the plan does not record which",
-		},
-		"a literal key": {
-			`["aws_s3_bucket.b[\"a\"].id", "aws_s3_bucket.b[\"a\"]", "aws_s3_bucket.b"]`, true,
-			"the instance is named outright, so nothing is assumed",
 		},
 	}
 
@@ -841,7 +804,7 @@ func TestEveryIndexFormIsAccountedFor(t *testing.T) {
 			// whose key it does not share.
 			sibling := publicAccess(t, graph, `aws_s3_bucket.b["z"]`)
 			if sibling.IsKnown() && sibling.Get() {
-				t.Fatalf(`b["z"] does not share the control's key and must not be governed by it`)
+				t.Fatal(`b["z"] does not share the control's key and must not be governed by it`)
 			}
 		})
 	}
@@ -1053,5 +1016,71 @@ func TestCountingOverAResourceIsNotPairing(t *testing.T) {
 		if contains(source.ResourceAddress, "pab") {
 			t.Fatalf("a counted block was paired by position: %s", source.ResourceAddress)
 		}
+	}
+}
+
+// TestAnUnresolvedCorrelationSaysSo keeps the undetermined answer actionable.
+// A reader whose whole estate reports UNKNOWN needs to know that the cause is a
+// reference that names no instance, because that is something they can change.
+func TestAnUnresolvedCorrelationSaysSo(t *testing.T) {
+	graph := normalize(t, "real-aws-for-each-terraform-1.14")
+
+	resource, ok := graph.At(`aws_s3_bucket.b["z-public"]`)
+	if !ok || resource.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+
+	var named bool
+	for _, control := range resource.ObjectStorage.Unresolved {
+		if control.CheckID == "CORRELATION_UNRESOLVED" {
+			named = true
+			if control.Reason == "" {
+				t.Fatal("the gap is named but not explained")
+			}
+		}
+	}
+	if !named {
+		t.Fatalf("an undetermined correlation must be reported, got %v", resource.ObjectStorage.Unresolved)
+	}
+
+	// A plan whose references name their instances has nothing to report.
+	clean, ok := normalize(t, "real-aws-keyed-reference-terraform-1.14").At(`aws_s3_bucket.b["a"]`)
+	if !ok || clean.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	for _, control := range clean.ObjectStorage.Unresolved {
+		if control.CheckID == "CORRELATION_UNRESOLVED" {
+			t.Fatal("a plan that names its instances has no unresolved correlation")
+		}
+	}
+}
+
+// TestTheUndecidablePlans are the two that ended the argument. Both index by a
+// pure function of the referring resource's own key, using only literals, so
+// their reference lists are identical to the honest form — one through a
+// conditional in the argument, one through a comprehension in the for_each.
+// Neither can be told apart from correct pairing, which is why none of it is
+// attempted.
+func TestTheUndecidablePlans(t *testing.T) {
+	for _, fixture := range []string{
+		"real-aws-conditional-index-terraform-1.14",
+		"real-aws-permuted-for-each-terraform-1.14",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			graph := normalize(t, fixture)
+
+			// b["a"] has a public ACL through a literal key, which is
+			// resolvable, so it is public whatever the blocks do.
+			public := publicAccess(t, graph, `aws_s3_bucket.b["a"]`)
+			if !public.IsKnown() || !public.Get() {
+				t.Fatalf(`b["a"] carries the public ACL: state=%q grants=%v`, public.State, public.Get())
+			}
+			for _, source := range public.Sources {
+				if contains(source.ResourceAddress, "pab") {
+					t.Fatalf("a block whose pairing the plan does not record was applied: %s",
+						source.ResourceAddress)
+				}
+			}
+		})
 	}
 }

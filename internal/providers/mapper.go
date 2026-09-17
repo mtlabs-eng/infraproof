@@ -37,11 +37,24 @@ type Mapper interface {
 // no mapper claimed as an opaque entry.
 func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 	scope := plan.ResourceChanges
-	edges := relate(scope)
+	edges, unresolved := relate(scope)
 
 	graph := model.Graph{Resources: make([]model.NormalizedResource, 0, len(scope))}
 	for _, change := range scope {
-		graph.Resources = append(graph.Resources, normalizeOne(change, edges, scope, mappers))
+		resource := normalizeOne(change, edges, scope, mappers)
+		if unresolved[change.Address] && resource.ObjectStorage != nil {
+			// Saying only "undetermined" would leave a reader with nowhere to
+			// go. Naming the reason lets them fix it: an argument that names
+			// the instance outright — b["a"] rather than b[each.key] — is
+			// resolvable, and this says so.
+			resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved, model.MissingControl{
+				CheckID: "CORRELATION_UNRESOLVED",
+				Reason: "A resource repeated alongside this one refers to it without naming an instance, " +
+					"so the plan does not record which of them applies here.",
+				Cloud: resource.Cloud,
+			})
+		}
+		graph.Resources = append(graph.Resources, resource)
 	}
 	return graph
 }
@@ -91,7 +104,7 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 // which every instance of a repeated resource shares, so matching on it alone
 // hands one bucket's public access block to its sibling. Two resources are
 // related only when their instance keys agree as far as both have them.
-func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.ResourceChange {
+func relate(changes []terraformplan.ResourceChange) (map[string][]terraformplan.ResourceChange, map[string]bool) {
 	byConfigAddress := map[string][]terraformplan.ResourceChange{}
 	for _, change := range changes {
 		address := change.ConfigAddress()
@@ -99,11 +112,16 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 	}
 
 	edges := map[string][]terraformplan.ResourceChange{}
+	unresolved := map[string]bool{}
 	for _, change := range changes {
 		for _, reference := range change.References {
 			candidates := byConfigAddress[reference.Target]
 			for _, target := range candidates {
 				if !relates(change, target, reference, len(candidates)) {
+					if sameInstance(change, target) && len(reference.TargetKeys) == 0 && hasOwnKey(target) {
+						unresolved[change.Address] = true
+						unresolved[target.Address] = true
+					}
 					continue
 				}
 				edges[change.Address] = append(edges[change.Address], target)
@@ -120,7 +138,7 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 			return a.Address == b.Address
 		})
 	}
-	return edges
+	return edges, unresolved
 }
 
 // relates reports whether a reference actually joins these two changes.
@@ -133,17 +151,21 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 // as deeply as its target and the two were written to pair up, which is what
 // "for_each = aws_s3_bucket.b" says.
 //
-// Pairing by position is itself an assumption, and it needs the plan's word.
-// "aws_s3_bucket.b[each.key]" says the instances line up; "b[each.value]", an
-// index through a lookup table, or no index at all do not, and a map that swaps
-// its keys pairs every control with its sibling's bucket. A resource repeated
-// inside a repeated module is different: module keys are shared by everything
-// in that instance and cannot disagree.
+// Pairing repeated resources by position is not decidable from a plan, so it is
+// not attempted.
 //
-// Every defect found here has been the same sentence. The plan encodes a
-// relationship the configuration does not resolve, and filling the gap with an
-// assumption has, four times over, been enough to report a public bucket as
-// provably private. Absent information is not permission.
+// The configuration block records which values take part in an expression,
+// never how they are combined, and a string literal is not a value that takes
+// part. So "b[each.key]" and "b[each.key == \"a\" ? \"z\" : \"a\"]" emit an
+// identical reference list, as do "for_each = aws_s3_bucket.b" and a
+// comprehension over it that permutes the keys. One pairs instance to instance
+// and the other pairs every control with its sibling's bucket, and nothing in
+// the plan tells them apart.
+//
+// What remains is what the plan does state: a reference that names an instance
+// outright, a target with a single instance, and the module keys two resources
+// share by sitting in the same module instance. Everything else is a question
+// the plan leaves open, and CLAUDE.md is explicit about what to do with those.
 func relates(from, to terraformplan.ResourceChange, reference terraformplan.ExpressionReference, candidates int) bool {
 	if !sameInstance(from, to) {
 		return false
@@ -158,13 +180,11 @@ func relates(from, to terraformplan.ResourceChange, reference terraformplan.Expr
 	if len(from.InstanceKeys()) < len(to.InstanceKeys()) {
 		return false
 	}
-	if hasOwnKey(to) && !reference.Positional {
-		// The target is repeated in its own right and the reference does not
-		// say which instance it reached. Pairing by key would be a guess, and
-		// a wrong guess here reports a public bucket as provably private.
-		return false
-	}
-	return true
+	// A target repeated in its own right needs the reference to say which
+	// instance is meant. Repetition that comes only from an enclosing module is
+	// different: those keys are shared by everything in the module instance and
+	// cannot disagree.
+	return !hasOwnKey(to)
 }
 
 // hasOwnKey reports whether a resource is repeated in its own right, as opposed

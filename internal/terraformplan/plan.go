@@ -132,16 +132,6 @@ type ExpressionReference struct {
 	// Target is the referenced resource's address, module-qualified and without
 	// count or for_each keys, matching the form the configuration block uses.
 	Target string
-	// Positional reports that a bare reference indexes its target by the
-	// referring resource's own repetition key.
-	//
-	// "aws_s3_bucket.b[each.key]" pairs one instance with one instance;
-	// "aws_s3_bucket.b[each.value]" or an index through a lookup table does
-	// not, and the two are indistinguishable once the expression is gone.
-	// Terraform records the index expression's own references beside the
-	// resource reference, so the plan says which it is. A meta-argument such as
-	// "for_each = aws_s3_bucket.b" is positional by definition.
-	Positional bool
 	// TargetKeys are the count or for_each keys the reference named, or nil
 	// when it named the resource as a whole.
 	//

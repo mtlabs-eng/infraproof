@@ -55,17 +55,6 @@ type configResource struct {
 	references        []ExpressionReference
 }
 
-func compareBool(a, b bool) int {
-	switch {
-	case a == b:
-		return 0
-	case !a:
-		return -1
-	default:
-		return 1
-	}
-}
-
 func resolveReferences(refs []ExpressionReference, byAddress map[string]configResource) []ExpressionReference {
 	if len(refs) == 0 {
 		return nil
@@ -88,10 +77,7 @@ func resolveReferences(refs []ExpressionReference, byAddress map[string]configRe
 		if c := cmp.Compare(a.Target, b.Target); c != 0 {
 			return c
 		}
-		if c := slices.Compare(a.TargetKeys, b.TargetKeys); c != 0 {
-			return c
-		}
-		return compareBool(a.Positional, b.Positional)
+		return slices.Compare(a.TargetKeys, b.TargetKeys)
 	})
 	return slices.CompactFunc(out, func(a, b ExpressionReference) bool {
 		return a.Attribute == b.Attribute && a.Target == b.Target &&
@@ -214,9 +200,6 @@ func parseExpressions(path string, fields map[string]any, addressPrefix string, 
 		"for_each_expression": "for_each",
 		"count_expression":    "count",
 	} {
-		// Repeating over a resource with for_each pairs instance to instance by
-		// key. A count does not: it fixes a length, not an order.
-		positional := name == "for_each_expression"
 		raw, present := fields[name]
 		if !present || raw == nil {
 			continue
@@ -226,10 +209,7 @@ func parseExpressions(path string, fields map[string]any, addressPrefix string, 
 			*errs = append(*errs, invalid(path+"."+name, "must be an object"))
 			continue
 		}
-		for _, ref := range expressionReferences(path+"."+name, attribute, body, addressPrefix, errs) {
-			ref.Positional = positional
-			refs = append(refs, ref)
-		}
+		refs = append(refs, expressionReferences(path+"."+name, attribute, body, addressPrefix, errs)...)
 	}
 
 	refs = append(refs, dependsOnReferences(path, fields, addressPrefix, errs)...)
@@ -296,43 +276,9 @@ func expressionReferences(path, attribute string, body map[string]any, addressPr
 
 	refs := make([]ExpressionReference, 0, len(targets))
 	for _, target := range targets {
-		ref := reference(attribute, target, addressPrefix)
-		ref.Positional = indexesByOwnKey(targets, target)
-		refs = append(refs, ref)
+		refs = append(refs, reference(attribute, target, addressPrefix))
 	}
 	return refs
-}
-
-// indexesByOwnKey reports whether an argument indexes this target by the
-// referring resource's own repetition key, and nothing else.
-//
-// The presence of each.key is not enough. "b[each.key]" emits
-// [b, each.key]; "b[local.swap[each.key]]" emits [b, local.swap, each.key], and
-// the second permutes — a swap map pairs every control with its sibling's
-// resource. So the list must contain the target, the own-key token, and no
-// third thing that could be doing the indexing.
-//
-// count.index is deliberately absent. "b[count.index]" and "b[count.index + 1]"
-// emit identical reference lists, because the configuration records references
-// rather than expressions, so no discriminator exists in the plan format. For a
-// verifier whose premise is never answering PASS on a public bucket, that
-// choice has to fall on the side of UNKNOWN.
-func indexesByOwnKey(all []string, target string) bool {
-	const ownKey = "each.key"
-
-	if target == ownKey || !slices.Contains(all, ownKey) {
-		return false
-	}
-	resource := stripIndexKeys(target)
-	for _, other := range all {
-		if other == ownKey || strings.HasPrefix(stripIndexKeys(other), resource) {
-			continue
-		}
-		// Something else takes part in this argument, and it may be what
-		// selects the instance.
-		return false
-	}
-	return true
 }
 
 // reference builds one reference, keeping the instance the target names.
