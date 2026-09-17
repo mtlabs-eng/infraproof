@@ -66,6 +66,11 @@ repeated resource cannot be attributed to a particular one. Naming the instance
 in the configuration, rather than deriving it, is what makes such a plan
 answerable.
 
+This applies to resources repeated in their own right. A resource that is not
+repeated inside a module that is takes its instance from the module, and every
+resource in that module instance shares it, so nothing has to be chosen and
+nothing has to change: the common module-per-bucket pattern stays answerable.
+
 ## Explicit non-goals
 
 - Generating Terraform code
