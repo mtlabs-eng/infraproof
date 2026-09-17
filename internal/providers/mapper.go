@@ -133,12 +133,17 @@ func relate(changes []terraformplan.ResourceChange) map[string][]terraformplan.R
 // as deeply as its target and the two were written to pair up, which is what
 // "for_each = aws_s3_bucket.b" says.
 //
-// What is left is the case this kept getting wrong: an unrepeated resource
-// making a bare reference to a repeated one — lookup(aws_s3_bucket.b, "a").id.
-// It reaches exactly one instance and the plan does not record which. Joining
-// it to all of them asserts a relationship the plan never states, and that
-// assertion has twice been enough to report a public bucket as provably
-// private. Absent information is not permission.
+// Pairing by position is itself an assumption, and it needs the plan's word.
+// "aws_s3_bucket.b[each.key]" says the instances line up; "b[each.value]", an
+// index through a lookup table, or no index at all do not, and a map that swaps
+// its keys pairs every control with its sibling's bucket. A resource repeated
+// inside a repeated module is different: module keys are shared by everything
+// in that instance and cannot disagree.
+//
+// Every defect found here has been the same sentence. The plan encodes a
+// relationship the configuration does not resolve, and filling the gap with an
+// assumption has, four times over, been enough to report a public bucket as
+// provably private. Absent information is not permission.
 func relates(from, to terraformplan.ResourceChange, reference terraformplan.ExpressionReference, candidates int) bool {
 	if !sameInstance(from, to) {
 		return false
@@ -147,9 +152,27 @@ func relates(from, to terraformplan.ResourceChange, reference terraformplan.Expr
 		return namesInstance(to, reference.TargetKeys)
 	}
 	if candidates == 1 {
+		// One instance, nothing to choose between.
 		return true
 	}
-	return len(from.InstanceKeys()) >= len(to.InstanceKeys())
+	if len(from.InstanceKeys()) < len(to.InstanceKeys()) {
+		return false
+	}
+	if hasOwnKey(to) && !reference.Positional {
+		// The target is repeated in its own right and the reference does not
+		// say which instance it reached. Pairing by key would be a guess, and
+		// a wrong guess here reports a public bucket as provably private.
+		return false
+	}
+	return true
+}
+
+// hasOwnKey reports whether a resource is repeated in its own right, as opposed
+// to sitting inside a repeated module. Only the first needs a reference to say
+// which instance is meant: module keys are shared by everything in the module
+// instance, so they cannot disagree.
+func hasOwnKey(change terraformplan.ResourceChange) bool {
+	return len(change.InstanceKeys()) > len(change.ModuleKeys())
 }
 
 // sameInstance reports whether two changes sit in the same repetition of their

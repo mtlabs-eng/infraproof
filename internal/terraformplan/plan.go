@@ -132,6 +132,16 @@ type ExpressionReference struct {
 	// Target is the referenced resource's address, module-qualified and without
 	// count or for_each keys, matching the form the configuration block uses.
 	Target string
+	// Positional reports that a bare reference indexes its target by the
+	// referring resource's own repetition key.
+	//
+	// "aws_s3_bucket.b[each.key]" pairs one instance with one instance;
+	// "aws_s3_bucket.b[each.value]" or an index through a lookup table does
+	// not, and the two are indistinguishable once the expression is gone.
+	// Terraform records the index expression's own references beside the
+	// resource reference, so the plan says which it is. A meta-argument such as
+	// "for_each = aws_s3_bucket.b" is positional by definition.
+	Positional bool
 	// TargetKeys are the count or for_each keys the reference named, or nil
 	// when it named the resource as a whole.
 	//
@@ -152,6 +162,18 @@ type ExpressionReference struct {
 // is what lets all of them correlate to the same referenced resource.
 func (c ResourceChange) ConfigAddress() string {
 	return stripIndexKeys(c.Address)
+}
+
+// ModuleKeys returns the repetition keys of the modules containing this
+// resource.
+//
+// They are structural: everything inside module.m["eu"] shares that key, and a
+// resource there can only refer to resources there. Pairing on a module key
+// therefore asserts nothing. A resource's own key is different — each resource
+// chooses its own for_each independently, so pairing on it is an assumption
+// that needs evidence.
+func (c ResourceChange) ModuleKeys() []string {
+	return indexKeys(c.ModuleAddress)
 }
 
 // InstanceKeys returns the count and for_each keys along the address, outermost

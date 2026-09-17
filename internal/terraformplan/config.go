@@ -55,6 +55,17 @@ type configResource struct {
 	references        []ExpressionReference
 }
 
+func compareBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case !a:
+		return -1
+	default:
+		return 1
+	}
+}
+
 func resolveReferences(refs []ExpressionReference, byAddress map[string]configResource) []ExpressionReference {
 	if len(refs) == 0 {
 		return nil
@@ -77,7 +88,10 @@ func resolveReferences(refs []ExpressionReference, byAddress map[string]configRe
 		if c := cmp.Compare(a.Target, b.Target); c != 0 {
 			return c
 		}
-		return slices.Compare(a.TargetKeys, b.TargetKeys)
+		if c := slices.Compare(a.TargetKeys, b.TargetKeys); c != 0 {
+			return c
+		}
+		return compareBool(a.Positional, b.Positional)
 	})
 	return slices.CompactFunc(out, func(a, b ExpressionReference) bool {
 		return a.Attribute == b.Attribute && a.Target == b.Target &&
@@ -209,7 +223,12 @@ func parseExpressions(path string, fields map[string]any, addressPrefix string, 
 			*errs = append(*errs, invalid(path+"."+name, "must be an object"))
 			continue
 		}
-		refs = append(refs, expressionReferences(path+"."+name, attribute, body, addressPrefix, errs)...)
+		// Repeating over a resource is the statement that the instances pair
+		// up, so it needs no index to say so.
+		for _, ref := range expressionReferences(path+"."+name, attribute, body, addressPrefix, errs) {
+			ref.Positional = true
+			refs = append(refs, ref)
+		}
 	}
 
 	refs = append(refs, dependsOnReferences(path, fields, addressPrefix, errs)...)
@@ -264,6 +283,16 @@ func expressionReferences(path, attribute string, body map[string]any, addressPr
 		return nil
 	}
 
+	// An index written as the resource's own key is what makes pairing one
+	// instance with one instance meaningful. Anything else — the value, a
+	// lookup table, arithmetic — indexes somewhere the plan does not resolve.
+	positional := false
+	for _, item := range list {
+		if target, ok := item.(string); ok && indexesByOwnKey(target) {
+			positional = true
+		}
+	}
+
 	refs := make([]ExpressionReference, 0, len(list))
 	for i, item := range list {
 		target, ok := item.(string)
@@ -271,9 +300,17 @@ func expressionReferences(path, attribute string, body map[string]any, addressPr
 			*errs = append(*errs, invalid(path+".references"+indexPath(i), "must be a string"))
 			continue
 		}
-		refs = append(refs, reference(attribute, target, addressPrefix))
+		ref := reference(attribute, target, addressPrefix)
+		ref.Positional = positional
+		refs = append(refs, ref)
 	}
 	return refs
+}
+
+// indexesByOwnKey reports whether a reference is the referring resource's own
+// repetition key.
+func indexesByOwnKey(target string) bool {
+	return target == "each.key" || target == "count.index"
 }
 
 // reference builds one reference, keeping the instance the target names.

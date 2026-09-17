@@ -88,10 +88,17 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	// The account-wide block overrides every bucket-level setting, so a route
 	// it shuts is shut for this bucket too — but only if it is this bucket's
 	// account.
-	account := accountBlockFor(subject, scope)
+	account, accountUnresolved := accountBlockFor(subject, scope)
 
 	acl := aclChannel(related, block, account)
 	policy := policyChannel(related, block, account)
+	if accountUnresolved {
+		// Two blocks for one account contradict each other. That is not the
+		// same as there being none: one of them may well shut this route, so
+		// neither route can be called open.
+		acl.blocked = strongest(acl.blocked, answerUnknown)
+		policy.blocked = strongest(policy.blocked, answerUnknown)
+	}
 
 	sources := append(acl.sources, policy.sources...)
 	sources = append(sources, provenance(subject.Address, "bucket"))
@@ -316,20 +323,22 @@ func blocksEveryRoute(block *terraformplan.ResourceChange) bool {
 // that use this resource, where an organization baseline sits alongside
 // workload buckets elsewhere.
 //
-// Two blocks for one provider instance contradict each other and settle
-// nothing.
-func accountBlockFor(subject terraformplan.ResourceChange, scope []terraformplan.ResourceChange) *terraformplan.ResourceChange {
+// Two blocks for one provider instance contradict each other. The second
+// return value says so, because "no block was found" and "the blocks disagree"
+// lead to opposite conclusions: the first leaves a route open, the second
+// leaves it in doubt.
+func accountBlockFor(subject terraformplan.ResourceChange, scope []terraformplan.ResourceChange) (*terraformplan.ResourceChange, bool) {
 	var found *terraformplan.ResourceChange
 	for i := range scope {
 		if scope[i].Type != typeAccountBlock || scope[i].ProviderConfigKey != subject.ProviderConfigKey {
 			continue
 		}
 		if found != nil {
-			return nil
+			return nil, true
 		}
 		found = &scope[i]
 	}
-	return found
+	return found, false
 }
 
 // unresolvedControls reports the account-wide block when the plan does not
@@ -337,7 +346,7 @@ func accountBlockFor(subject terraformplan.ResourceChange, scope []terraformplan
 // setting, so without it the plan cannot prove what will actually be reachable
 // — only what the change asks for.
 func unresolvedControls(subject terraformplan.ResourceChange, scope []terraformplan.ResourceChange) []model.MissingControl {
-	if accountBlockFor(subject, scope) != nil {
+	if found, unresolved := accountBlockFor(subject, scope); found != nil && !unresolved {
 		return nil
 	}
 	return []model.MissingControl{{

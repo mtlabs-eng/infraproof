@@ -526,3 +526,134 @@ func TestKeyedAndBareReferencesToDifferentInstancesBothSurvive(t *testing.T) {
 		t.Fatalf("keys seen = %v, want x and y", seen)
 	}
 }
+
+// TestAReferenceRecordsHowItIndexes is the fact the correlation layer needs to
+// stop assuming. Terraform writes the index expression's own references
+// alongside the resource reference, so a plan says whether an argument indexes
+// its target by the referring resource's own key or by something else entirely.
+func TestAReferenceRecordsHowItIndexes(t *testing.T) {
+	cases := map[string]struct {
+		references string
+		positional bool
+	}{
+		"indexed by the resource's own key": {`["aws_s3_bucket.b", "each.key"]`, true},
+		"indexed by count.index":            {`["aws_s3_bucket.b", "count.index"]`, true},
+		"indexed by the value":              {`["aws_s3_bucket.b", "each.value"]`, false},
+		"indexed through a lookup table":    {`["aws_s3_bucket.b", "local.m", "each.key"]`, true},
+		"no index at all":                   {`["aws_s3_bucket.b"]`, false},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := []byte(`{
+			  "format_version": "1.2",
+			  "resource_changes": [{
+			    "address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl",
+			    "name": "a", "provider_name": "p",
+			    "change": {"actions": ["create"], "before": null, "after": {}}
+			  }],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "expressions": {}},
+			    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl",
+			     "name": "a", "expressions": {"bucket": {"references": ` + c.references + `}}}
+			  ]}}
+			}`)
+
+			plan, err := Parse(raw)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			refs := changeAt(t, plan, "aws_s3_bucket_acl.a").References
+			if len(refs) != 1 {
+				t.Fatalf("references = %v, want one", refs)
+			}
+			if refs[0].Positional != c.positional {
+				t.Fatalf("Positional = %v, want %v", refs[0].Positional, c.positional)
+			}
+		})
+	}
+}
+
+// TestAMetaArgumentIsPositionalByDefinition covers the form that says "pair up"
+// without naming an index at all.
+func TestAMetaArgumentIsPositionalByDefinition(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [{
+	    "address": "aws_s3_bucket_acl.a[\"one\"]", "mode": "managed", "type": "aws_s3_bucket_acl",
+	    "name": "a", "index": "one", "provider_name": "p",
+	    "change": {"actions": ["create"], "before": null, "after": {}}
+	  }],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl", "name": "a",
+	     "for_each_expression": {"references": ["aws_s3_bucket.b"]},
+	     "expressions": {}}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	refs := changeAt(t, plan, `aws_s3_bucket_acl.a["one"]`).References
+	if len(refs) != 1 || !refs[0].Positional {
+		t.Fatalf("references = %v, want one positional", refs)
+	}
+}
+
+// TestDependsOnIsNotPositional keeps ordering from implying pairing.
+func TestDependsOnIsNotPositional(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [{
+	    "address": "a.b", "mode": "managed", "type": "a", "name": "b", "provider_name": "p",
+	    "change": {"actions": ["create"], "before": null, "after": {}}
+	  }],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "c.d", "mode": "managed", "type": "c", "name": "d", "expressions": {}},
+	    {"address": "a.b", "mode": "managed", "type": "a", "name": "b",
+	     "depends_on": ["c.d"], "expressions": {}}
+	  ]}}
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	refs := changeAt(t, plan, "a.b").References
+	if len(refs) != 1 || refs[0].Positional {
+		t.Fatalf("references = %v, want one that is not positional", refs)
+	}
+}
+
+// TestModuleKeysAreStructural separates the two kinds of repetition. A module
+// key is shared by everything inside that module instance, so pairing on it
+// asserts nothing; a resource key is chosen independently by each resource, so
+// pairing on it is an assumption.
+func TestModuleKeysAreStructural(t *testing.T) {
+	cases := map[string]struct {
+		address, module   string
+		module_, resource int
+	}{
+		"no repetition":        {"aws_s3_bucket.b", "", 0, 0},
+		"resource repeated":    {`aws_s3_bucket.b["a"]`, "", 0, 1},
+		"module repeated":      {`module.m["eu"].aws_s3_bucket.b`, `module.m["eu"]`, 1, 0},
+		"both repeated":        {`module.m["eu"].aws_s3_bucket.b["a"]`, `module.m["eu"]`, 1, 1},
+		"two modules repeated": {`module.m["eu"].module.n["x"].aws_s3_bucket.b`, `module.m["eu"].module.n["x"]`, 2, 0},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := ResourceChange{Address: c.address, ModuleAddress: c.module}
+			if got := len(change.ModuleKeys()); got != c.module_ {
+				t.Fatalf("module keys = %d, want %d", got, c.module_)
+			}
+			if got := len(change.InstanceKeys()) - len(change.ModuleKeys()); got != c.resource {
+				t.Fatalf("resource keys = %d, want %d", got, c.resource)
+			}
+		})
+	}
+}

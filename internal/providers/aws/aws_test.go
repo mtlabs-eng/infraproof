@@ -668,25 +668,28 @@ func TestTwoPublicAccessBlocksCannotBeResolved(t *testing.T) {
 func TestTwoAccountBlocksForOneProviderCannotBeResolved(t *testing.T) {
 	permissive := `{"block_public_acls": false, "block_public_policy": false,
 	                "ignore_public_acls": false, "restrict_public_buckets": false}`
+	// The permissive block sorts first and the blocking one last, so a
+	// resolution that picked either end would differ from declining to choose.
 	blocks := `,
 	  {"address": "aws_s3_account_public_access_block.first", "mode": "managed",
 	   "type": "aws_s3_account_public_access_block", "name": "first", "provider_name": "p",
 	   "change": {"actions": ["create"], "before": null,
-	              "after": {"block_public_acls": true, "block_public_policy": true,
-	                        "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	              "after": {"block_public_acls": false, "block_public_policy": false,
+	                        "ignore_public_acls": false, "restrict_public_buckets": false}}},
 	  {"address": "aws_s3_account_public_access_block.second", "mode": "managed",
 	   "type": "aws_s3_account_public_access_block", "name": "second", "provider_name": "p",
 	   "change": {"actions": ["create"], "before": null,
-	              "after": {"block_public_acls": false, "block_public_policy": false,
-	                        "ignore_public_acls": false, "restrict_public_buckets": false}}}`
+	              "after": {"block_public_acls": true, "block_public_policy": true,
+	                        "ignore_public_acls": true, "restrict_public_buckets": true}}}`
 	blocksConfig := `,
 	  {"address": "aws_s3_account_public_access_block.first", "mode": "managed",
 	   "type": "aws_s3_account_public_access_block", "name": "first", "expressions": {}},
 	  {"address": "aws_s3_account_public_access_block.second", "mode": "managed",
 	   "type": "aws_s3_account_public_access_block", "name": "second", "expressions": {}}`
 
-	fact := bucketPlan(t, permissive, "private", blocks, blocksConfig)
-	if fact.IsKnown() && !fact.Get() {
-		t.Fatal("two contradictory account blocks cannot prove a bucket private")
+	fact := bucketPlan(t, permissive, "public-read", blocks, blocksConfig)
+	if fact.IsKnown() {
+		t.Fatalf("two contradictory account blocks support no determination, got state=%q grants=%v",
+			fact.State, fact.Get())
 	}
 }

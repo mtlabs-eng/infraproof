@@ -650,3 +650,228 @@ func TestASingleInstanceLeavesNothingToChooseBetween(t *testing.T) {
 			fact.State, fact.Get())
 	}
 }
+
+// TestPositionalPairingNeedsThePlanToSaySo is the last door of the same class.
+// "aws_s3_bucket.b[each.key]" pairs one instance with one instance.
+// "aws_s3_bucket.b[each.value]" pairs them through a map, and a swap map pairs
+// each control with its sibling's bucket. Assuming the first when the plan says
+// the second reports the public bucket as provably private, citing the block
+// that governs the other one.
+//
+// The fixture is a plan Terraform 1.14.0 produced from a swap map.
+func TestPositionalPairingNeedsThePlanToSaySo(t *testing.T) {
+	graph := normalize(t, "real-aws-swapped-index-terraform-1.14")
+
+	public := publicAccess(t, graph, `aws_s3_bucket.b["a"]`)
+	if !public.IsKnown() || !public.Get() {
+		t.Fatalf(`b["a"] carries the public ACL through a keyed reference: state=%q grants=%v`,
+			public.State, public.Get())
+	}
+	for _, source := range public.Sources {
+		if contains(source.ResourceAddress, "pab") {
+			t.Fatalf("a block reached through a swap map was read as this bucket's: %s", source.ResourceAddress)
+		}
+	}
+
+	other := publicAccess(t, graph, `aws_s3_bucket.b["z"]`)
+	if other.IsKnown() {
+		t.Fatalf(`b["z"] is governed by a block the plan does not resolve: state=%q grants=%v`,
+			other.State, other.Get())
+	}
+}
+
+// TestPairingByOwnKeyStillWorks is the counterweight. The overwhelmingly common
+// shape indexes by each.key, and refusing it would make every for_each estate
+// unanalysable.
+func TestPairingByOwnKeyStillWorks(t *testing.T) {
+	graph := normalize(t, "real-aws-for-each-terraform-1.14")
+
+	open := publicAccess(t, graph, `aws_s3_bucket.b["z-public"]`)
+	if !open.IsKnown() || !open.Get() {
+		t.Fatalf("state=%q grants=%v, want a known true", open.State, open.Get())
+	}
+	locked := publicAccess(t, graph, `aws_s3_bucket.b["a-private"]`)
+	if !locked.IsKnown() || locked.Get() {
+		t.Fatalf("state=%q grants=%v, want a known false", locked.State, locked.Get())
+	}
+}
+
+// TestPreferKeyedIsScopedToItsTarget keeps the rule from over-reaching. A
+// resource that names one instance of A and the whole of B must keep its
+// reference to B.
+func TestPreferKeyedIsScopedToItsTarget(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "assets"}}},
+	    {"address": "aws_s3_bucket.other[\"a\"]", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "other", "index": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "other"}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket.other", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "other", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {
+	       "bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]},
+	       "other":  {"references": ["aws_s3_bucket.other[\"a\"].id", "aws_s3_bucket.other[\"a\"]"]}
+	     }}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	graph := providers.Normalize(plan, providers.Default())
+	fact := publicAccess(t, graph, "aws_s3_bucket.assets")
+	if !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("a bare reference to one target must survive a keyed reference to another: state=%q grants=%v",
+			fact.State, fact.Get())
+	}
+}
+
+// TestEveryIndexFormIsAccountedFor is the stopping condition for this class of
+// defect. Five review rounds each found the same mistake — the plan encodes a
+// relationship the configuration does not resolve, and the code filled the gap
+// with an assumption — so rather than wait for a sixth reviewer to find a sixth
+// door, this enumerates every way Terraform can write an index and states what
+// correlation does with each.
+//
+// A new form appearing means this table fails to compile out of date, rather
+// than a public bucket being reported private.
+func TestEveryIndexFormIsAccountedFor(t *testing.T) {
+	cases := map[string]struct {
+		references string
+		// pairs reports whether a control indexed this way is read as
+		// governing the instance that shares its key.
+		pairs bool
+		why   string
+	}{
+		"the resource's own key": {
+			`["aws_s3_bucket.b", "each.key"]`, true,
+			"b[each.key] lines the instances up one to one",
+		},
+		"the count index": {
+			`["aws_s3_bucket.b", "count.index"]`, true,
+			"b[count.index] is the same statement for a counted resource",
+		},
+		"a lookup keyed by the resource's own key": {
+			`["aws_s3_bucket.b", "local.m", "each.key"]`, true,
+			"the index still derives from this resource's key",
+		},
+		"the for_each value": {
+			`["aws_s3_bucket.b", "each.value"]`, false,
+			"b[each.value] may pair a control with any instance, including a sibling's",
+		},
+		"a value from elsewhere": {
+			`["aws_s3_bucket.b", "local.other"]`, false,
+			"the index is resolved outside this resource's repetition",
+		},
+		"no index at all": {
+			`["aws_s3_bucket.b"]`, false,
+			"the control reaches one instance and the plan does not record which",
+		},
+		"a literal key": {
+			`["aws_s3_bucket.b[\"a\"].id", "aws_s3_bucket.b[\"a\"]", "aws_s3_bucket.b"]`, true,
+			"the instance is named outright, so nothing is assumed",
+		},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := []byte(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.b[\"a\"]", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "b", "index": "a", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+			    {"address": "aws_s3_bucket.b[\"z\"]", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "b", "index": "z", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {"bucket": "z"}}},
+			    {"address": "aws_s3_bucket_acl.a[\"a\"]", "mode": "managed", "type": "aws_s3_bucket_acl",
+			     "name": "a", "index": "a", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+			  ],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "expressions": {}},
+			    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl",
+			     "name": "a", "expressions": {"bucket": {"references": ` + c.references + `}}}
+			  ]}}
+			}`)
+
+			plan, err := terraformplan.Parse(raw)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			graph := providers.Normalize(plan, providers.Default())
+
+			fact := publicAccess(t, graph, `aws_s3_bucket.b["a"]`)
+			if got := fact.IsKnown() && fact.Get(); got != c.pairs {
+				t.Fatalf(`b["a"] public = %v, want %v — %s`, got, c.pairs, c.why)
+			}
+
+			// Whatever the indexing, the control never governs the instance
+			// whose key it does not share.
+			sibling := publicAccess(t, graph, `aws_s3_bucket.b["z"]`)
+			if sibling.IsKnown() && sibling.Get() {
+				t.Fatalf(`b["z"] does not share the control's key and must not be governed by it`)
+			}
+		})
+	}
+}
+
+// TestAControlMayBeRepeatedMoreDeeplyThanItsTarget covers the depth comparison
+// itself. A bucket declared once inside a repeated module, with controls
+// repeated again inside it, is a resource repeated less deeply than the thing
+// referring to it — and requiring equal depth would refuse a relationship that
+// plainly holds.
+func TestAControlMayBeRepeatedMoreDeeplyThanItsTarget(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "module.m[\"eu\"].aws_s3_bucket.b", "module_address": "module.m[\"eu\"]",
+	     "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "eu"}}},
+	    {"address": "module.m[\"us\"].aws_s3_bucket.b", "module_address": "module.m[\"us\"]",
+	     "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "us"}}},
+	    {"address": "module.m[\"eu\"].aws_s3_bucket_acl.b[\"x\"]", "module_address": "module.m[\"eu\"]",
+	     "mode": "managed", "type": "aws_s3_bucket_acl", "name": "b", "index": "x", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"module_calls": {"m": {"source": "./m", "module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.b", "mode": "managed", "type": "aws_s3_bucket_acl", "name": "b",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.b.id", "aws_s3_bucket.b"]}}}
+	  ]}}}}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	inEurope := publicAccess(t, graph, `module.m["eu"].aws_s3_bucket.b`)
+	if !inEurope.IsKnown() || !inEurope.Get() {
+		t.Fatalf("the bucket in this module instance has the public ACL: state=%q grants=%v",
+			inEurope.State, inEurope.Get())
+	}
+
+	elsewhere := publicAccess(t, graph, `module.m["us"].aws_s3_bucket.b`)
+	if elsewhere.IsKnown() && elsewhere.Get() {
+		t.Fatal("a control in one module instance must not reach into another")
+	}
+}
