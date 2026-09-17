@@ -34,7 +34,7 @@ func TestNothingUnstatedProvesPrivate(t *testing.T) {
 		t.Run(route.name, func(t *testing.T) {
 			// The unperturbed plan must actually prove the subject private, or
 			// every case below passes for the wrong reason.
-			baseline := publicAccessOf(t, route.render(nil), route.subject)
+			baseline := publicAccessOf(t, route.render(route.stated, nil), route.subject)
 			if !baseline.IsKnown() || baseline.Get() {
 				t.Fatalf("the baseline must prove the subject private, got state=%q value=%v",
 					baseline.State, baseline.Get())
@@ -46,7 +46,7 @@ func TestNothingUnstatedProvesPrivate(t *testing.T) {
 					if m.subject != "" {
 						subject = m.subject
 					}
-					got := publicAccessOf(t, route.render(&m), subject)
+					got := publicAccessOf(t, route.render(route.stated, &m), subject)
 					if got.IsKnown() && !got.Get() {
 						t.Fatalf("an unstated %s still proved the subject private", m.dimension)
 					}
@@ -64,6 +64,7 @@ const (
 	dimIdentity    = "identity"
 	dimLifecycle   = "lifecycle"
 	dimCorrelation = "correlation"
+	dimAmbiguity   = "ambiguity"
 )
 
 // How a value can be unstated. Each is a distinct way for a fact to be missing
@@ -87,16 +88,19 @@ type mutation struct {
 	kind  valueKind
 
 	// structural dimensions
-	destroyControl bool
-	otherProvider  bool
-	unattributed   bool
-	uncorrelated   bool
-	partialRepeat  bool
-	outerModule    bool
-	crossInstance  bool
-	wrongNamedKey  bool
-	keyedInModule  bool
-	nestedInstance bool
+	destroyControl   bool
+	otherProvider    bool
+	unattributed     bool
+	uncorrelated     bool
+	partialRepeat    bool
+	outerModule      bool
+	crossInstance    bool
+	wrongNamedKey    bool
+	keyedInModule    bool
+	nestedInstance   bool
+	twoBucketBlocks  bool
+	twoAccountBlocks bool
+	twoAccounts      bool
 
 	// subject overrides the address to read when the perturbation changes it,
 	// as repeating a resource does.
@@ -115,7 +119,7 @@ type route struct {
 	stated map[string]string
 	// structural lists the non-value perturbations this route admits.
 	structural []mutation
-	render     func(*mutation) string
+	render     func(stated map[string]string, m *mutation) string
 }
 
 func (r route) mutations() map[string]mutation {
@@ -139,7 +143,7 @@ func (r route) mutations() map[string]mutation {
 func structuralName(m mutation) string {
 	switch {
 	case m.destroyControl:
-		return "the control is destroyed"
+		return "the change removes the control"
 	case m.otherProvider:
 		return "the control belongs to another provider instance"
 	case m.unattributed:
@@ -158,6 +162,8 @@ func structuralName(m mutation) string {
 		return "the named key belongs to the module, not the resource"
 	case m.nestedInstance:
 		return "the control sits in another instance of the inner module"
+	case m.twoBucketBlocks, m.twoAccountBlocks, m.twoAccounts:
+		return "two controls of one kind disagree about the subject"
 	}
 	return "unnamed"
 }
@@ -191,8 +197,11 @@ func provenRoutes() []route {
 					subject: `module.m["a"].aws_s3_bucket.assets["z"]`},
 				{dimension: dimCorrelation, nestedInstance: true,
 					subject: `module.m["eu"].module.n["y"].aws_s3_bucket.assets`},
+				{dimension: dimAmbiguity, twoBucketBlocks: true},
 			},
-			render: func(m *mutation) string { return awsBucketRoute(awsFlags, allBlocked, m) },
+			render: func(stated map[string]string, m *mutation) string {
+				return awsBucketRoute(awsFlags, stated, m)
+			},
 		},
 		{
 			name:     "the AWS account block shuts every route",
@@ -203,8 +212,11 @@ func provenRoutes() []route {
 				{dimension: dimLifecycle, destroyControl: true},
 				{dimension: dimIdentity, otherProvider: true},
 				{dimension: dimIdentity, unattributed: true},
+				{dimension: dimAmbiguity, twoAccountBlocks: true},
 			},
-			render: func(m *mutation) string { return awsAccountRoute(awsFlags, allBlocked, m) },
+			render: func(stated map[string]string, m *mutation) string {
+				return awsAccountRoute(awsFlags, stated, m)
+			},
 		},
 		{
 			name:     "the Azure account forbids anonymous access to its containers",
@@ -213,6 +225,7 @@ func provenRoutes() []route {
 			stated:   map[string]string{"allow_nested_items_to_be_public": "false"},
 			structural: []mutation{
 				{dimension: dimCorrelation, uncorrelated: true},
+				{dimension: dimAmbiguity, twoAccounts: true},
 			},
 			render: azureGateRoute,
 		},
@@ -321,6 +334,9 @@ func awsBucketRoute(flags []string, stated map[string]string, m *mutation) strin
 	}
 	if m != nil && m.nestedInstance {
 		return awsNestedInstance(block)
+	}
+	if m != nil && m.twoBucketBlocks {
+		return awsTwoBucketBlocks(block)
 	}
 
 	buckets := `{"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
@@ -558,13 +574,103 @@ func awsNestedInstance(block *changeBody) string {
 	}`
 }
 
+// awsTwoBucketBlocks attaches two public-access blocks to one bucket, one
+// permissive and one not. Which of them the provider would apply is not a fact
+// the plan states, so neither may be believed: a rule that takes the last one
+// it happens to see will read a contradiction as proof.
+func awsTwoBucketBlocks(block *changeBody) string {
+	permissive := &changeBody{after: []string{
+		`"block_public_acls": false`, `"block_public_policy": false`,
+		`"ignore_public_acls": false`, `"restrict_public_buckets": false`}}
+
+	return `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.open", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "open", "provider_name": "p",
+	     "change": {` + permissive.create() + `}},
+	    {"address": "aws_s3_bucket_public_access_block.shut", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "shut", "provider_name": "p",
+	     "change": {` + block.create() + `}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.open", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "aws_s3_bucket_public_access_block.shut", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "shut",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+}
+
+// awsTwoAccountBlocks gives one provider instance two account-wide blocks that
+// disagree. The account block is the control most often absent from a plan, so
+// a rule that resolves a contradiction between two of them by order would be
+// deciding the most consequential case by accident.
+func awsTwoAccountBlocks(account *changeBody) string {
+	permissive := &changeBody{after: []string{
+		`"block_public_acls": false`, `"block_public_policy": false`,
+		`"ignore_public_acls": false`, `"restrict_public_buckets": false`}}
+
+	return `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+	    {"address": "aws_s3_account_public_access_block.open", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "open", "provider_name": "p",
+	     "change": {` + permissive.create() + `}},
+	    {"address": "aws_s3_account_public_access_block.shut", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "shut", "provider_name": "p",
+	     "change": {` + account.create() + `}}
+	  ],
+	  "configuration": {
+	    "provider_config": {"aws": {"name": "aws", "full_name": "p"}},
+	    "root_module": {"resources": [
+	      {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "assets", "provider_config_key": "aws", "expressions": {}},
+	      {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	       "name": "assets", "provider_config_key": "aws",
+	       "expressions": {"bucket": {"references": [
+	         "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	      {"address": "aws_s3_account_public_access_block.open", "mode": "managed",
+	       "type": "aws_s3_account_public_access_block", "name": "open",
+	       "provider_config_key": "aws", "expressions": {}},
+	      {"address": "aws_s3_account_public_access_block.shut", "mode": "managed",
+	       "type": "aws_s3_account_public_access_block", "name": "shut",
+	       "provider_config_key": "aws", "expressions": {}}
+	    ]}
+	  }
+	}`
+}
+
 func awsAccountRoute(flags []string, stated map[string]string, m *mutation) string {
 	account := &changeBody{}
 	account.setAll(flags, stated, m)
 
+	if m != nil && m.twoAccountBlocks {
+		return awsTwoAccountBlocks(account)
+	}
+
 	change := account.create()
 	if m != nil && m.destroyControl {
-		// A block being removed is not in force after the change.
+		// A block being removed is not in force after the change. What holds
+		// that here is the absence of an after value, not the beingRemoved
+		// filter: removing that filter loses a true positive rather than
+		// proving anything private, so it is outside this table's contract and
+		// held by the AWS package's own tests instead.
 		unperturbed := &changeBody{}
 		unperturbed.setAll(flags, stated, nil)
 		change = unperturbed.destroy()
@@ -614,10 +720,10 @@ func awsAccountRoute(flags []string, stated map[string]string, m *mutation) stri
 	}`
 }
 
-func azureGateRoute(m *mutation) string {
+func azureGateRoute(stated map[string]string, m *mutation) string {
 	gate := &changeBody{}
 	gate.after = append(gate.after, `"name": "s"`)
-	gate.set("allow_nested_items_to_be_public", "false", m)
+	gate.set("allow_nested_items_to_be_public", stated["allow_nested_items_to_be_public"], m)
 
 	accounts := `{"address": "azurerm_storage_account.sa", "mode": "managed",
 	              "type": "azurerm_storage_account", "name": "sa", "provider_name": "p",
@@ -625,6 +731,10 @@ func azureGateRoute(m *mutation) string {
 	accountConfig := `{"address": "azurerm_storage_account.sa", "mode": "managed",
 	                   "type": "azurerm_storage_account", "name": "sa", "expressions": {}}`
 	reference := `{"references": ["azurerm_storage_account.sa.id", "azurerm_storage_account.sa"]}`
+
+	if m != nil && m.twoAccounts {
+		return azureTwoAccounts(gate)
+	}
 
 	if m != nil && m.uncorrelated {
 		// Two accounts, one forbidding and one permitting, and a reference that
@@ -660,10 +770,46 @@ func azureGateRoute(m *mutation) string {
 	}`
 }
 
-func azureContainerRoute(m *mutation) string {
+// azureTwoAccounts points one container at two storage accounts that disagree
+// about anonymous access. Which account the container belongs to is not stated
+// once two are named, so the forbidding one may not answer for it.
+func azureTwoAccounts(gate *changeBody) string {
+	permissive := &changeBody{after: []string{`"name": "z"`, `"allow_nested_items_to_be_public": true`}}
+
+	return `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.open", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "open", "provider_name": "p",
+	     "change": {` + permissive.create() + `}},
+	    {"address": "azurerm_storage_account.shut", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "shut", "provider_name": "p",
+	     "change": {` + gate.create() + `}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.open", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "open", "expressions": {}},
+	    {"address": "azurerm_storage_account.shut", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "shut", "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {
+	       "storage_account_id": {"references": [
+	         "azurerm_storage_account.open.id", "azurerm_storage_account.open"]},
+	       "storage_account_name": {"references": [
+	         "azurerm_storage_account.shut.name", "azurerm_storage_account.shut"]}}}
+	  ]}}
+	}`
+}
+
+func azureContainerRoute(stated map[string]string, m *mutation) string {
 	container := &changeBody{}
 	container.after = append(container.after, `"name": "assets"`)
-	container.set("container_access_type", `"private"`, m)
+	container.set("container_access_type", stated["container_access_type"], m)
 
 	// The account permits public containers; only the container makes it private.
 	return `{
@@ -688,10 +834,10 @@ func azureContainerRoute(m *mutation) string {
 	}`
 }
 
-func azureAccountRoute(m *mutation) string {
+func azureAccountRoute(stated map[string]string, m *mutation) string {
 	account := &changeBody{}
 	account.after = append(account.after, `"name": "s"`)
-	account.set("allow_nested_items_to_be_public", "false", m)
+	account.set("allow_nested_items_to_be_public", stated["allow_nested_items_to_be_public"], m)
 
 	return `{
 	  "format_version": "1.2",
@@ -703,10 +849,10 @@ func azureAccountRoute(m *mutation) string {
 	}`
 }
 
-func gcpRoute(m *mutation) string {
+func gcpRoute(stated map[string]string, m *mutation) string {
 	bucket := &changeBody{}
 	bucket.after = append(bucket.after, `"name": "a"`)
-	bucket.set("public_access_prevention", `"enforced"`, m)
+	bucket.set("public_access_prevention", stated["public_access_prevention"], m)
 
 	return `{
 	  "format_version": "1.2",
