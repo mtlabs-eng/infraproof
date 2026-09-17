@@ -55,11 +55,20 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 		return resource
 	}
 
-	account := findType(related, typeAccount)
+	account, ambiguous := findType(related, typeAccount)
 	capabilities := model.ObjectStorageCapabilities{
 		PublicAccess: publicAccess(subject, account),
 	}
-	if account == nil {
+	switch {
+	case ambiguous:
+		// Both accounts are in the plan. Telling the reader to add one would
+		// send them to do the thing they have already done twice.
+		capabilities.Unresolved = []model.MissingControl{{
+			CheckID: "AZURE_STORAGE_ACCOUNT_AMBIGUOUS",
+			Reason:  "This container names more than one storage account, and which of them gates anonymous access is not stated.",
+			Cloud:   model.CloudAzure,
+		}}
+	case account == nil:
 		capabilities.Unresolved = []model.MissingControl{{
 			CheckID: "AZURE_STORAGE_ACCOUNT_NOT_IN_PLAN",
 			Reason:  "The storage account gating anonymous access is not part of this plan.",
@@ -187,11 +196,6 @@ func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.
 	}
 }
 
-// findType returns the single resource of a kind attached to a subject. Two
-// storage accounts gating one container is a contradiction, and choosing
-// between them would state a determination the plan does not support; an
-// absent account already degrades to UNKNOWN, which is the right answer here
-// too.
 // hasType reports whether any resource of a kind is attached.
 func hasType(changes []terraformplan.ResourceChange, resourceType string) bool {
 	for i := range changes {
@@ -202,18 +206,23 @@ func hasType(changes []terraformplan.ResourceChange, resourceType string) bool {
 	return false
 }
 
-func findType(changes []terraformplan.ResourceChange, resourceType string) *terraformplan.ResourceChange {
+// findType returns the single resource of a kind attached to a subject, and
+// reports whether there was more than one. Two storage accounts gating one
+// container is a contradiction, and choosing between them would state a
+// determination the plan does not support. Both degrade to UNKNOWN, but they
+// are different gaps and a reader can only act on the one they are told about.
+func findType(changes []terraformplan.ResourceChange, resourceType string) (*terraformplan.ResourceChange, bool) {
 	var found *terraformplan.ResourceChange
 	for i := range changes {
 		if changes[i].Type != resourceType {
 			continue
 		}
 		if found != nil {
-			return nil
+			return nil, true
 		}
 		found = &changes[i]
 	}
-	return found
+	return found, false
 }
 
 func provenance(address, attribute string) model.Provenance {

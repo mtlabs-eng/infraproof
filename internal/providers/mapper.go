@@ -117,15 +117,18 @@ func relate(changes []terraformplan.ResourceChange) (map[string][]terraformplan.
 		for _, reference := range change.References {
 			candidates := byConfigAddress[reference.Target]
 			for _, target := range candidates {
-				if !relates(change, target, reference, len(candidates)) {
-					if sameInstance(change, target) && len(reference.TargetKeys) == 0 && hasOwnKey(target) {
-						unresolved[change.Address] = true
-						unresolved[target.Address] = true
-					}
-					continue
+				switch relates(change, target, reference, len(candidates)) {
+				case relationUndecidable:
+					// The reference reaches this target but cannot say which
+					// instance of it. Recording that is what keeps the
+					// resulting UNKNOWN actionable: the reader has something
+					// to change.
+					unresolved[change.Address] = true
+					unresolved[target.Address] = true
+				case relationBinds:
+					edges[change.Address] = append(edges[change.Address], target)
+					edges[target.Address] = append(edges[target.Address], change)
 				}
-				edges[change.Address] = append(edges[change.Address], target)
-				edges[target.Address] = append(edges[target.Address], change)
 			}
 		}
 	}
@@ -166,27 +169,54 @@ func relate(changes []terraformplan.ResourceChange) (map[string][]terraformplan.
 // outright, a target with a single instance, and the module keys two resources
 // share by sitting in the same module instance. Everything else is a question
 // the plan leaves open, and CLAUDE.md is explicit about what to do with those.
-func relates(from, to terraformplan.ResourceChange, reference terraformplan.ExpressionReference, candidates int) bool {
+// relation is what a reference establishes about one candidate target. Not
+// reaching a target and reaching it without being able to say which instance
+// was meant are different facts, and only the second is worth reporting: the
+// first is the configuration answering, the second is the configuration
+// declining to.
+type relation int
+
+const (
+	// relationNone: the reference does not reach this target at all.
+	relationNone relation = iota
+	// relationBinds: the configuration says this target is the one meant.
+	relationBinds
+	// relationUndecidable: the reference reaches this target, but which
+	// instance of it cannot be derived from the plan.
+	relationUndecidable
+)
+
+func relates(from, to terraformplan.ResourceChange, reference terraformplan.ExpressionReference, candidates int) relation {
 	if !sameInstance(from, to) {
-		return false
+		return relationNone
 	}
 	if len(reference.TargetKeys) > 0 {
-		return namesInstance(to, reference.TargetKeys)
+		// A reference that names an instance has answered, both about the
+		// instance it names and about the ones it excludes.
+		if namesInstance(to, reference.TargetKeys) {
+			return relationBinds
+		}
+		return relationNone
 	}
 	if candidates == 1 && !to.DeclaredRepeated {
 		// One instance and one declared, so there is nothing to choose
 		// between. A repeated resource with a single instance in the plan is
 		// not the same thing: the reference may have meant one that is absent.
-		return true
+		return relationBinds
 	}
 	if len(from.InstanceKeys()) < len(to.InstanceKeys()) {
-		return false
+		// The target is repeated more deeply than the resource referring to
+		// it, so the reference cannot carry enough keys to reach one instance.
+		return relationUndecidable
 	}
 	// A target repeated in its own right needs the reference to say which
 	// instance is meant. Repetition that comes only from an enclosing module is
 	// different: those keys are shared by everything in the module instance and
 	// cannot disagree.
-	return !hasOwnKey(to)
+	if hasOwnKey(to) {
+		return relationUndecidable
+	}
+	return relationBinds
 }
 
 // hasOwnKey reports whether a resource is repeated in its own right, as opposed

@@ -342,3 +342,65 @@ func TestAValueOfTheWrongKindIsNotAnAnswer(t *testing.T) {
 		})
 	}
 }
+
+// TestTwoAccountsAreAmbiguousNotAbsent separates two different reasons for the
+// same UNKNOWN. Reporting a contradiction as an absence tells the reader to add
+// the account to the plan, which is exactly the thing they have already done
+// twice.
+func TestTwoAccountsAreAmbiguousNotAbsent(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.open", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "o", "allow_nested_items_to_be_public": true}}},
+	    {"address": "azurerm_storage_account.shut", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "shut", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "s", "allow_nested_items_to_be_public": false}}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.open", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "open", "expressions": {}},
+	    {"address": "azurerm_storage_account.shut", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "shut", "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {
+	       "storage_account_id": {"references": [
+	         "azurerm_storage_account.open.id", "azurerm_storage_account.open"]},
+	       "storage_account_name": {"references": [
+	         "azurerm_storage_account.shut.name", "azurerm_storage_account.shut"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	found, ok := providers.Normalize(plan, providers.Default()).At("azurerm_storage_container.assets")
+	if !ok || found.ObjectStorage == nil {
+		t.Fatal("no normalized container")
+	}
+
+	if found.ObjectStorage.PublicAccess.IsKnown() {
+		t.Fatalf("two accounts disagreeing settles nothing: state=%q value=%v",
+			found.ObjectStorage.PublicAccess.State, found.ObjectStorage.PublicAccess.Get())
+	}
+
+	if len(found.ObjectStorage.Unresolved) != 1 {
+		t.Fatalf("unresolved = %v, want exactly one", found.ObjectStorage.Unresolved)
+	}
+	control := found.ObjectStorage.Unresolved[0]
+	if control.CheckID == "AZURE_STORAGE_ACCOUNT_NOT_IN_PLAN" {
+		t.Fatal("both accounts are in the plan; the gap is which one governs the container")
+	}
+	if control.Reason == "" {
+		t.Fatal("the gap is named but not explained")
+	}
+}

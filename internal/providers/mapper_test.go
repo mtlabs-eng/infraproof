@@ -1134,3 +1134,78 @@ func TestAPartialPlanIsNotASingleInstance(t *testing.T) {
 		}
 	}
 }
+
+// unresolvedReason returns the reason recorded under a check id, and whether it
+// was recorded at all.
+func unresolvedReason(t *testing.T, graph model.Graph, address, checkID string) (string, bool) {
+	t.Helper()
+	resource, ok := graph.At(address)
+	if !ok || resource.ObjectStorage == nil {
+		t.Fatalf("no normalized object storage at %s", address)
+	}
+	for _, control := range resource.ObjectStorage.Unresolved {
+		if control.CheckID == checkID {
+			return control.Reason, true
+		}
+	}
+	return "", false
+}
+
+// TestAnUndecidableCorrelationAcrossModulesSaysSo closes the one shape that
+// answered UNKNOWN with nowhere for the reader to go. A control in an outer
+// module reaching into a repeated inner one cannot say which instance it meant,
+// which is the same undecidability as a bare reference between two repeated
+// resources, and it must be reported the same way.
+func TestAnUndecidableCorrelationAcrossModulesSaysSo(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "module.m[\"eu\"].module.n[\"x\"].aws_s3_bucket.assets",
+	     "module_address": "module.m[\"eu\"].module.n[\"x\"]", "mode": "managed",
+	     "type": "aws_s3_bucket", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "x"}}},
+	    {"address": "module.m[\"eu\"].module.n[\"y\"].aws_s3_bucket.assets",
+	     "module_address": "module.m[\"eu\"].module.n[\"y\"]", "mode": "managed",
+	     "type": "aws_s3_bucket", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "y"}}},
+	    {"address": "module.m[\"eu\"].aws_s3_bucket_public_access_block.outer",
+	     "module_address": "module.m[\"eu\"]", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "outer", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"module_calls": {"m": {"source": "./m", "module": {
+	    "resources": [
+	      {"address": "aws_s3_bucket_public_access_block.outer", "mode": "managed",
+	       "type": "aws_s3_bucket_public_access_block", "name": "outer",
+	       "expressions": {"bucket": {"references": ["module.n.aws_s3_bucket.assets"]}}}
+	    ],
+	    "module_calls": {"n": {"source": "./n", "module": {"resources": [
+	      {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "assets", "expressions": {}}
+	    ]}}}
+	  }}}}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	address := `module.m["eu"].module.n["x"].aws_s3_bucket.assets`
+	fact := publicAccess(t, graph, address)
+	if fact.IsKnown() {
+		t.Fatalf("a control that cannot say which instance it meant settles nothing: state=%q value=%v",
+			fact.State, fact.Get())
+	}
+
+	reason, named := unresolvedReason(t, graph, address, "CORRELATION_UNRESOLVED")
+	if !named {
+		t.Fatal("the undetermined correlation must be reported, so the reader knows what to change")
+	}
+	if reason == "" {
+		t.Fatal("the gap is named but not explained")
+	}
+}
