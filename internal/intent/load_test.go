@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mtlabs-eng/infraproof/internal/intent"
 )
@@ -206,12 +207,102 @@ func TestYAMLIsRefusedClearly(t *testing.T) {
 change_id: add-private-staging-assets
 environment: staging
 `
-	_, err := intent.Parse([]byte(raw), "intent.yaml")
+	// The source is deliberately not named "intent.yaml": the path appears in
+	// every error, so naming it there would make the assertion true whatever
+	// the code did. An earlier form of this test did exactly that, and
+	// disabling the detection outright left it green.
+	_, err := intent.Parse([]byte(raw), "contract.txt")
 	if err == nil {
 		t.Fatal("a YAML contract was accepted")
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "yaml") {
 		t.Errorf("the error does not say the format is the problem: %v", err)
+	}
+}
+
+// TestYAMLIsRecognizedInTheFormsItIsWritten covers what a user actually hands
+// over. The document marker is the case that matters most: it is conventional,
+// it begins with "-", and a detector that treats "-" as a JSON number opener
+// lets it through to fail as "invalid character '-' in numeric literal" — the
+// exact puzzle the refusal exists to prevent.
+func TestYAMLIsRecognizedInTheFormsItIsWritten(t *testing.T) {
+	cases := map[string]string{
+		"a plain mapping":      "schema_version: \"1.0\"\nchange_id: c\n",
+		"a document marker":    "---\nschema_version: \"1.0\"\nchange_id: c\n",
+		"a marker with spaces": "  ---  \nschema_version: \"1.0\"\n",
+		"a leading comment":    "# the contract\nschema_version: \"1.0\"\n",
+		"a directive":          "%YAML 1.2\n---\nschema_version: \"1.0\"\n",
+		"a top-level list":     "- schema_version: \"1.0\"\n",
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := intent.Parse([]byte(raw), "contract.txt")
+			if err == nil {
+				t.Fatal("a YAML contract was accepted")
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "yaml") {
+				t.Errorf("the error does not say the format is the problem: %v", err)
+			}
+		})
+	}
+}
+
+// TestJSONIsNotMistakenForYAML keeps the refusal from costing the format this
+// build does read. A detector that is too eager turns a valid contract into a
+// lecture about a format the user never used.
+func TestJSONIsNotMistakenForYAML(t *testing.T) {
+	cases := map[string]string{
+		"as written":             valid,
+		"with leading space":     "   " + valid,
+		"with a leading newline": "\n" + valid,
+		"with a byte order mark": "\ufeff" + valid,
+		"compact":                `{"schema_version":"1.0","change_id":"c","environment":"e","allowed_clouds":["aws"],"destructive_changes":"forbidden","resources":[{"family":"object_storage","exposure":"private"}]}`,
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := intent.Parse([]byte(raw), "contract.txt"); err != nil {
+				t.Fatalf("valid JSON was rejected: %v", err)
+			}
+		})
+	}
+}
+
+// TestADuplicateKeyIsRejected refuses a contract that says two things in one
+// field. encoding/json takes the last occurrence silently, so a contract
+// declaring private exposure and then public is read as declaring public, which
+// downgrades a proven public bucket from a block to a warning.
+//
+// Validation already refuses two resources entries for one family, on the
+// reasoning that they either agree, and one is noise, or disagree, and neither
+// can be applied. A duplicate key is the same hazard one level down.
+func TestADuplicateKeyIsRejected(t *testing.T) {
+	cases := map[string]string{
+		"a repeated scalar": strings.Replace(valid, `"environment": "staging",`,
+			`"environment": "staging", "environment": "production",`, 1),
+		"a repeated array": strings.Replace(valid, `"allowed_clouds": ["aws"],`,
+			`"allowed_clouds": ["aws"], "allowed_clouds": ["gcp"],`, 1),
+		"a repeated object member": strings.Replace(valid,
+			`{"family": "object_storage", "exposure": "private", "purpose": "application-assets"}`,
+			`{"family": "object_storage", "exposure": "private", "exposure": "public"}`, 1),
+		"agreeing duplicates": strings.Replace(valid, `"environment": "staging",`,
+			`"environment": "staging", "environment": "staging",`, 1),
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if raw == valid {
+				t.Fatal("the test did not change the contract")
+			}
+			_, err := intent.Parse([]byte(raw), "contract.json")
+			if err == nil {
+				t.Fatal("a contract with a duplicate key was accepted")
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "more than once") {
+				t.Errorf("the error does not name the problem: %v", err)
+			}
+		})
 	}
 }
 
@@ -282,5 +373,65 @@ func TestParseDoesNotPanicOnHostileInput(t *testing.T) {
 func TestParseRejectsAnUnreadableFile(t *testing.T) {
 	if _, err := intent.Load("testdata/does-not-exist.json"); err == nil {
 		t.Fatal("a missing file was accepted")
+	}
+}
+
+// TestAnInvalidContractIsRejectedTheSameWayTwice keeps diagnostics
+// deterministic. Go iterates a map in a random order, and a tool whose selling
+// point is that its output is a function of its input must not describe one
+// contract two ways.
+func TestAnInvalidContractIsRejectedTheSameWayTwice(t *testing.T) {
+	raw := strings.Replace(valid, `"destructive_changes": "forbidden",`,
+		`"destructive_changes": "forbidden",
+		 "constraints": {"required_tags": {"a": "", "b": "", "c": "", "d": "", "e": "", "f": ""}},`, 1)
+
+	_, first := intent.Parse([]byte(raw), "contract.json")
+	if first == nil {
+		t.Fatal("a contract with blank required tags was accepted")
+	}
+	for range 50 {
+		_, again := intent.Parse([]byte(raw), "contract.json")
+		if again == nil || again.Error() != first.Error() {
+			t.Fatalf("one contract produced two diagnostics:\n %v\n %v", first, again)
+		}
+	}
+}
+
+// TestParseTerminatesOnEveryInput is the regression for a hang the fuzz target
+// found within ten seconds of first being run.
+//
+// The duplicate-key walk skipped a token it had failed to read and carried on.
+// A json.Decoder in an error state answers More with true indefinitely, so an
+// unterminated string inside an array spun forever — the worst failure mode
+// available to a command a pipeline waits on, because it never reports
+// anything at all.
+func TestParseTerminatesOnEveryInput(t *testing.T) {
+	cases := map[string]string{
+		"an unterminated string in an array": `{"resources": [{"family": "object_storage", "exposure": "priva_st}]}`,
+		"an unterminated string at the top":  `{"change_id": "abc`,
+		"an unclosed array":                  `{"allowed_clouds": ["aws"`,
+		"an unclosed nested object":          `{"constraints": {"required_tags": {"a": "b"`,
+		"a truncated array of objects":       `{"resources": [{`,
+		"an array of unterminated strings":   `{"allowed_clouds": ["a`,
+		"a deeply nested truncation":         `{"a": [[[[[[[[[[`,
+		"garbage after a well-formed prefix": `{"change_id": "c"} \x00`,
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				if _, err := intent.Parse([]byte(raw), "contract.json"); err == nil {
+					t.Error("malformed input was accepted")
+				}
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Parse did not terminate")
+			}
+		})
 	}
 }

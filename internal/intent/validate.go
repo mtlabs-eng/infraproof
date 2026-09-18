@@ -3,6 +3,7 @@ package intent
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -177,11 +178,19 @@ func (c Contract) validateConstraints() []error {
 			errs = append(errs, fmt.Errorf("constraints.allowed_regions[%d] must not be blank", i))
 		}
 	}
-	for key, value := range c.Constraints.RequiredTags {
+	// Sorted, because Go iterates a map in a random order and a tool whose
+	// selling point is determinism must not report one contract two ways.
+	keys := make([]string, 0, len(c.Constraints.RequiredTags))
+	for key := range c.Constraints.RequiredTags {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	for _, key := range keys {
 		if strings.TrimSpace(key) == "" {
 			errs = append(errs, fmt.Errorf("constraints.required_tags has a blank key"))
 		}
-		if strings.TrimSpace(value) == "" {
+		if strings.TrimSpace(c.Constraints.RequiredTags[key]) == "" {
 			errs = append(errs, fmt.Errorf("constraints.required_tags[%q] must not be blank", key))
 		}
 	}

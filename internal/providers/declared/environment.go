@@ -47,6 +47,14 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 		return model.Absent[string](source)
 	}
 
+	// Every key that could be the declaration, not the first one found.
+	// Keys() is sorted, so taking the first would resolve a disagreement by
+	// byte order: "Environment" precedes "environment", and a resource tagged
+	// with both would report whichever sorted first. Two controls of one kind
+	// over one subject is not a fact stated twice — it is a fact the plan does
+	// not state, because which one the provider applies is not recorded.
+	var stated string
+	var found bool
 	for _, key := range labels.Keys() {
 		if !strings.EqualFold(key, environmentKey) {
 			continue
@@ -58,9 +66,27 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 		}
 		if value.Kind() != terraformplan.KindString || strings.TrimSpace(value.Text()) == "" {
 			// A key of the right name holding something that is not a name.
+			// Where it is the only one, the resource declared nothing usable.
+			// Where it sits beside a readable sibling, the resource declared
+			// two things and did not say which applies, which is a question
+			// the plan raised and did not answer.
+			if found {
+				return model.Unknown[string](source)
+			}
 			return model.Absent[string](source)
 		}
-		return model.Known(strings.TrimSpace(value.Text()), source)
+
+		text := strings.TrimSpace(value.Text())
+		if found && text != stated {
+			// Two declarations that disagree. Neither may be believed, and the
+			// disagreement is not an absence: the plan said something about the
+			// environment and did not say which.
+			return model.Unknown[string](source)
+		}
+		stated, found = text, true
+	}
+	if found {
+		return model.Known(stated, source)
 	}
 
 	return model.Absent[string](source)

@@ -178,10 +178,7 @@ func dividers(n int) []string {
 // escapeCell keeps a cell on one row: a literal pipe is escaped and any line
 // break collapses to a space, so free-text reasons cannot break the table.
 func escapeCell(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	s = strings.ReplaceAll(s, "\n", " ")
-	return strings.ReplaceAll(s, "|", `\|`)
+	return strings.ReplaceAll(collapseBreaks(s), "|", `\|`)
 }
 
 // prose renders a free-text field as a standalone paragraph. The bundle
@@ -279,6 +276,14 @@ func inlineText(s string) string {
 // backtick is padded, so the span cannot terminate early and spill a resource
 // address or field path into the surrounding prose as markup.
 func code(s string) string {
+	// A break inside a code span ends the span and, if it is blank, the
+	// paragraph too: everything after it becomes document text. The bundle
+	// contract forbids breaks in the four prose fields, but a code span renders
+	// addresses, paths and values, and a rule that names its fields cannot
+	// cover a field added later. Collapsing here makes the guarantee a property
+	// of the span rather than of a list.
+	s = collapseBreaks(s)
+
 	fence := "`"
 	for strings.Contains(s, fence) {
 		fence += "`"
@@ -288,6 +293,14 @@ func code(s string) string {
 		padding = " "
 	}
 	return fence + padding + s + padding + fence
+}
+
+// collapseBreaks turns every line ending into a space, so a value cannot open a
+// block wherever it is rendered.
+func collapseBreaks(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return strings.ReplaceAll(s, "\n", " ")
 }
 
 // optionalCode renders a pointer as code, or "-" when it is nil.

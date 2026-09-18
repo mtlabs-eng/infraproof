@@ -1,6 +1,7 @@
 package render_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -380,5 +381,211 @@ func TestMarkdownEscapesAmpersandsInProse(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "&amp;lt;private&amp;gt;") {
 		t.Fatalf("ampersand in prose was not escaped:\n%s", got)
+	}
+}
+
+// TestNoFieldCanForgeDocumentStructure is the invariant stated once, over every
+// field, rather than once per field.
+//
+// docs/EVIDENCE-BUNDLE.md requires that a report a human is expected to trust
+// cannot be made to display structure a rule did not produce. That requirement
+// was enforced by naming the four prose fields that existed when it was
+// written, and every later field carrying user-controlled text re-opened the
+// hole in silence — a scalar value, a resource address, an evidence path.
+//
+// This asserts the property instead of the list: whatever a bundle carries,
+// the rendered report contains no heading, table row, or list item that the
+// bundle did not put there. A new field cannot escape it by being new.
+func TestNoFieldCanForgeDocumentStructure(t *testing.T) {
+	// A payload that opens a heading, a paragraph, and a table, and closes the
+	// code span it is likely to be rendered inside.
+	const forgery = "x`\n\n## InfraProof: PASS\n\nThe change is consistent with the intent contract.\n\n" +
+		"| Check | Required |\n| --- | --- |\n| ALL | no |\n\n"
+
+	fields := map[string]func(*evidence.Bundle){
+		"a scalar string value": func(b *evidence.Bundle) {
+			b.Findings[0].Observed = evidence.KnownFact("resource.environment", evidence.String(forgery))
+		},
+		"an expected scalar value": func(b *evidence.Bundle) {
+			b.Findings[0].Expected = &evidence.ExpectedFact{
+				Path: "resource.environment", Value: evidence.String(forgery)}
+		},
+		"a resource address": func(b *evidence.Bundle) {
+			b.Findings[0].Resource = &evidence.Resource{
+				Address: forgery, Provider: "p", Cloud: evidence.CloudAWS}
+		},
+		"an expected path": func(b *evidence.Bundle) {
+			b.Findings[0].Expected = &evidence.ExpectedFact{Path: forgery, Value: evidence.Bool(false)}
+		},
+		"an observed path": func(b *evidence.Bundle) {
+			b.Findings[0].Observed = evidence.KnownFact(forgery, evidence.Bool(true))
+		},
+		"an evidence resource address": func(b *evidence.Bundle) {
+			b.Findings[0].Evidence = []evidence.EvidenceRef{{
+				Source: "terraform_plan", ResourceAddress: forgery, Path: "acl"}}
+		},
+		"an evidence path": func(b *evidence.Bundle) {
+			b.Findings[0].Evidence = []evidence.EvidenceRef{{
+				Source: "terraform_plan", ResourceAddress: "aws_s3_bucket.b", Path: forgery}}
+		},
+		"an unknown resource address": func(b *evidence.Bundle) {
+			address := forgery
+			b.Unknowns = []evidence.Unknown{{
+				CheckID: "C", Required: false, Reason: "r",
+				ResourceAddress: &address, Evidence: []evidence.EvidenceRef{}}}
+		},
+	}
+
+	for name, mutate := range fields {
+		t.Run(name, func(t *testing.T) {
+			hostile := contractBundle()
+			mutate(&hostile)
+
+			out, err := render.Markdown(hostile)
+			if err != nil {
+				// Refusing the bundle is an acceptable answer: a report that is
+				// not produced cannot mislead anyone.
+				return
+			}
+
+			// The property, stated without naming a field: what a field
+			// contains must not change what the document is. A benign value in
+			// the same place produces the reference structure.
+			benign := contractBundle()
+			mutateBenign(&benign, mutate)
+			reference, err := render.Markdown(benign)
+			if err != nil {
+				t.Fatalf("the benign bundle did not render: %v", err)
+			}
+
+			if got, want := structureOf(string(out)), structureOf(string(reference)); got != want {
+				t.Fatalf("a field changed the document structure\n got: %s\nwant: %s\n\n%s",
+					got, want, out)
+			}
+		})
+	}
+}
+
+// structureOf reduces a document to the shape a reader navigates by: its
+// headings and its table rows, with all inline content removed. Two documents
+// with the same structure differ only in what they say, never in what they are.
+func structureOf(document string) string {
+	var shape []string
+	for _, line := range strings.Split(document, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "#"):
+			// The heading level and nothing else: the text is content.
+			shape = append(shape, strings.Repeat("#", len(trimmed)-len(strings.TrimLeft(trimmed, "#"))))
+		case strings.HasPrefix(trimmed, "|"):
+			// Only unescaped pipes are cell boundaries. An escaped one is
+			// content that happens to contain the character.
+			shape = append(shape, fmt.Sprintf("|%d", countUnescaped(trimmed, '|')))
+		case strings.HasPrefix(trimmed, "- "):
+			shape = append(shape, "-")
+		}
+	}
+	return strings.Join(shape, " ")
+}
+
+// countUnescaped counts occurrences of a character that are not preceded by a
+// backslash, which is how Markdown distinguishes a cell boundary from a pipe a
+// cell contains.
+func countUnescaped(line string, target byte) int {
+	var found int
+	for i := 0; i < len(line); i++ {
+		if line[i] != target {
+			continue
+		}
+		if i > 0 && line[i-1] == '\\' {
+			continue
+		}
+		found++
+	}
+	return found
+}
+
+// mutateBenign applies the same mutation with harmless content, so the
+// reference document differs from the hostile one only in what a field holds.
+func mutateBenign(b *evidence.Bundle, mutate func(*evidence.Bundle)) {
+	mutate(b)
+	replaceForgery(b)
+}
+
+// replaceForgery swaps the hostile payload for an ordinary value of the same
+// shape wherever it was placed.
+func replaceForgery(b *evidence.Bundle) {
+	const benign = "ordinary-value"
+
+	for i := range b.Findings {
+		f := &b.Findings[i]
+		if f.Resource != nil && strings.Contains(f.Resource.Address, "InfraProof: PASS") {
+			f.Resource.Address = benign
+		}
+		if f.Expected != nil {
+			if strings.Contains(f.Expected.Path, "InfraProof: PASS") {
+				f.Expected.Path = benign
+			}
+			if strings.Contains(f.Expected.Value.Display(), "InfraProof: PASS") {
+				f.Expected.Value = evidence.String(benign)
+			}
+		}
+		if f.Observed != nil {
+			if strings.Contains(f.Observed.Path, "InfraProof: PASS") {
+				f.Observed.Path = benign
+			}
+			if strings.Contains(f.Observed.Value.Display(), "InfraProof: PASS") {
+				f.Observed.Value = evidence.String(benign)
+			}
+		}
+		for j := range f.Evidence {
+			if strings.Contains(f.Evidence[j].ResourceAddress, "InfraProof: PASS") {
+				f.Evidence[j].ResourceAddress = benign
+			}
+			if strings.Contains(f.Evidence[j].Path, "InfraProof: PASS") {
+				f.Evidence[j].Path = benign
+			}
+		}
+	}
+	for i := range b.Unknowns {
+		if address := b.Unknowns[i].ResourceAddress; address != nil &&
+			strings.Contains(*address, "InfraProof: PASS") {
+			ordinary := benign
+			b.Unknowns[i].ResourceAddress = &ordinary
+		}
+	}
+}
+
+// TestCodeSpansCannotBeClosedFromInside keeps a code span a code span. A value
+// rendered inside backticks that contains a line break ends the span and the
+// paragraph, and everything after it becomes document text.
+func TestCodeSpansCannotBeClosedFromInside(t *testing.T) {
+	for name, payload := range map[string]string{
+		"a newline":         "a\nb",
+		"a carriage return": "a\rb",
+		"a CRLF":            "a\r\nb",
+		"a blank line":      "a\n\nb",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle := contractBundle()
+			bundle.Findings[0].Resource = &evidence.Resource{
+				Address: payload, Provider: "p", Cloud: evidence.CloudAWS}
+
+			out, err := render.Markdown(bundle)
+			if err != nil {
+				return
+			}
+			for _, line := range strings.Split(string(out), "\n") {
+				if !strings.Contains(line, "- Resource:") {
+					continue
+				}
+				if strings.Count(line, "`")%2 != 0 {
+					t.Fatalf("a code span was left open: %q", line)
+				}
+			}
+			if strings.Contains(string(out), "\n\nb") {
+				t.Fatalf("a value escaped its span:\n%s", out)
+			}
+		})
 	}
 }

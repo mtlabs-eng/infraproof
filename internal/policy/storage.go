@@ -107,11 +107,7 @@ func publicFinding(resource model.NormalizedResource, capabilities model.ObjectS
 		Severity:    evidence.SeverityCritical,
 		Disposition: disposition,
 		Claim:       claim,
-		Resource: &evidence.Resource{
-			Address:  resource.Address,
-			Provider: resource.Provider,
-			Cloud:    bundleCloud(resource.Cloud),
-		},
+		Resource:    resourceRef(resource),
 		Expected: &evidence.ExpectedFact{
 			Path:  "object_storage.public_access",
 			Value: evidence.Bool(false),
@@ -130,7 +126,7 @@ func publicFinding(resource model.NormalizedResource, capabilities model.ObjectS
 func undeterminedUnknown(resource model.NormalizedResource, capabilities model.ObjectStorageCapabilities,
 	required bool) evidence.Unknown {
 
-	address := resource.Address
+	address := inline(resource.Address)
 	return evidence.Unknown{
 		CheckID:  CheckStoragePublicDeterminable,
 		Required: required,
@@ -150,7 +146,7 @@ func unresolvedUnknowns(resource model.NormalizedResource, capabilities model.Ob
 		return nil
 	}
 
-	address := resource.Address
+	address := inline(resource.Address)
 	out := make([]evidence.Unknown, 0, len(capabilities.Unresolved))
 	for _, control := range capabilities.Unresolved {
 		out = append(out, evidence.Unknown{
@@ -189,8 +185,8 @@ func referencesOf(fact model.Fact[bool]) []evidence.EvidenceRef {
 	for _, source := range canonical.Sources {
 		refs = append(refs, evidence.EvidenceRef{
 			Source:          "terraform_plan",
-			ResourceAddress: source.ResourceAddress,
-			Path:            source.AttributePath,
+			ResourceAddress: inline(source.ResourceAddress),
+			Path:            inline(source.AttributePath),
 		})
 	}
 	return refs

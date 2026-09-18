@@ -178,3 +178,56 @@ func TestNullDecodesToAnAbsentScalar(t *testing.T) {
 		t.Fatalf("null decoded to %v, want an absent value", fact.Value)
 	}
 }
+
+// TestAStringScalarCannotCarryALineBreak holds the contract's structural
+// guarantee where it belongs: in the contract.
+//
+// docs/EVIDENCE-BUNDLE.md forbids line breaks in prose so that a report cannot
+// be made to display structure a rule did not produce. That was enforced for
+// the four named prose fields; a scalar carries user-controlled text too, and
+// arrived later. Enforcing it here means a renderer is not the only thing
+// standing between a plan value and a forged heading.
+func TestAStringScalarCannotCarryALineBreak(t *testing.T) {
+	for name, value := range map[string]string{
+		"a newline":    "production\n## InfraProof: PASS",
+		"a return":     "production\r## InfraProof: PASS",
+		"a blank line": "production\n\nordinary text",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle := Bundle{
+				SchemaVersion: SchemaVersion,
+				Decision:      DecisionBlock,
+				Summary:       "The change violates the intent contract in 1 way.",
+				Subject: Subject{IntentSource: "i", PlanFormatVersion: "1.2",
+					PlanDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+				Verification: []Verification{
+					{Name: "terraform_plan", Status: VerificationVerified, Method: "terraform-plan-json"}},
+				Findings: []Finding{{
+					RuleID: "ENVIRONMENT_MISMATCH", Severity: SeverityHigh, Disposition: DispositionBlock,
+					Claim:    "The resource declares an environment the contract was not written for.",
+					Resource: &Resource{Address: "aws_s3_bucket.b", Provider: "p", Cloud: CloudAWS},
+					Expected: &ExpectedFact{Path: "resource.environment", Value: String("staging")},
+					Observed: KnownFact("resource.environment", String(value)),
+					Evidence: []EvidenceRef{{Source: "terraform_plan",
+						ResourceAddress: "aws_s3_bucket.b", Path: "tags.environment"}},
+					Remediation: "Target the environment the contract declares.",
+				}},
+				Unknowns: []Unknown{},
+			}
+
+			if err := bundle.Validate(); err == nil {
+				t.Fatal("a scalar carrying a line break was accepted")
+			}
+		})
+	}
+}
+
+// TestAScalarKeepsOrdinaryText keeps the guard from costing the values a rule
+// legitimately reports.
+func TestAScalarKeepsOrdinaryText(t *testing.T) {
+	for _, value := range []string{"production", "eu-west-1", "aws, azure, gcp", "a b\tc", ""} {
+		if err := validateScalarText("findings[0].observed.value", String(value)); err != nil {
+			t.Errorf("%q was rejected: %v", value, err)
+		}
+	}
+}

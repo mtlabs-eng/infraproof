@@ -62,9 +62,6 @@ func TestUsageErrorsExitTen(t *testing.T) {
 	}
 }
 
-// TestNoAnalysisCommandIsClaimed guards the milestone boundary: this build
-// models and renders an Evidence Bundle but cannot verify anything yet, and
-// must not imply otherwise.
 // TestHelpDoesNotOverclaim keeps the usage text honest about the boundary of
 // this build. It has verification now, and the earlier form of this test — that
 // no verification was claimed — no longer describes anything true. What still

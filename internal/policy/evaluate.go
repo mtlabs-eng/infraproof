@@ -32,6 +32,7 @@ func Evaluate(contract intent.Contract, graph model.Graph, subject Subject) evid
 		CloudAllowed(contract, graph),
 		EnvironmentMatch(contract, graph),
 		ContractUnevaluated(contract),
+		ContractCoverage(contract, graph),
 	} {
 		result.Findings = append(result.Findings, produced.Findings...)
 		result.Unknowns = append(result.Unknowns, produced.Unknowns...)

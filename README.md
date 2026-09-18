@@ -55,9 +55,9 @@ go run ./cmd/infraproof --version
 ## Verifying a change
 
 ```sh
-infraproof check \
+go run ./cmd/infraproof check \
   --intent examples/intent.json \
-  --plan tfplan.json \
+  --plan examples/tfplan.json \
   --format markdown
 ```
 

@@ -153,6 +153,9 @@ func validateFinding(path string, f Finding) []error {
 		if strings.TrimSpace(f.Resource.Address) == "" {
 			errs = append(errs, violation(path+".resource.address", "must not be empty"))
 		}
+		if err := validateSingleLine(path+".resource.address", f.Resource.Address); err != nil {
+			errs = append(errs, err)
+		}
 		if strings.TrimSpace(f.Resource.Provider) == "" {
 			errs = append(errs, violation(path+".resource.provider", "must not be empty"))
 		}
@@ -165,8 +168,14 @@ func validateFinding(path string, f Finding) []error {
 		if strings.TrimSpace(f.Expected.Path) == "" {
 			errs = append(errs, violation(path+".expected.path", "must not be empty"))
 		}
+		if err := validateSingleLine(path+".expected.path", f.Expected.Path); err != nil {
+			errs = append(errs, err)
+		}
 		if !f.Expected.Value.Valid() {
 			errs = append(errs, violation(path+".expected.value", "must be built with Bool, String, or Int"))
+		}
+		if err := validateScalarText(path+".expected.value", f.Expected.Value); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -189,6 +198,12 @@ func validateObserved(path string, o ObservedFact) []error {
 
 	if strings.TrimSpace(o.Path) == "" {
 		errs = append(errs, violation(path+".path", "must not be empty"))
+	}
+	if err := validateSingleLine(path+".path", o.Path); err != nil {
+		errs = append(errs, err)
+	}
+	if err := validateScalarText(path+".value", o.Value); err != nil {
+		errs = append(errs, err)
 	}
 	if !o.State.Valid() {
 		errs = append(errs, violation(path+".state", "unrecognized fact state %q", string(o.State)))
@@ -302,6 +317,35 @@ func (b Bundle) validateDecisionConsistency() []error {
 	}
 
 	return errs
+}
+
+// validateSingleLine rejects a line break in a field that reaches the report as
+// inline text.
+//
+// The requirement is docs/EVIDENCE-BUNDLE.md's and it is structural: a break
+// ends a paragraph, and a code span, and everything after it becomes document
+// text. It was first written for the four prose fields, and every field added
+// afterwards that carries user-controlled content — a resource address, a
+// capability path, a scalar value, an evidence reference — needs the same
+// guarantee for the same reason. Enforcing it at the contract means no renderer
+// is the only thing standing between a plan value and a forged heading.
+//
+// The value is never quoted back: it may be a plan value, and an error message
+// is output.
+func validateSingleLine(path, value string) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return violation(path, "must be a single line; a line break would let this field forge document structure")
+	}
+	return nil
+}
+
+// validateScalarText applies the same rule to a fact value. Only a string
+// scalar can carry a break; a boolean or an integer has no room for one.
+func validateScalarText(path string, value *Scalar) error {
+	if value == nil {
+		return nil
+	}
+	return validateSingleLine(path, value.Display())
 }
 
 // validateProse checks a single-line human-readable field. Prose is rendered

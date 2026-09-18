@@ -31,6 +31,9 @@ const (
 	// CheckContractUnevaluated reports a contract field this build loaded but
 	// evaluated nothing against.
 	CheckContractUnevaluated = "CONTRACT_FIELD_UNEVALUATED"
+	// CheckContractFamilyAbsent reports a declaration the plan gave nothing to
+	// apply to.
+	CheckContractFamilyAbsent = "CONTRACT_DECLARATION_UNEXERCISED"
 )
 
 // DestructiveChange reports changes that destroy an existing object.
@@ -70,7 +73,7 @@ func DestructiveChange(contract intent.Contract, graph model.Graph) Result {
 			},
 			Evidence: []evidence.EvidenceRef{{
 				Source:          "terraform_plan",
-				ResourceAddress: resource.Address,
+				ResourceAddress: inline(resource.Address),
 				Path:            "resource_changes[].change.actions",
 			}},
 			Remediation: remediation,
@@ -92,15 +95,21 @@ func CloudAllowed(contract intent.Contract, graph model.Graph) Result {
 	reported := map[model.Cloud]bool{}
 	for _, resource := range graph.Resources {
 		if resource.Cloud == model.CloudUnknown || resource.Cloud == "" {
-			address := resource.Address
+			address := inline(resource.Address)
 			result.Unknowns = append(result.Unknowns, evidence.Unknown{
 				CheckID: CheckCloudDeterminable,
 				// Required: an unreadable resource could be in any cloud,
 				// including one the contract forbids. That is a question the
 				// run could not answer, not a limit on an answer it gave.
 				Required: true,
-				Reason: "No mapper interpreted this resource, so the cloud it belongs to could not be " +
-					"determined and could not be checked against the allowed set.",
+				// The reason says what is true. The plan may well name a
+				// provider for this resource; what is missing is a mapper that
+				// interprets it, and without one the cloud is not established
+				// in the normalized model the rules read. Claiming the cloud
+				// was undeterminable would put a false statement inside a
+				// bundle whose whole value is that its statements are true.
+				Reason: "No mapper interpreted this resource, so it was not normalized and could not " +
+					"be checked against the allowed clouds.",
 				ResourceAddress: &address,
 				Evidence:        []evidence.EvidenceRef{},
 			})
@@ -127,7 +136,7 @@ func CloudAllowed(contract intent.Contract, graph model.Graph) Result {
 			Observed: evidence.KnownFact("resource.cloud", evidence.String(string(resource.Cloud))),
 			Evidence: []evidence.EvidenceRef{{
 				Source:          "terraform_plan",
-				ResourceAddress: resource.Address,
+				ResourceAddress: inline(resource.Address),
 				Path:            "resource_changes[].provider_name",
 			}},
 			Remediation: "Remove the resources in this cloud, or add the cloud to allowed_clouds in the intent contract.",
@@ -152,21 +161,32 @@ func EnvironmentMatch(contract intent.Contract, graph model.Graph) Result {
 		declared := resource.Environment
 
 		if !declared.IsKnown() {
-			address := resource.Address
+			address := inline(resource.Address)
 			result.Unknowns = append(result.Unknowns, evidence.Unknown{
 				CheckID: CheckEnvironmentEvidence,
-				// Not required. An untagged resource is the common case, and
-				// escalating every untagged plan to UNKNOWN would make the
-				// decision say nothing. It bounds the evidence rather than
-				// preventing a conclusion.
-				Required:        false,
+				// The line is not at "absent". A resource carrying no
+				// environment tag says nothing about which environment it is
+				// in; that is the common case, and requiring it would make
+				// every untagged plan UNKNOWN. A resource that declares one
+				// this run could not read is a different fact: the plan
+				// asserts something bearing directly on the question and the
+				// run could not evaluate it, which is what a required unknown
+				// is for.
+				Required:        declared.State != model.FactAbsent && declared.State != "",
 				Reason:          environmentReason(declared.State),
 				ResourceAddress: &address,
 				Evidence:        environmentEvidence(declared),
 			})
 			continue
 		}
-		if strings.EqualFold(declared.Get(), contract.Environment) {
+		// The comparison is exact. A tag key is a convention and its
+		// capitalization is incidental, which is why the key is matched without
+		// regard to case; a tag value is a name the author chose, and two
+		// spellings of it are two names. Folding them would let "Production"
+		// satisfy a contract written for "production", and where those are
+		// deliberately distinct environments the mismatch this rule exists to
+		// find would go unreported.
+		if declared.Get() == contract.Environment {
 			continue
 		}
 
@@ -180,7 +200,7 @@ func EnvironmentMatch(contract intent.Contract, graph model.Graph) Result {
 				Path:  "resource.environment",
 				Value: evidence.String(contract.Environment),
 			},
-			Observed: evidence.KnownFact("resource.environment", evidence.String(declared.Get())),
+			Observed: evidence.KnownFact("resource.environment", evidence.String(inline(declared.Get()))),
 			Evidence: environmentEvidence(declared),
 			Remediation: "Target the environment the contract declares, or write the contract for the " +
 				"environment this change affects.",
@@ -195,7 +215,9 @@ func environmentReason(state model.FactState) string {
 	case model.FactRedacted:
 		return "The environment declaration is marked sensitive, so it could not be compared with the contract."
 	case model.FactUnknown:
-		return "The environment declaration is not known until apply, so it could not be compared with the contract."
+		return "The environment declaration could not be determined — it is either not known until apply, " +
+			"or the resource carries more than one declaration and they disagree — so it could not be " +
+			"compared with the contract."
 	default:
 		return "The resource declares no environment, so it could not be compared with the contract."
 	}
@@ -207,8 +229,8 @@ func environmentEvidence(fact model.Fact[string]) []evidence.EvidenceRef {
 	for _, source := range canonical.Sources {
 		refs = append(refs, evidence.EvidenceRef{
 			Source:          "terraform_plan",
-			ResourceAddress: source.ResourceAddress,
-			Path:            source.AttributePath,
+			ResourceAddress: inline(source.ResourceAddress),
+			Path:            inline(source.AttributePath),
 			Redacted:        fact.State == model.FactRedacted,
 		})
 	}
@@ -243,10 +265,71 @@ func ContractUnevaluated(contract intent.Contract) Result {
 	return result
 }
 
+// ContractCoverage reports declarations the plan gave nothing to apply to.
+//
+// A contract requiring private object storage, evaluated against a plan holding
+// none, otherwise produces a PASS with no findings and no unknowns: the reader
+// is told the change is consistent with the contract in every supported check,
+// when in truth no check had anything to run against. That is reading absence
+// as permission at the level above a rule — not a fact wrongly concluded, but a
+// conclusion drawn from no facts at all.
+//
+// It is not required. Nothing here is wrong with the change: a contract may
+// legitimately describe more than one plan carries out. What must not happen is
+// for that to be indistinguishable from a contract whose requirements were
+// checked and met.
+func ContractCoverage(contract intent.Contract, graph model.Graph) Result {
+	var result Result
+
+	for _, declared := range contract.Resources {
+		if declared.Exposure == intent.ExposureUnspecified {
+			// The author declined to commit, so there was no requirement to
+			// exercise and nothing to report as unexercised.
+			continue
+		}
+		if len(graph.OfFamily(model.Family(declared.Family))) > 0 {
+			continue
+		}
+
+		result.Unknowns = append(result.Unknowns, evidence.Unknown{
+			CheckID:  CheckContractFamilyAbsent,
+			Required: false,
+			Reason: fmt.Sprintf(
+				"The contract declares %s exposure for %s, and the plan contains no resource of that "+
+					"family, so the declaration was not exercised.", declared.Exposure, declared.Family),
+			Evidence: []evidence.EvidenceRef{{Source: "intent_contract", Path: "resources"}},
+		})
+	}
+
+	slices.SortStableFunc(result.Unknowns, func(a, b evidence.Unknown) int {
+		return strings.Compare(a.Reason, b.Reason)
+	})
+	return result
+}
+
 func resourceRef(resource model.NormalizedResource) *evidence.Resource {
 	return &evidence.Resource{
-		Address:  resource.Address,
-		Provider: resource.Provider,
+		Address:  inline(resource.Address),
+		Provider: inline(resource.Provider),
 		Cloud:    bundleCloud(resource.Cloud),
 	}
+}
+
+// inline makes plan-derived text usable as a bundle field.
+//
+// The Evidence Bundle forbids a line break in anything that reaches the report
+// as inline text, because a break ends a paragraph and lets a value forge a
+// heading in a document a human is expected to trust. A plan can contain one —
+// in a tag value, in principle in an address — and that is the plan's doing, not
+// this program's. Refusing to produce a bundle would report our own invariant as
+// broken and tell the reader nothing about their change, so the value is carried
+// on one line instead: the reader still sees what the plan said, and sees it as
+// a value rather than as structure.
+func inline(text string) string {
+	if !strings.ContainsAny(text, "\r\n") {
+		return text
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return strings.ReplaceAll(text, "\n", " ")
 }

@@ -1,6 +1,7 @@
 package policy_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
@@ -381,8 +382,19 @@ func TestUnspecifiedExposureStillReportsPublicAccess(t *testing.T) {
 	}
 }
 
-// TestAFamilyTheContractNeverMentionedIsReportedNotJudged keeps the tool honest
-// about a plan that does more than the contract described.
+// TestAFamilyTheContractNeverMentionedIsReportedNotJudged covers a plan that
+// does more than the contract described.
+//
+// The contract here declares a family, and the plan contains a different one.
+// An earlier form of this test passed a contract that did mention object
+// storage, which made it a weaker duplicate of the test above it and left the
+// branch it names untested in both directions: reading an unmentioned family as
+// private, and reading it as public — which silences every public-storage
+// finding — both survived.
+//
+// The rule is that silence in the contract is neither permission nor
+// prohibition. The exposure is reported so a reader sees what the change does,
+// and it is not a violation, because no intent was stated to violate.
 func TestAFamilyTheContractNeverMentionedIsReportedNotJudged(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
@@ -391,11 +403,229 @@ func TestAFamilyTheContractNeverMentionedIsReportedNotJudged(t *testing.T) {
 					model.Provenance{ResourceAddress: "aws_s3_bucket_acl.b", AttributePath: "acl"})}},
 	}}
 
-	result := policy.StorageExposure(contract(func(c *intent.Contract) {
-		c.Resources = []intent.ResourceIntent{{Family: "object_storage", Exposure: intent.ExposureUnspecified}}
-	}), graph)
+	// A contract that addresses some other family, so object storage is a
+	// subject it never mentioned.
+	unmentioned := contract(func(c *intent.Contract) {
+		c.Resources = []intent.ResourceIntent{{Family: "message_queue", Exposure: intent.ExposurePrivate}}
+	})
 
-	if len(result.Findings) == 0 {
-		t.Fatal("a plan doing more than the contract described must still be reported")
+	result := policy.StorageExposure(unmentioned, graph)
+
+	found := findingsFor(result, policy.RuleStoragePublic)
+	if len(found) != 1 {
+		t.Fatalf("findings = %v; a plan doing more than the contract described must still be reported",
+			result.Findings)
+	}
+	if found[0].Disposition != evidence.DispositionWarn {
+		t.Errorf("disposition = %q; silence in the contract is not a violation to block on",
+			found[0].Disposition)
+	}
+}
+
+// TestAnUnmentionedFamilyRaisesNoRequiredUnknown keeps the other direction of
+// the same branch honest. A contract that never asked for private storage is
+// not waiting on evidence that it is private, so an undetermined exposure there
+// bounds the report rather than preventing a conclusion.
+func TestAnUnmentionedFamilyRaisesNoRequiredUnknown(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
+			ObjectStorage: &model.ObjectStorageCapabilities{PublicAccess: model.Unknown[bool]()}},
+	}}
+
+	unmentioned := contract(func(c *intent.Contract) {
+		c.Resources = []intent.ResourceIntent{{Family: "message_queue", Exposure: intent.ExposurePrivate}}
+	})
+
+	result := policy.StorageExposure(unmentioned, graph)
+	for _, unknown := range result.Unknowns {
+		if unknown.Required {
+			t.Fatalf("a required unknown was raised for an exposure the contract never asked about: %v", unknown)
+		}
+	}
+	if len(result.Unknowns) == 0 {
+		t.Fatal("the undetermined exposure must still be recorded")
+	}
+}
+
+// TestADeclarationThatCannotBeReadPreventsAPass draws the line this rule turns
+// on, and it is not where "absent" sits.
+//
+// A resource carrying no environment tag says nothing about which environment
+// it is in. That is the common case, requiring it would make every untagged
+// plan UNKNOWN, and docs/INTENT-CONTRACT.md is explicit that it must not block.
+//
+// A resource that declares an environment this run could not read is a
+// different fact. The plan asserts something bearing directly on the question,
+// and the run could not evaluate it — which is what a required unknown is for.
+// Reading the two the same way would let a resource tagged production, twice
+// and contradictorily, report that the change was consistent in every check.
+func TestADeclarationThatCannotBeReadPreventsAPass(t *testing.T) {
+	source := model.Provenance{ResourceAddress: "aws_s3_bucket.b", AttributePath: "tags.environment"}
+
+	cases := map[string]struct {
+		environment model.Fact[string]
+		required    bool
+	}{
+		"no declaration at all": {model.Fact[string]{}, false},
+		"declared nothing":      {model.Absent[string](source), false},
+		"not yet known":         {model.Unknown[string](source), true},
+		"marked sensitive":      {model.Redacted[string](source), true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			graph := model.Graph{Resources: []model.NormalizedResource{
+				{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Interpreted: true,
+					Environment: tc.environment},
+			}}
+
+			result := policy.EnvironmentMatch(contract(nil), graph)
+			if len(result.Findings) != 0 {
+				t.Fatalf("findings = %v; nothing here proves a mismatch", result.Findings)
+			}
+
+			unknowns := unknownsFor(result, policy.CheckEnvironmentEvidence)
+			if len(unknowns) != 1 {
+				t.Fatalf("unknowns = %v, want one", result.Unknowns)
+			}
+			if unknowns[0].Required != tc.required {
+				t.Errorf("required = %v, want %v: %q",
+					unknowns[0].Required, tc.required, unknowns[0].Reason)
+			}
+			if unknowns[0].Reason == "" {
+				t.Error("the gap is named but not explained")
+			}
+		})
+	}
+}
+
+// TestTheEnvironmentValueIsComparedExactly pins a choice that was made
+// silently and could go either way.
+//
+// The tag key is matched without regard to case because its capitalization is a
+// convention, not a name. The value is a name the author chose, and two
+// spellings of it are two names: folding them would let a resource tagged
+// Production satisfy a contract written for production, and where those are
+// deliberately distinct environments the mismatch this rule exists to find
+// would go unreported.
+func TestTheEnvironmentValueIsComparedExactly(t *testing.T) {
+	cases := map[string]struct {
+		declared string
+		mismatch bool
+	}{
+		"the same spelling":     {"staging", false},
+		"a different case":      {"Staging", true},
+		"a different name":      {"production", true},
+		"surrounding space":     {"staging", false},
+		"a different case only": {"STAGING", true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			graph := model.Graph{Resources: []model.NormalizedResource{
+				{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Interpreted: true,
+					Environment: model.Known(tc.declared, model.Provenance{
+						ResourceAddress: "aws_s3_bucket.b", AttributePath: "tags.environment"})},
+			}}
+
+			found := findingsFor(policy.EnvironmentMatch(contract(nil), graph), policy.RuleEnvironmentMismatch)
+			if got := len(found) == 1; got != tc.mismatch {
+				t.Fatalf("mismatch reported = %v, want %v for %q", got, tc.mismatch, tc.declared)
+			}
+		})
+	}
+}
+
+// TestAPlanWithNothingToCheckSaysSo closes the one case that produced an
+// unqualified PASS with no findings and no unknowns at all.
+//
+// A contract declaring private object storage, evaluated against a plan
+// containing no object storage, reported that the change was consistent in
+// every supported check. Nothing was checked. That is the product-level form of
+// reading absence as permission: the reader is told the contract held, when in
+// truth it never applied to anything.
+func TestAPlanWithNothingToCheckSaysSo(t *testing.T) {
+	result := policy.ContractCoverage(contract(nil), model.Graph{})
+
+	unknowns := unknownsFor(result, policy.CheckContractFamilyAbsent)
+	if len(unknowns) != 1 {
+		t.Fatalf("unknowns = %v, want the unexercised declaration reported", result.Unknowns)
+	}
+	if unknowns[0].Required {
+		t.Error("a declaration with nothing to apply to bounds the report; it does not invalidate it")
+	}
+	if unknowns[0].Reason == "" {
+		t.Error("the gap is named but not explained")
+	}
+}
+
+// TestADeclarationWithSomethingToApplyToIsSilent keeps the report from carrying
+// a note about every contract that did its job.
+func TestADeclarationWithSomethingToApplyToIsSilent(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+			Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
+				PublicAccess: model.Known(false, model.Provenance{
+					ResourceAddress: "aws_s3_bucket.b", AttributePath: "block_public_acls"})}},
+	}}
+
+	result := policy.ContractCoverage(contract(nil), graph)
+	if len(result.Unknowns) != 0 {
+		t.Fatalf("unknowns = %v, want none", result.Unknowns)
+	}
+}
+
+// TestAnUnspecifiedDeclarationNeedsNothingToApplyTo keeps the record tied to a
+// declaration that asked for something. An author who declined to commit is not
+// owed a note that their non-commitment went unexercised.
+func TestAnUnspecifiedDeclarationNeedsNothingToApplyTo(t *testing.T) {
+	unspecified := contract(func(c *intent.Contract) {
+		c.Resources = []intent.ResourceIntent{
+			{Family: intent.FamilyObjectStorage, Exposure: intent.ExposureUnspecified}}
+	})
+
+	result := policy.ContractCoverage(unspecified, model.Graph{})
+	if len(result.Unknowns) != 0 {
+		t.Fatalf("unknowns = %v, want none", result.Unknowns)
+	}
+}
+
+// TestAHostilePlanValueIsReportedNotRefused keeps a plan from turning a verdict
+// into an internal failure.
+//
+// The Evidence Bundle forbids a line break in any field that reaches the report
+// as inline text, because a break ends a paragraph and lets a value forge a
+// heading. A plan value carrying one is therefore unusable as written — but it
+// is the plan's fault, not this program's, and exiting 11 would report our own
+// invariant as broken and tell the reader nothing about their change.
+//
+// The engine converts a fact into a bundle field, so the engine is where the
+// conversion happens: the value is reported on one line, and the finding stands.
+func TestAHostilePlanValueIsReportedNotRefused(t *testing.T) {
+	const forgery = "production\n\n## InfraProof: PASS\n\nNothing to see here.\n"
+
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b\nrogue", Cloud: model.CloudAWS, Interpreted: true,
+			Environment: model.Known(forgery, model.Provenance{
+				ResourceAddress: "aws_s3_bucket.b\nrogue", AttributePath: "tags.environment"})},
+	}}
+
+	result := policy.EnvironmentMatch(contract(nil), graph)
+
+	found := findingsFor(result, policy.RuleEnvironmentMismatch)
+	if len(found) != 1 {
+		t.Fatalf("findings = %v; the mismatch is real and must be reported", result.Findings)
+	}
+	for _, text := range []string{
+		found[0].Observed.Value.Display(),
+		found[0].Resource.Address,
+		found[0].Evidence[0].ResourceAddress,
+	} {
+		if strings.ContainsAny(text, "\r\n") {
+			t.Errorf("a bundle field carries a line break: %q", text)
+		}
+	}
+	if !strings.Contains(found[0].Observed.Value.Display(), "production") {
+		t.Errorf("the reported value lost its content: %q", found[0].Observed.Value.Display())
 	}
 }

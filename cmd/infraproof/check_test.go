@@ -294,15 +294,18 @@ func TestAnUninterpretedResourceDoesNotPass(t *testing.T) {
 	}
 }
 
-// TestTheDocumentedFlowWorks runs the exact command the README shows, against
-// the exact contract it ships. Documentation that drifts from the program is
-// worse than none: a reader who copies it and gets an error learns to distrust
-// the rest of it.
+// TestTheDocumentedFlowWorks runs the command the README shows, with the
+// arguments it shows, against the files it ships.
+//
+// An earlier form substituted a real plan path because the README named a file
+// that did not exist — which meant the test passed while the documented flow
+// exited 10 for anyone who copied it. Documentation that drifts from the
+// program is worse than none: a reader who copies it and gets an error learns
+// to distrust the rest of it.
 func TestTheDocumentedFlowWorks(t *testing.T) {
-	code, stdout, stderr := check(t,
-		"--intent", filepath.Join("..", "..", "examples", "intent.json"),
-		"--plan", filepath.Join("..", "..", "internal", "providers", "aws", "testdata", "private.json"),
-		"--format", "markdown")
+	arguments := documentedArguments(t)
+
+	code, stdout, stderr := check(t, arguments...)
 
 	if code != evidence.ExitPass {
 		t.Fatalf("exit = %d, want %d\nstderr: %s", code, evidence.ExitPass, stderr)
@@ -310,6 +313,46 @@ func TestTheDocumentedFlowWorks(t *testing.T) {
 	if !strings.Contains(stdout, "PASS") {
 		t.Errorf("the report does not state the decision:\n%s", stdout)
 	}
+}
+
+// documentedArguments reads the check invocation out of the README, so the test
+// exercises what a reader would actually type rather than a copy of it that can
+// drift.
+func documentedArguments(t *testing.T) []string {
+	t.Helper()
+
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatalf("reading the README: %v", err)
+	}
+
+	_, block, found := strings.Cut(string(readme), "go run ./cmd/infraproof check")
+	if !found {
+		t.Fatal("the README no longer documents the check command")
+	}
+	block, _, found = strings.Cut(block, "```")
+	if !found {
+		t.Fatal("the documented command is not in a fenced block")
+	}
+
+	var arguments []string
+	for _, field := range strings.Fields(block) {
+		if field == "\\" {
+			continue
+		}
+		arguments = append(arguments, field)
+	}
+	if len(arguments) == 0 {
+		t.Fatal("the documented command takes no arguments")
+	}
+
+	// The README paths are relative to the repository root.
+	for i, argument := range arguments {
+		if strings.HasPrefix(argument, "examples/") {
+			arguments[i] = filepath.Join("..", "..", argument)
+		}
+	}
+	return arguments
 }
 
 // TestTheShippedContractIsValid keeps the example honest. A contract the

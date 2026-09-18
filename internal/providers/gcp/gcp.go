@@ -49,11 +49,11 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
-// Map normalizes a bucket together with the IAM resources bound to it.
 // attrLabels is where GCP carries user-supplied labels; the other two clouds
 // call the same thing tags.
 const attrLabels = "labels"
 
+// Map normalizes a bucket together with the IAM resources bound to it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	prevention, preventionSources := preventionState(subject)
 

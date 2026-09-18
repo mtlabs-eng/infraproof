@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -27,13 +28,25 @@ func Load(path string) (Contract, error) {
 // no Contract at all: a partially read contract is the shape most likely to be
 // mistaken for a complete one.
 func Parse(raw []byte, source string) (Contract, error) {
-	if looksLikeYAML(raw) {
+	// The digest is over the bytes as supplied, so trimming a byte order mark
+	// for parsing must not change what the contract is identified as.
+	body := bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
+
+	if looksLikeYAML(body) {
 		return Contract{}, fmt.Errorf(
 			"reading intent contract %s: YAML is not supported in this build; supply the contract as JSON", source)
 	}
 
+	// A duplicate key is accepted by encoding/json, which silently takes the
+	// last occurrence. A contract declaring private exposure and then public
+	// would be read as declaring public. DisallowUnknownFields exists to stop a
+	// contract being read partially; this stops one being read selectively.
+	if err := rejectDuplicateKeys(body); err != nil {
+		return Contract{}, fmt.Errorf("reading intent contract %s: %w", source, err)
+	}
+
 	var wire wireContract
-	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
 	if err := decoder.Decode(&wire); err != nil {
@@ -58,24 +71,114 @@ func Parse(raw []byte, source string) (Contract, error) {
 // name. A YAML file fed to a JSON decoder fails as a syntax error, which tells
 // a reader nothing about why their file was rejected.
 //
-// It is deliberately conservative: valid JSON always begins with one of a small
-// set of bytes, so anything else that is not empty is not JSON, and YAML is
-// overwhelmingly the format it will be.
+// The test is what the document cannot be rather than what it might be: valid
+// JSON begins with one of a small, closed set of bytes, so anything else is not
+// JSON, and YAML is overwhelmingly what it will be. The document marker "---"
+// and a top-level list both begin with "-", which is also how a negative number
+// begins, so that one byte is disambiguated by what follows it: a contract is a
+// mapping, never a bare number.
 func looksLikeYAML(raw []byte) bool {
 	trimmed := bytes.TrimLeft(raw, " \t\r\n")
 	if len(trimmed) == 0 {
 		return false
 	}
+
 	switch trimmed[0] {
-	case '{', '[', '"', '-', 't', 'f', 'n':
-		// JSON's own openers, and "-" which begins a negative number. A YAML
-		// list at the top level also begins with "-", but a contract is a
-		// mapping, so this costs nothing.
+	case '{', '[', '"', 't', 'f', 'n':
+		// JSON's own openers.
 		return false
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 		return false
+	case '-':
+		// A negative number is JSON; "---" is a document marker and "- " opens
+		// a list, and neither is.
+		rest := trimmed[1:]
+		return len(rest) == 0 || rest[0] == '-' || rest[0] == ' ' || rest[0] == '\t' ||
+			rest[0] == '\n' || rest[0] == '\r'
 	}
 	return true
+}
+
+// rejectDuplicateKeys walks the document and refuses any object that names a
+// field more than once, at any depth.
+//
+// It is written as a walk rather than a decode because the duplicate is gone by
+// the time a decoder has finished: encoding/json keeps the last occurrence and
+// reports nothing.
+//
+// Malformed input is not reported here. The decode that follows produces a
+// better message for it, and reporting the same fault twice in two voices tells
+// a reader less. But the walk must still stop: it cannot skip a token it failed
+// to read and carry on, because a decoder in an error state answers More with
+// true indefinitely.
+func rejectDuplicateKeys(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+
+	err := walkForDuplicates(decoder, "")
+	if errors.Is(err, errMalformed) {
+		return nil
+	}
+	return err
+}
+
+// errMalformed ends the walk without being reported. It carries no payload: the
+// input may be a contract a user would rather not see quoted back.
+var errMalformed = errors.New("intent: the document could not be tokenized")
+
+// walkForDuplicates consumes exactly one JSON value from the decoder.
+func walkForDuplicates(decoder *json.Decoder, path string) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return errMalformed
+	}
+
+	delimiter, isDelimiter := token.(json.Delim)
+	if !isDelimiter {
+		return nil
+	}
+
+	switch delimiter {
+	case '{':
+		seen := map[string]bool{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return errMalformed
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errMalformed
+			}
+			if seen[key] {
+				return fmt.Errorf("%s is named more than once", join(path, key))
+			}
+			seen[key] = true
+
+			if err := walkForDuplicates(decoder, join(path, key)); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for i := 0; decoder.More(); i++ {
+			if err := walkForDuplicates(decoder, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+
+	// The closing delimiter.
+	if _, err := decoder.Token(); err != nil {
+		return errMalformed
+	}
+	return nil
+}
+
+func join(path, key string) string {
+	if path == "" {
+		return key
+	}
+	return path + "." + key
 }
 
 func digest(raw []byte) string {

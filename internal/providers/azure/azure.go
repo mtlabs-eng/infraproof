@@ -40,11 +40,11 @@ func (Mapper) IsSubject(resourceType string) bool {
 	return resourceType == typeContainer || resourceType == typeAccount
 }
 
-// Map normalizes a container together with the account that gates it, or an
-// account that has no container here to speak for it.
 // attrTags is where Azure carries user-supplied labels.
 const attrTags = "tags"
 
+// Map normalizes a container together with the account that gates it, or an
+// account that has no container here to speak for it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	resource := model.NormalizedResource{
 		Address:     subject.Address,

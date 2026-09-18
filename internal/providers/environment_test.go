@@ -168,6 +168,63 @@ func TestAnUninterpretedResourceDeclaresNoEnvironment(t *testing.T) {
 	}
 }
 
+// TestTwoDeclarationsAreAmbiguousNotResolved is round eleven's finding one
+// level up. Two controls of one kind over one subject is not a fact stated
+// twice, it is a fact not stated: which of them the provider applies is not
+// something the plan says.
+//
+// Keys() is sorted, so "Environment" precedes "environment" and taking the
+// first match let a resource tagged with both report whichever sorted first —
+// a plan declaring production passing a staging contract, with the bundle
+// saying the change was consistent in every supported check.
+func TestTwoDeclarationsAreAmbiguousNotResolved(t *testing.T) {
+	cases := map[string]string{
+		"differing in case":  `{"Environment": "staging", "environment": "production"}`,
+		"the other way":      `{"Environment": "production", "environment": "staging"}`,
+		"three of them":      `{"ENVIRONMENT": "a", "Environment": "b", "environment": "c"}`,
+		"one of them absent": `{"Environment": "staging", "environment": ""}`,
+	}
+
+	for name, tags := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"bucket": "b", "tags": %s}}}
+			  ]
+			}`, tags)
+
+			resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+			if resource.Environment.IsKnown() {
+				t.Fatalf("two declarations resolved to %q", resource.Environment.Get())
+			}
+		})
+	}
+}
+
+// TestOneDeclarationRepeatedIsStillOneDeclaration keeps the ambiguity rule from
+// costing the ordinary case. Two keys that agree say one thing.
+func TestOneDeclarationRepeatedIsStillOneDeclaration(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "b", "tags": {"Environment": "staging", "environment": "staging"}}}}
+	  ]
+	}`
+
+	resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+	if !resource.Environment.IsKnown() || resource.Environment.Get() != "staging" {
+		t.Fatalf("two agreeing declarations gave %v/%q",
+			resource.Environment.State, resource.Environment.Get())
+	}
+}
+
 func normalizedAt(t *testing.T, raw, address string) model.NormalizedResource {
 	t.Helper()
 	plan, err := terraformplan.Parse([]byte(raw))
@@ -179,4 +236,48 @@ func normalizedAt(t *testing.T, raw, address string) model.NormalizedResource {
 		t.Fatalf("no normalized resource at %s", address)
 	}
 	return resource
+}
+
+// TestAnUnreadableValueKeepsItsStateWhenTheBlockIsReadable covers the marker on
+// the value rather than on the whole attribute.
+//
+// Removing the per-value check does not leak — the parser reports an unreadable
+// value as KindAbsent — but it degrades REDACTED to ABSENT, turning "the
+// resource said something this run could not see" into "the resource said
+// nothing". Those produce different reports, and after this milestone they
+// produce different decisions: one is a required unknown and the other is not.
+func TestAnUnreadableValueKeepsItsStateWhenTheBlockIsReadable(t *testing.T) {
+	cases := map[string]struct {
+		after string
+		want  model.FactState
+	}{
+		"the value is sensitive": {
+			`"bucket": "b", "tags": {"owner": "checkout", "environment": "staging"}},
+			 "after_sensitive": {"tags": {"environment": true}`,
+			model.FactRedacted,
+		},
+		"the value is not yet known": {
+			`"bucket": "b", "tags": {"owner": "checkout", "environment": null}},
+			 "after_unknown": {"tags": {"environment": true}`,
+			model.FactUnknown,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {%s}}}
+			  ]
+			}`, tc.after)
+
+			resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+			if resource.Environment.State != tc.want {
+				t.Fatalf("state = %q, want %q", resource.Environment.State, tc.want)
+			}
+		})
+	}
 }

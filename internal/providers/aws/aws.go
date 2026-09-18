@@ -44,11 +44,11 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
-// Map normalizes a bucket together with the controls that refer to it.
 // attrTags is where AWS carries user-supplied labels. It is the only part of
 // reading a declared environment that differs between clouds.
 const attrTags = "tags"
 
+// Map normalizes a bucket together with the controls that refer to it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	capabilities := model.ObjectStorageCapabilities{
 		PublicAccess: m.publicAccess(subject, related, scope),
