@@ -281,3 +281,264 @@ func TestAnUnreadableValueKeepsItsStateWhenTheBlockIsReadable(t *testing.T) {
 		})
 	}
 }
+
+// TestAControlDefersOnlyToASubject keeps a deferral from pointing at another
+// control.
+//
+// A control resource's meaning belongs to the subject it governs. Two controls
+// correlated with each other — a policy and an ownership-controls block both
+// naming the same bucket are related through it — would otherwise vouch for one
+// another, and the question of whether anything judged them would be passed
+// back and forth and never answered.
+func TestAControlDefersOnlyToASubject(t *testing.T) {
+	// Two controls and no bucket. They are correlated with each other through
+	// the bucket they both name, which is not in this plan.
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket_policy.open", "mode": "managed", "type": "aws_s3_bucket_policy",
+	     "name": "open", "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "elsewhere"}}},
+	    {"address": "aws_s3_bucket_ownership_controls.own", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "own",
+	     "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "elsewhere"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket_policy.open", "mode": "managed", "type": "aws_s3_bucket_policy",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket_ownership_controls.own"]}}},
+	    {"address": "aws_s3_bucket_ownership_controls.own", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "own",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket_policy.open"]}}}
+	  ]}}
+	}`
+
+	for _, address := range []string{
+		"aws_s3_bucket_policy.open", "aws_s3_bucket_ownership_controls.own",
+	} {
+		resource := normalizedAt(t, raw, address)
+		if !resource.Interpreted {
+			t.Fatalf("%s should have been understood", address)
+		}
+		if len(resource.DefersTo) != 0 {
+			t.Errorf("%s defers to %v; a control is not a subject", address, resource.DefersTo)
+		}
+	}
+}
+
+// TestAControlDefersToTheSubjectItGoverns keeps the rule from costing the
+// ordinary case, where the bucket is right there.
+func TestAControlDefersToTheSubjectItGoverns(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	     "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_bucket_public_access_block.assets")
+	if len(control.DefersTo) != 1 || control.DefersTo[0] != "aws_s3_bucket.assets" {
+		t.Fatalf("defers to %v, want the bucket it governs", control.DefersTo)
+	}
+}
+
+// TestAResourceThatGovernsWithoutNamingDefersToWhatItGoverns covers the two
+// deferrals the configuration does not record as a reference.
+//
+// An AWS account-wide block is scoped to the provider instance and names no
+// bucket. An Azure storage account is named by its containers rather than
+// naming them. In both cases the reference-based default finds nothing, and
+// without the mapper saying so each would read as a resource nothing examined —
+// which is false, since every verdict in the plan consults it.
+func TestAResourceThatGovernsWithoutNamingDefersToWhatItGoverns(t *testing.T) {
+	t.Run("an AWS account block", func(t *testing.T) {
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+		    {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+		     "type": "aws_s3_account_public_access_block", "name": "this", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"block_public_acls": true, "block_public_policy": true,
+		                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+		  ],
+		  "configuration": {
+		    "provider_config": {"aws": {"name": "aws", "full_name": "p"}},
+		    "root_module": {"resources": [
+		      {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		       "name": "assets", "provider_config_key": "aws", "expressions": {}},
+		      {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+		       "type": "aws_s3_account_public_access_block", "name": "this",
+		       "provider_config_key": "aws", "expressions": {}}
+		    ]}
+		  }
+		}`
+
+		block := normalizedAt(t, raw, "aws_s3_account_public_access_block.this")
+		if len(block.DefersTo) != 1 || block.DefersTo[0] != "aws_s3_bucket.assets" {
+			t.Fatalf("defers to %v, want the bucket it governs", block.DefersTo)
+		}
+	})
+
+	t.Run("an Azure account with a container", func(t *testing.T) {
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "azurerm_storage_account.sa", "mode": "managed",
+		     "type": "azurerm_storage_account", "name": "sa", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"name": "s", "allow_nested_items_to_be_public": false}}},
+		    {"address": "azurerm_storage_container.assets", "mode": "managed",
+		     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"name": "assets", "container_access_type": "private"}}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "azurerm_storage_account.sa", "mode": "managed",
+		     "type": "azurerm_storage_account", "name": "sa", "expressions": {}},
+		    {"address": "azurerm_storage_container.assets", "mode": "managed",
+		     "type": "azurerm_storage_container", "name": "assets",
+		     "expressions": {"storage_account_id": {"references": [
+		       "azurerm_storage_account.sa.id", "azurerm_storage_account.sa"]}}}
+		  ]}}
+		}`
+
+		account := normalizedAt(t, raw, "azurerm_storage_account.sa")
+		if account.ObjectStorage != nil {
+			t.Fatal("an account with a container in the plan should defer to it")
+		}
+		if len(account.DefersTo) != 1 || account.DefersTo[0] != "azurerm_storage_container.assets" {
+			t.Fatalf("defers to %v, want the container it answers for", account.DefersTo)
+		}
+	})
+
+	t.Run("an account block in another provider instance", func(t *testing.T) {
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+		    {"address": "aws_s3_account_public_access_block.other", "mode": "managed",
+		     "type": "aws_s3_account_public_access_block", "name": "other", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"block_public_acls": true, "block_public_policy": true,
+		                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+		  ],
+		  "configuration": {
+		    "provider_config": {
+		      "aws": {"name": "aws", "full_name": "p"},
+		      "aws.other": {"name": "aws", "alias": "other", "full_name": "p"}
+		    },
+		    "root_module": {"resources": [
+		      {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		       "name": "assets", "provider_config_key": "aws", "expressions": {}},
+		      {"address": "aws_s3_account_public_access_block.other", "mode": "managed",
+		       "type": "aws_s3_account_public_access_block", "name": "other",
+		       "provider_config_key": "aws.other", "expressions": {}}
+		    ]}
+		  }
+		}`
+
+		block := normalizedAt(t, raw, "aws_s3_account_public_access_block.other")
+		if len(block.DefersTo) != 0 {
+			t.Fatalf("defers to %v; a block in another account governs nothing here", block.DefersTo)
+		}
+	})
+}
+
+// TestGovernsClaimsOnlyWhatItGoverns keeps the deferral from becoming a blanket
+// excuse.
+//
+// Governs answers for one resource type per mapper. Dropping that filter would
+// let any resource claim to govern every subject in the plan, so a control for
+// a bucket managed elsewhere would be covered by an unrelated bucket that
+// happens to be in the same plan — which is the orphan-control defect wearing
+// the deferral as a disguise.
+func TestGovernsClaimsOnlyWhatItGoverns(t *testing.T) {
+	// An ACL for a bucket that is not here, beside an unrelated bucket that is.
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.unrelated", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "unrelated", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "u"}}},
+	    {"address": "aws_s3_bucket_acl.elsewhere", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "elsewhere", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "managed-elsewhere", "acl": "public-read"}}}
+	  ],
+	  "configuration": {
+	    "provider_config": {"aws": {"name": "aws", "full_name": "p"}},
+	    "root_module": {"resources": [
+	      {"address": "aws_s3_bucket.unrelated", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "unrelated", "provider_config_key": "aws", "expressions": {}},
+	      {"address": "aws_s3_bucket_acl.elsewhere", "mode": "managed", "type": "aws_s3_bucket_acl",
+	       "name": "elsewhere", "provider_config_key": "aws", "expressions": {}}
+	    ]}
+	  }
+	}`
+
+	acl := normalizedAt(t, raw, "aws_s3_bucket_acl.elsewhere")
+	if len(acl.DefersTo) != 0 {
+		t.Fatalf("an ACL for a bucket managed elsewhere defers to %v", acl.DefersTo)
+	}
+
+	// The same shape in Azure: a container whose account is not in the plan,
+	// beside an unrelated account that is.
+	azure := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.unrelated", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "unrelated", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "u", "allow_nested_items_to_be_public": false}}},
+	    {"address": "azurerm_storage_container.orphan", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "orphan", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "o", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.unrelated", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "unrelated", "expressions": {}},
+	    {"address": "azurerm_storage_container.orphan", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "orphan", "expressions": {}}
+	  ]}}
+	}`
+
+	// The container is a subject and reaches its own verdict, so the account's
+	// deferral to it is legitimate — but the container must not have been
+	// judged using an account it never names.
+	container := normalizedAt(t, azure, "azurerm_storage_container.orphan")
+	if container.ObjectStorage == nil {
+		t.Fatal("a container is a subject and must reach a verdict of its own")
+	}
+	if container.ObjectStorage.PublicAccess.IsKnown() {
+		t.Fatalf("a container whose account is absent was decided anyway: %v",
+			container.ObjectStorage.PublicAccess.Get())
+	}
+	for _, source := range container.ObjectStorage.PublicAccess.Sources {
+		if source.ResourceAddress == "azurerm_storage_account.unrelated" {
+			t.Fatal("an unrelated account was consulted for this container")
+		}
+	}
+}

@@ -233,3 +233,26 @@ func findType(changes []terraformplan.ResourceChange, resourceType string) (*ter
 func provenance(address, attribute string) model.Provenance {
 	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAzure}
 }
+
+// Governs reports the containers an account answers for.
+//
+// A container names its account, not the other way round, so the
+// reference-based default finds the account from the container and nothing
+// from the account. When a container is in the plan the account defers to it —
+// the container carries the verdict — and that deferral has to be recorded for
+// the account not to read as a resource nothing examined.
+func (m Mapper) Governs(resource terraformplan.ResourceChange,
+	scope []terraformplan.ResourceChange) []string {
+
+	if resource.Type != typeAccount {
+		return nil
+	}
+
+	var containers []string
+	for i := range scope {
+		if scope[i].Type == typeContainer {
+			containers = append(containers, scope[i].Address)
+		}
+	}
+	return containers
+}

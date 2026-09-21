@@ -47,14 +47,17 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 		return model.Absent[string](source)
 	}
 
-	// Every key that could be the declaration, not the first one found.
-	// Keys() is sorted, so taking the first would resolve a disagreement by
-	// byte order: "Environment" precedes "environment", and a resource tagged
-	// with both would report whichever sorted first. Two controls of one kind
-	// over one subject is not a fact stated twice — it is a fact the plan does
-	// not state, because which one the provider applies is not recorded.
+	// Every key that could be the declaration is examined, and the verdict is
+	// formed after all of them.
+	//
+	// Returning at the first key that could not be used decided the answer by
+	// where the alphabet puts a name: Keys is sorted, so an empty
+	// "Environment" was seen before a readable "environment" and discarded it.
+	// A map has no order, and a verdict that depends on one depends on
+	// something the plan did not say.
 	var stated string
-	var found bool
+	var readable, unusable bool
+
 	for _, key := range labels.Keys() {
 		if !strings.EqualFold(key, environmentKey) {
 			continue
@@ -62,30 +65,31 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 
 		value := labels.Field(key)
 		if state := unreadable(value); state != "" {
+			// Withheld outright. Nothing later can restore it: the resource
+			// declared something this run was not permitted to see.
 			return unreadableFact(state, source)
 		}
 		if value.Kind() != terraformplan.KindString || strings.TrimSpace(value.Text()) == "" {
 			// A key of the right name holding something that is not a name.
-			// Where it is the only one, the resource declared nothing usable.
-			// Where it sits beside a readable sibling, the resource declared
-			// two things and did not say which applies, which is a question
-			// the plan raised and did not answer.
-			if found {
-				return model.Unknown[string](source)
-			}
-			return model.Absent[string](source)
+			unusable = true
+			continue
 		}
 
 		text := strings.TrimSpace(value.Text())
-		if found && text != stated {
-			// Two declarations that disagree. Neither may be believed, and the
-			// disagreement is not an absence: the plan said something about the
-			// environment and did not say which.
+		if readable && text != stated {
+			// Two declarations that disagree. Neither may be believed.
 			return model.Unknown[string](source)
 		}
-		stated, found = text, true
+		stated, readable = text, true
 	}
-	if found {
+
+	switch {
+	case readable && unusable:
+		// The resource declared an environment and also declared something
+		// unusable under the same name. Which one applies is not stated, and
+		// taking the readable one would be choosing on the plan's behalf.
+		return model.Unknown[string](source)
+	case readable:
 		return model.Known(stated, source)
 	}
 

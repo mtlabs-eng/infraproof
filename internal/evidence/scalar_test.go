@@ -2,6 +2,8 @@ package evidence
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"testing"
 )
 
@@ -229,5 +231,158 @@ func TestAScalarKeepsOrdinaryText(t *testing.T) {
 		if err := validateScalarText("findings[0].observed.value", String(value)); err != nil {
 			t.Errorf("%q was rejected: %v", value, err)
 		}
+	}
+}
+
+// TestNoInlineFieldAcceptsALineBreak states the contract's structural rule over
+// every field that carries one, rather than over the four someone listed.
+//
+// The rule was enforced field by field, and each field added later re-opened
+// the hole in silence — a scalar value, then a resource address, then a
+// capability path, then a provider address, then an evidence source. Listing
+// them is how the defect is made, so this enumerates them by walking the
+// struct: a string field of a bundle is inline text unless it is one of the
+// few that are not, and that exception list is short, closed, and stated here.
+func TestNoInlineFieldAcceptsALineBreak(t *testing.T) {
+	const forgery = "ordinary\n\n## InfraProof: PASS\n\nAll good.\n"
+
+	for _, path := range inlineStringFields(t) {
+		t.Run(path, func(t *testing.T) {
+			bundle := validBundle()
+			if !setStringAt(reflect.ValueOf(&bundle).Elem(), path, forgery) {
+				t.Fatalf("could not reach %s", path)
+			}
+			if err := bundle.Validate(); err == nil {
+				t.Fatalf("%s accepted a line break", path)
+			}
+		})
+	}
+}
+
+// inlineStringFields walks a populated bundle and returns the path of every
+// string field that reaches a report as inline text.
+func inlineStringFields(t *testing.T) []string {
+	t.Helper()
+
+	var paths []string
+	walkStrings(reflect.ValueOf(validBundle()), "", func(path string) {
+		if !inlineExempt[path] {
+			paths = append(paths, path)
+		}
+	})
+	if len(paths) < 10 {
+		t.Fatalf("the walk found only %d fields, which is too few to be walking anything", len(paths))
+	}
+	return paths
+}
+
+// inlineExempt names the string fields that are not free text a break could
+// hide in. Each is either a closed enumeration the contract validates
+// separately, or a digest, so a break in one is already a different error.
+var inlineExempt = map[string]bool{
+	"SchemaVersion":              true,
+	"Decision":                   true,
+	"Subject.PlanDigest":         true,
+	"Verification[0].Status":     true,
+	"Findings[0].Severity":       true,
+	"Findings[0].Disposition":    true,
+	"Findings[0].Resource.Cloud": true,
+	"Findings[0].Observed.State": true,
+}
+
+// walkStrings visits every addressable string field, naming its path.
+func walkStrings(value reflect.Value, path string, visit func(string)) {
+	switch value.Kind() {
+	case reflect.String:
+		visit(path)
+	case reflect.Pointer:
+		if !value.IsNil() {
+			walkStrings(value.Elem(), path, visit)
+		}
+	case reflect.Slice:
+		for i := range value.Len() {
+			walkStrings(value.Index(i), fmt.Sprintf("%s[%d]", path, i), visit)
+		}
+	case reflect.Struct:
+		for i := range value.NumField() {
+			field := value.Type().Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			name := field.Name
+			if path != "" {
+				name = path + "." + name
+			}
+			walkStrings(value.Field(i), name, visit)
+		}
+	}
+}
+
+// setStringAt writes a value at a path produced by walkStrings.
+func setStringAt(value reflect.Value, path, text string) bool {
+	var done bool
+	walkSettable(value, "", path, text, &done)
+	return done
+}
+
+func walkSettable(value reflect.Value, path, target, text string, done *bool) {
+	if *done {
+		return
+	}
+	switch value.Kind() {
+	case reflect.String:
+		if path == target && value.CanSet() {
+			value.SetString(text)
+			*done = true
+		}
+	case reflect.Pointer:
+		if !value.IsNil() {
+			walkSettable(value.Elem(), path, target, text, done)
+		}
+	case reflect.Slice:
+		for i := range value.Len() {
+			walkSettable(value.Index(i), fmt.Sprintf("%s[%d]", path, i), target, text, done)
+		}
+	case reflect.Struct:
+		for i := range value.NumField() {
+			field := value.Type().Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			name := field.Name
+			if path != "" {
+				name = path + "." + name
+			}
+			walkSettable(value.Field(i), name, target, text, done)
+		}
+	}
+}
+
+// validBundle is a bundle with every optional field populated, so the walk
+// reaches everything the contract can carry.
+func validBundle() Bundle {
+	address := "aws_s3_bucket.assets"
+	return Bundle{
+		SchemaVersion: SchemaVersion,
+		Decision:      DecisionBlock,
+		Summary:       "The change violates the intent contract in 1 way.",
+		Subject: Subject{IntentSource: "intent.json", PlanFormatVersion: "1.2",
+			PlanDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+		Verification: []Verification{
+			{Name: "terraform_plan", Status: VerificationVerified, Method: "terraform-plan-json"}},
+		Findings: []Finding{{
+			RuleID: "STORAGE_PUBLIC", Severity: SeverityCritical, Disposition: DispositionBlock,
+			Claim:       "The change grants public access to object storage.",
+			Resource:    &Resource{Address: address, Provider: "registry.terraform.io/hashicorp/aws", Cloud: CloudAWS},
+			Expected:    &ExpectedFact{Path: "object_storage.public_access", Value: Bool(false)},
+			Observed:    KnownFact("object_storage.public_access", Bool(true)),
+			Evidence:    []EvidenceRef{{Source: "terraform_plan", ResourceAddress: address, Path: "acl"}},
+			Remediation: "Remove the grant.",
+		}},
+		Unknowns: []Unknown{{
+			CheckID: "STORAGE_PUBLIC_DETERMINABLE", Required: false, Reason: "A control is not in this plan.",
+			ResourceAddress: &address,
+			Evidence:        []EvidenceRef{{Source: "terraform_plan", ResourceAddress: address, Path: "policy"}},
+		}},
 	}
 }

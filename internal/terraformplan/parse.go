@@ -183,7 +183,7 @@ func parseResourceChange(path string, object map[string]any, errs *[]error) Reso
 		ModuleAddress: optionalString(object, "module_address", path+".module_address", errs),
 		Type:          optionalString(object, "type", path+".type", errs),
 		Name:          optionalString(object, "name", path+".name", errs),
-		ProviderName:  optionalString(object, "provider_name", path+".provider_name", errs),
+		ProviderName:  requiredString(object, "provider_name", path+".provider_name", errs),
 		Deposed:       optionalString(object, "deposed", path+".deposed", errs),
 		ActionReason:  optionalString(object, "action_reason", path+".action_reason", errs),
 		Mode:          Mode(optionalString(object, "mode", path+".mode", errs)),
@@ -328,7 +328,10 @@ func parseIndex(path string, object map[string]any, errs *[]error) (string, bool
 
 func requiredString(object map[string]any, name, path string, errs *[]error) string {
 	value := optionalString(object, name, path, errs)
-	if value == "" {
+	// Whitespace is not a value. A field that is blank once rendered is one the
+	// plan did not supply, and carrying it forward means a downstream contract
+	// refuses it later, as this program's fault rather than the plan's.
+	if strings.TrimSpace(value) == "" {
 		*errs = append(*errs, invalid(path, "must be present and not empty"))
 	}
 	return value

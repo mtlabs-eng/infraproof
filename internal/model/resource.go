@@ -31,6 +31,16 @@ type NormalizedResource struct {
 	// matters: "understood, and folded into something else" is not the same
 	// claim as "no mapper recognized this".
 	Interpreted bool
+	// DefersTo names the subjects a control resource's meaning belongs to, by
+	// address, in deterministic order.
+	//
+	// It is empty for a subject, and it is empty for a control whose subject is
+	// not in this plan — a policy attached to a bucket managed elsewhere. That
+	// second case is why the field exists: a control is understood, and a rule
+	// reaching no verdict about it is correct only when something else reached
+	// one about the thing it governs. Without the link recorded here, "its
+	// meaning belongs to the subject" is a claim nothing can check.
+	DefersTo []string
 	// Environment is the environment the resource declares it belongs to,
 	// normalized from whatever the provider calls it: an AWS or Azure tag, a
 	// GCP label.

@@ -48,7 +48,7 @@ func subjectBlock(s evidence.Subject) string {
 func verificationTable(checks []evidence.Verification) string {
 	rows := make([][]string, 0, len(checks))
 	for _, v := range checks {
-		rows = append(rows, []string{inlineText(v.Name), string(v.Status), inlineText(v.Method)})
+		rows = append(rows, []string{inlineText(v.Name), inlineText(string(v.Status)), inlineText(v.Method)})
 	}
 	return table([]string{"Check", "Status", "Method"}, rows)
 }
@@ -77,7 +77,8 @@ func findingBullets(f evidence.Finding) []string {
 
 	if f.Resource != nil {
 		bullets = append(bullets, fmt.Sprintf("- Resource: %s (%s, %s)",
-			code(f.Resource.Address), f.Resource.Cloud, f.Resource.Provider))
+			code(f.Resource.Address), inlineText(string(f.Resource.Cloud)),
+			inlineText(f.Resource.Provider)))
 	}
 	if f.Expected != nil {
 		bullets = append(bullets, fmt.Sprintf("- Expected: %s = %s",
@@ -106,7 +107,7 @@ func observedText(o evidence.ObservedFact) string {
 // evidenceText renders one evidence reference: where the data was read from,
 // never what it contained.
 func evidenceText(ref evidence.EvidenceRef) string {
-	parts := []string{ref.Source}
+	parts := []string{inlineText(ref.Source)}
 	if ref.ResourceAddress != "" {
 		parts = append(parts, code(ref.ResourceAddress))
 	}

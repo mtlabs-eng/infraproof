@@ -32,6 +32,21 @@ type Mapper interface {
 	Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource
 }
 
+// Governor is implemented by a mapper whose resources govern subjects the
+// configuration does not connect them to by reference.
+//
+// The default is reference-based, which is right for a control naming the
+// bucket it applies to. It is wrong for a control that applies by something
+// else: an account-wide block governs every bucket in its provider instance and
+// names none of them, and a storage account governs the containers that name
+// it rather than the other way round. In both cases the mapper is the only
+// thing that knows, so the mapper is asked.
+type Governor interface {
+	// Governs returns the addresses of the subjects this resource's meaning
+	// belongs to, beyond those the configuration connects it to.
+	Governs(resource terraformplan.ResourceChange, scope []terraformplan.ResourceChange) []string
+}
+
 // Normalize builds the graph. Every change in the plan appears in it: a subject
 // with its capabilities, a control resource marked as understood, and anything
 // no mapper claimed as an opaque entry.
@@ -68,7 +83,10 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 		}
 		if !mapper.IsSubject(change.Type) {
 			// A control resource is understood, but its meaning belongs to the
-			// subject it controls rather than to itself.
+			// subject it controls rather than to itself. Which subject is
+			// recorded, because "it was judged through its subject" is a claim
+			// nothing downstream can check without it — and a control whose
+			// subject is managed elsewhere defers to nobody.
 			return model.NormalizedResource{
 				Address:     change.Address,
 				Provider:    change.ProviderName,
@@ -76,10 +94,17 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 				Family:      model.FamilyObjectStorage,
 				Destructive: change.IsDestructive(),
 				Interpreted: true,
+				DefersTo:    defersTo(change, edges[change.Address], scope, mapper),
 			}
 		}
 		resource := mapper.Map(change, edges[change.Address], scope)
 		resource.Interpreted = true
+		if resource.ObjectStorage == nil {
+			// A subject that reached no verdict of its own has deferred to
+			// something. An Azure account with a container in the plan is the
+			// case: the container carries the verdict and the account defers.
+			resource.DefersTo = defersTo(change, edges[change.Address], scope, mapper)
+		}
 		return resource
 	}
 
@@ -90,6 +115,38 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 		Family:      model.FamilyUnknown,
 		Destructive: change.IsDestructive(),
 	}
+}
+
+// defersTo returns the addresses whose judgement answers for this resource.
+//
+// A control resource's meaning belongs to the subject it governs, and so does a
+// subject's when it reaches no verdict of its own. Recording which is what
+// makes "it was judged through something else" a claim that can be checked
+// rather than believed — and a resource governing something that is not in this
+// plan defers to nobody.
+func defersTo(change terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange,
+	mapper Mapper) []string {
+
+	var subjects []string
+	for _, candidate := range related {
+		// A control is not a subject. Two controls correlated through the
+		// bucket they both name would otherwise vouch for each other, and the
+		// question of whether anything judged them would never be answered.
+		if mapper.IsSubject(candidate.Type) && candidate.Address != change.Address {
+			subjects = append(subjects, candidate.Address)
+		}
+	}
+
+	if governor, ok := mapper.(Governor); ok {
+		for _, address := range governor.Governs(change, scope) {
+			if address != change.Address {
+				subjects = append(subjects, address)
+			}
+		}
+	}
+
+	slices.Sort(subjects)
+	return slices.Compact(subjects)
 }
 
 // relate groups changes joined by a configuration reference, in both

@@ -338,7 +338,10 @@ func TestAControlResourceIsEvaluatedThroughItsSubject(t *testing.T) {
 		Cloud:       model.CloudAWS,
 		Family:      model.FamilyObjectStorage,
 		Interpreted: true,
-		// No ObjectStorage: its meaning belongs to the resource it controls.
+		// No ObjectStorage: its meaning belongs to the resource it controls,
+		// which is named here so that the claim can be checked rather than
+		// believed.
+		DefersTo: []string{"aws_s3_bucket.a"},
 	}
 
 	bundle := bundleFor(t, contract(nil), private("aws_s3_bucket.a"), control)
@@ -380,5 +383,108 @@ func TestAnOpaqueResourceIsReportedOnceNotTwice(t *testing.T) {
 	}
 	if evaluated != 0 {
 		t.Errorf("an opaque resource was also reported as unevaluated %d times", evaluated)
+	}
+}
+
+// TestAControlWhoseSubjectIsAbsentCannotPass is the defect a review found in
+// the fix for the defect before it.
+//
+// StorageExposure marked a control resource as judged "through the subject it
+// governs". When the subject is not in the plan, its meaning went nowhere and
+// nothing judged it — and a rule's claim to have judged something is an
+// unstated fact in exactly this project's sense. Adding a policy or an IAM
+// binding to a bucket managed elsewhere is the ordinary shape of the change,
+// and it reported PASS with no findings at all.
+//
+// Coverage now resolves the deferral against the graph rather than believing
+// the claim: a control is covered when a subject it defers to is present and
+// was itself judged.
+func TestAControlWhoseSubjectIsAbsentCannotPass(t *testing.T) {
+	orphan := model.NormalizedResource{
+		Address:     "google_storage_bucket_iam_member.public",
+		Provider:    "registry.terraform.io/hashicorp/google",
+		Cloud:       model.CloudGCP,
+		Family:      model.FamilyObjectStorage,
+		Interpreted: true,
+		// No ObjectStorage, and no subject in this plan to defer to.
+	}
+
+	bundle := bundleFor(t, contract(nil), orphan)
+
+	if bundle.Decision == evidence.DecisionPass {
+		t.Fatalf("a control whose subject is absent reported a pass:\nfindings=%v\nunknowns=%v",
+			bundle.Findings, bundle.Unknowns)
+	}
+
+	var reported bool
+	for _, unknown := range bundle.Unknowns {
+		if unknown.CheckID != policy.CheckResourceEvaluated {
+			continue
+		}
+		reported = true
+		if unknown.ResourceAddress == nil || *unknown.ResourceAddress != orphan.Address {
+			t.Errorf("the unknown names %v, want the orphan control", unknown.ResourceAddress)
+		}
+	}
+	if !reported {
+		t.Fatalf("the orphan control was not reported: %v", bundle.Unknowns)
+	}
+}
+
+// TestAControlDefersOnlyToASubjectThatWasJudged keeps the deferral honest in
+// the other direction. Naming a subject is not enough: the subject must be in
+// the graph, and it must itself have been judged, or the deferral passes the
+// question to something that never answered it.
+func TestAControlDefersOnlyToASubjectThatWasJudged(t *testing.T) {
+	cases := map[string]struct {
+		defersTo []string
+		resource []model.NormalizedResource
+		covered  bool
+	}{
+		"a subject that was judged": {
+			defersTo: []string{"aws_s3_bucket.a"},
+			resource: []model.NormalizedResource{private("aws_s3_bucket.a")},
+			covered:  true,
+		},
+		"a subject not in the graph": {
+			defersTo: []string{"aws_s3_bucket.elsewhere"},
+			resource: nil,
+			covered:  false,
+		},
+		"a subject that was itself unjudged": {
+			defersTo: []string{"aws_sqs_queue.orders"},
+			resource: []model.NormalizedResource{{
+				Address: "aws_sqs_queue.orders", Provider: "p", Cloud: model.CloudAWS,
+				Family: model.Family("message_queue"), Interpreted: true}},
+			covered: false,
+		},
+		"no subject at all": {
+			defersTo: nil,
+			resource: nil,
+			covered:  false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			control := model.NormalizedResource{
+				Address: "aws_s3_bucket_policy.c", Provider: "p", Cloud: model.CloudAWS,
+				Family: model.FamilyObjectStorage, Interpreted: true, DefersTo: tc.defersTo,
+			}
+
+			bundle := bundleFor(t, contract(nil), append(tc.resource, control)...)
+
+			var reported bool
+			for _, unknown := range bundle.Unknowns {
+				if unknown.CheckID == policy.CheckResourceEvaluated &&
+					unknown.ResourceAddress != nil && *unknown.ResourceAddress == control.Address {
+					reported = true
+				}
+			}
+			if reported == tc.covered {
+				t.Fatalf("control reported as unevaluated = %v, want %v: %v",
+					reported, !tc.covered, bundle.Unknowns)
+			}
+		})
 	}
 }

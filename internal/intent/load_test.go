@@ -435,3 +435,57 @@ func TestParseTerminatesOnEveryInput(t *testing.T) {
 		})
 	}
 }
+
+// TestADeeplyNestedContractIsRefusedCheaply is the regression for a defect the
+// duplicate-key check introduced.
+//
+// json.Decoder.Token does not apply the nesting limit that Decode does, so the
+// hand-written walk descended where the standard library refuses — and it
+// descended expensively. A 600 KB file of nothing but brackets took gigabytes
+// and tens of seconds, and the process died abnormally rather than exiting 10.
+// The walk runs before the decode, so it removed the standard library's guard
+// from the path that runs first.
+//
+// A contract is a document a human writes. Nothing legitimate is deeper than a
+// handful of levels, so the limit costs nothing real and turns an exhaustion
+// into an input error.
+func TestADeeplyNestedContractIsRefusedCheaply(t *testing.T) {
+	cases := map[string]string{
+		"nested arrays":       strings.Repeat("[", 300000) + strings.Repeat("]", 300000),
+		"nested objects":      strings.Repeat(`{"a":`, 300000) + "1" + strings.Repeat("}", 300000),
+		"unbalanced":          strings.Repeat("[", 300000),
+		"mixed":               strings.Repeat(`{"a":[`, 200000),
+		"just past the limit": strings.Repeat("[", 66) + strings.Repeat("]", 66),
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() {
+				_, err := intent.Parse([]byte(raw), "contract.json")
+				done <- err
+			}()
+
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("a contract deeper than any real one was accepted")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Parse did not terminate")
+			}
+		})
+	}
+}
+
+// TestAContractOfOrdinaryShapeIsNotRefusedForDepth keeps the limit from costing
+// anything a user would write. The documented contract nests three levels.
+func TestAContractOfOrdinaryShapeIsNotRefusedForDepth(t *testing.T) {
+	raw := strings.Replace(valid, `"destructive_changes": "forbidden",`,
+		`"destructive_changes": "forbidden",
+		 "constraints": {"allowed_regions": ["eu-west-1"], "required_tags": {"owner": "checkout"}},`, 1)
+
+	if _, err := intent.Parse([]byte(raw), "contract.json"); err != nil {
+		t.Fatalf("an ordinary contract was rejected: %v", err)
+	}
+}

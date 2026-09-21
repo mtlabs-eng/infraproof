@@ -322,6 +322,13 @@ func ContractCoverage(contract intent.Contract, graph model.Graph) Result {
 // evaluated is what the rules reported judging, so this cannot go stale. A rule
 // added later that judges a new family reports it and this falls silent; a
 // mapper added without a rule does not, and this says so.
+//
+// A rule's report is taken only for resources it reached a verdict about. A
+// control resource is covered by deferral instead, and the deferral is resolved
+// against the graph rather than believed: the subject must be present and must
+// itself have been judged. Believing the claim was the defect — a policy
+// attached to a bucket managed elsewhere defers to nobody, and reported that
+// the change was consistent in every supported check.
 func ResourceCoverage(graph model.Graph, evaluated []string) Result {
 	var result Result
 
@@ -339,6 +346,8 @@ func ResourceCoverage(graph model.Graph, evaluated []string) Result {
 			continue
 		case judged[resource.Address]:
 			continue
+		case deferredToAJudgedSubject(resource, judged):
+			continue
 		}
 
 		address := inline(resource.Address)
@@ -348,16 +357,43 @@ func ResourceCoverage(graph model.Graph, evaluated []string) Result {
 			// normalized, so this build knows what it is and has no rule for
 			// it — which is a question this run did not answer, not a limit on
 			// an answer it gave.
-			Required: true,
-			Reason: fmt.Sprintf(
-				"This resource was normalized as %s, and no rule in this build judges that family, "+
-					"so nothing about it was checked against the contract.", resource.Family),
+			Required:        true,
+			Reason:          coverageReason(resource),
 			ResourceAddress: &address,
 			Evidence:        []evidence.EvidenceRef{},
 		})
 	}
 
 	return result
+}
+
+// deferredToAJudgedSubject reports whether a control resource's meaning reached
+// something that answered for it.
+//
+// Naming a subject is not enough. The subject must be in the graph — a control
+// governing a bucket managed elsewhere names one that is not here — and it must
+// itself have been judged, or the deferral passes the question to something
+// that never answered it either.
+// coverageReason says which of the two gaps this is, because they have
+// different fixes: one needs a rule, the other needs the resource it governs.
+func coverageReason(resource model.NormalizedResource) string {
+	if len(resource.DefersTo) > 0 {
+		return "This resource controls another, and no resource it governs was judged in this plan, " +
+			"so nothing about it was checked against the contract."
+	}
+	return fmt.Sprintf(
+		"This resource was normalized as %s, and nothing judged it against the contract: either no "+
+			"rule in this build covers that family, or it controls a resource that is not part of "+
+			"this plan.", resource.Family)
+}
+
+func deferredToAJudgedSubject(resource model.NormalizedResource, judged map[string]bool) bool {
+	for _, subject := range resource.DefersTo {
+		if judged[subject] {
+			return true
+		}
+	}
+	return false
 }
 
 func resourceRef(resource model.NormalizedResource) *evidence.Resource {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -53,8 +54,38 @@ func (b Bundle) Validate() error {
 }
 
 // validateEnvelope checks the schema version, decision, summary, and subject.
+// inlineFields returns every free-text field of the bundle envelope that
+// reaches a report as inline text, with the path to report it under.
+//
+// It is written as one list per structure rather than as checks scattered
+// through the validators, because scattering is how five of these came to be
+// missing: each was added to the contract without anyone remembering there was
+// a rule to add it to.
+func (b Bundle) inlineFields() map[string]string {
+	fields := map[string]string{
+		"subject.intent_source":       b.Subject.IntentSource,
+		"subject.plan_format_version": b.Subject.PlanFormatVersion,
+	}
+	for i, check := range b.Verification {
+		fields[fmt.Sprintf("verification[%d].name", i)] = check.Name
+		fields[fmt.Sprintf("verification[%d].method", i)] = check.Method
+	}
+	return fields
+}
+
 func (b Bundle) validateEnvelope() []error {
 	var errs []error
+
+	paths := make([]string, 0, len(b.inlineFields()))
+	for path := range b.inlineFields() {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	for _, path := range paths {
+		if err := validateSingleLine(path, b.inlineFields()[path]); err != nil {
+			errs = append(errs, err)
+		}
+	}
 
 	if err := validateSchemaVersion(b.SchemaVersion); err != nil {
 		errs = append(errs, err)
@@ -159,6 +190,9 @@ func validateFinding(path string, f Finding) []error {
 		if strings.TrimSpace(f.Resource.Provider) == "" {
 			errs = append(errs, violation(path+".resource.provider", "must not be empty"))
 		}
+		if err := validateSingleLine(path+".resource.provider", f.Resource.Provider); err != nil {
+			errs = append(errs, err)
+		}
 		if !f.Resource.Cloud.Valid() {
 			errs = append(errs, violation(path+".resource.cloud", "unrecognized cloud %q", string(f.Resource.Cloud)))
 		}
@@ -230,6 +264,15 @@ func validateEvidence(parent string, refs []EvidenceRef) []error {
 		if strings.TrimSpace(ref.Path) == "" {
 			errs = append(errs, violation(path+".path", "must locate the data within the source"))
 		}
+		// Every field of a reference reaches a report as inline text, and a
+		// reference is assembled from plan-derived strings.
+		for field, value := range map[string]string{
+			".source": ref.Source, ".resource_address": ref.ResourceAddress, ".path": ref.Path,
+		} {
+			if err := validateSingleLine(path+field, value); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 
 	return errs
@@ -245,8 +288,14 @@ func validateUnknown(path string, u Unknown) []error {
 	if err := validateProse(path+".reason", u.Reason, "must explain the gap without quoting a sensitive value"); err != nil {
 		errs = append(errs, err)
 	}
-	if u.ResourceAddress != nil && strings.TrimSpace(*u.ResourceAddress) == "" {
-		errs = append(errs, violation(path+".resource_address", "must be null rather than empty when no resource applies"))
+	if u.ResourceAddress != nil {
+		if strings.TrimSpace(*u.ResourceAddress) == "" {
+			errs = append(errs, violation(path+".resource_address",
+				"must be null rather than empty when no resource applies"))
+		}
+		if err := validateSingleLine(path+".resource_address", *u.ResourceAddress); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	errs = append(errs, validateEvidence(path, u.Evidence)...)
 

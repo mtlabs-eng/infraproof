@@ -67,9 +67,9 @@ func StorageExposure(contract intent.Contract, graph model.Graph) Result {
 	for _, resource := range graph.OfFamily(model.FamilyObjectStorage) {
 		if resource.ObjectStorage == nil {
 			// A control resource: understood, but exposure belongs to the
-			// resource it controls. It is still evaluated — through the
-			// subject it governs, which is where its meaning went.
-			result.Evaluated = append(result.Evaluated, resource.Address)
+			// resource it controls. This rule reached no verdict about it and
+			// must not say otherwise; whether the subject it defers to was
+			// judged is a question about the graph, and coverage answers it.
 			continue
 		}
 		capabilities := *resource.ObjectStorage

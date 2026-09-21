@@ -119,6 +119,71 @@ func TestEveryWayOfNotSayingItIsNotKnown(t *testing.T) {
 	}
 }
 
+// TestOrderDoesNotDecideTheAnswer is the defect a review found in the fix for
+// the defect before it.
+//
+// The loop returned as soon as it met a matching key it could not use, before
+// looking at the rest. Keys are sorted, so "Environment" is examined before
+// "environment", and an empty first key discarded a readable second one and
+// fell through to Absent — the non-required side. An empty tag value is legal
+// on AWS, so this needed no hostile plan: a resource declaring production
+// passed a staging contract with exit 0.
+//
+// Every matching key is examined now, and what the resource said is decided by
+// what it says, not by where the alphabet puts it.
+func TestOrderDoesNotDecideTheAnswer(t *testing.T) {
+	cases := map[string]struct {
+		tags string
+		want model.FactState
+	}{
+		"an empty key sorting first": {
+			`{"Environment": "", "environment": "production"}`, model.FactUnknown},
+		"an empty key sorting last": {
+			`{"Environment": "production", "environment": ""}`, model.FactUnknown},
+		"an ill-typed key sorting first": {
+			`{"ENVIRONMENT": 123, "environment": "production"}`, model.FactUnknown},
+		"an ill-typed key sorting last": {
+			`{"Environment": "production", "environment": 123}`, model.FactUnknown},
+		"a readable key on each side of an unusable one": {
+			`{"ENVIRONMENT": "production", "Environment": "", "environment": "production"}`,
+			model.FactUnknown},
+		"two readable keys agreeing": {
+			`{"Environment": "production", "environment": "production"}`, model.FactKnown},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fact := declared.Environment(change(t, `"tags": `+tc.tags), "tags", model.CloudAWS)
+			if fact.State != tc.want {
+				t.Fatalf("state = %q, want %q (value %q)", fact.State, tc.want, fact.Get())
+			}
+		})
+	}
+}
+
+// TestTheSameTagsInEitherOrderGiveTheSameAnswer states the property the case
+// above is an instance of. A map has no order, and a verdict that depends on
+// one is a verdict that depends on something the plan did not say.
+func TestTheSameTagsInEitherOrderGiveTheSameAnswer(t *testing.T) {
+	pairs := [][2]string{
+		{`{"Environment": "", "environment": "production"}`, `{"environment": "production", "Environment": ""}`},
+		{`{"A": "x", "environment": "staging"}`, `{"environment": "staging", "A": "x"}`},
+		{`{"Environment": "a", "environment": "b"}`, `{"environment": "b", "Environment": "a"}`},
+	}
+
+	for i, pair := range pairs {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			first := declared.Environment(change(t, `"tags": `+pair[0]), "tags", model.CloudAWS)
+			second := declared.Environment(change(t, `"tags": `+pair[1]), "tags", model.CloudAWS)
+
+			if first.State != second.State || first.Get() != second.Get() {
+				t.Fatalf("one set of tags gave two answers: %v/%q and %v/%q",
+					first.State, first.Get(), second.State, second.Get())
+			}
+		})
+	}
+}
+
 // TestEveryOutcomeCarriesProvenance keeps a fact locatable whatever it says. A
 // reader told the environment could not be determined needs to know where the
 // tool looked.

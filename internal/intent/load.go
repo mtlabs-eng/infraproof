@@ -115,19 +115,39 @@ func rejectDuplicateKeys(raw []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 
-	err := walkForDuplicates(decoder, "")
+	err := walkForDuplicates(decoder, "", 0)
 	if errors.Is(err, errMalformed) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("the document %w", err)
+	}
+	return nil
 }
 
 // errMalformed ends the walk without being reported. It carries no payload: the
 // input may be a contract a user would rather not see quoted back.
 var errMalformed = errors.New("intent: the document could not be tokenized")
 
+// maxDepth bounds how far the walk will descend.
+//
+// json.Decoder.Token does not apply the nesting limit that Decode does, so this
+// walk descended where the standard library refuses — and it descended
+// expensively: a 600 KB file of nothing but brackets took forty seconds and two
+// gigabytes, and the process died rather than reporting invalid input. Because
+// the walk runs before the decode, it removed the standard library's guard from
+// the path that runs first.
+//
+// A contract is a document a human writes. The documented one nests three
+// levels and the schema has no recursive structure, so this costs nothing real.
+const maxDepth = 64
+
 // walkForDuplicates consumes exactly one JSON value from the decoder.
-func walkForDuplicates(decoder *json.Decoder, path string) error {
+func walkForDuplicates(decoder *json.Decoder, path string, depth int) error {
+	if depth > maxDepth {
+		return fmt.Errorf("is nested more than %d levels deep", maxDepth)
+	}
+
 	token, err := decoder.Token()
 	if err != nil {
 		return errMalformed
@@ -151,17 +171,17 @@ func walkForDuplicates(decoder *json.Decoder, path string) error {
 				return errMalformed
 			}
 			if seen[key] {
-				return fmt.Errorf("%s is named more than once", join(path, key))
+				return fmt.Errorf("has %s named more than once", join(path, key))
 			}
 			seen[key] = true
 
-			if err := walkForDuplicates(decoder, join(path, key)); err != nil {
+			if err := walkForDuplicates(decoder, join(path, key), depth+1); err != nil {
 				return err
 			}
 		}
 	case '[':
 		for i := 0; decoder.More(); i++ {
-			if err := walkForDuplicates(decoder, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+			if err := walkForDuplicates(decoder, fmt.Sprintf("%s[%d]", path, i), depth+1); err != nil {
 				return err
 			}
 		}

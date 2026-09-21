@@ -559,3 +559,26 @@ func principalIsEveryone(raw json.RawMessage) bool {
 	}
 	return false
 }
+
+// Governs reports the buckets an account-wide block applies to.
+//
+// It names none of them: it is scoped to the provider instance, not to a
+// resource, so the configuration records no reference and the reference-based
+// default finds nothing. Without this, an account block in a plan whose buckets
+// were all judged some other way would be reported as a resource nothing
+// examined — which is false, since every bucket verdict consults it.
+func (m Mapper) Governs(resource terraformplan.ResourceChange,
+	scope []terraformplan.ResourceChange) []string {
+
+	if resource.Type != typeAccountBlock {
+		return nil
+	}
+
+	var buckets []string
+	for i := range scope {
+		if scope[i].Type == typeBucket && sameProviderInstance(scope[i], resource) {
+			buckets = append(buckets, scope[i].Address)
+		}
+	}
+	return buckets
+}

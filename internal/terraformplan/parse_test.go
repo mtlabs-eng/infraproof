@@ -185,3 +185,36 @@ func TestMalformedImportingIsReported(t *testing.T) {
 		t.Fatalf("error %q does not locate the importing block", err.Error())
 	}
 }
+
+// TestAChangeWithoutAProviderIsInvalidInput keeps a plan's own fault from being
+// reported as this program's.
+//
+// provider_name identifies which provider manages a resource, and the Evidence
+// Bundle requires it in every finding that names one. Reading it as absent and
+// carrying the gap forward meant a plan missing it reached a bundle invariant
+// and exited 11 — "internal failure", which the CLI contract reserves for a
+// program that broke its own rules. A malformed plan is invalid input, and
+// invalid input is refused at the boundary where it arrives.
+func TestAChangeWithoutAProviderIsInvalidInput(t *testing.T) {
+	cases := map[string]string{
+		"omitted":    `"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b"`,
+		"empty":      `"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": ""`,
+		"whitespace": `"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": "   "`,
+		"null":       `"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": null`,
+	}
+
+	for name, fields := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := `{"format_version": "1.2", "resource_changes": [{` + fields +
+				`, "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}]}`
+
+			_, err := Parse([]byte(raw))
+			if err == nil {
+				t.Fatal("a change without a provider was accepted")
+			}
+			if !strings.Contains(err.Error(), "provider_name") {
+				t.Errorf("the error does not name the field: %v", err)
+			}
+		})
+	}
+}
