@@ -36,7 +36,13 @@ func Evaluate(contract intent.Contract, graph model.Graph, subject Subject) evid
 	} {
 		result.Findings = append(result.Findings, produced.Findings...)
 		result.Unknowns = append(result.Unknowns, produced.Unknowns...)
+		result.Evaluated = append(result.Evaluated, produced.Evaluated...)
 	}
+
+	// Last, because it is the only rule that reads what the others reported:
+	// it says which resources they left unjudged.
+	coverage := ResourceCoverage(graph, result.Evaluated)
+	result.Unknowns = append(result.Unknowns, coverage.Unknowns...)
 
 	decision := decide(result)
 	bundle := evidence.Bundle{

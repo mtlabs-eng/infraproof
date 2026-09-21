@@ -34,6 +34,9 @@ const (
 	// CheckContractFamilyAbsent reports a declaration the plan gave nothing to
 	// apply to.
 	CheckContractFamilyAbsent = "CONTRACT_DECLARATION_UNEXERCISED"
+	// CheckResourceEvaluated reports a resource this build understood and no
+	// rule judged.
+	CheckResourceEvaluated = "RESOURCE_EVALUATED"
 )
 
 // DestructiveChange reports changes that destroy an existing object.
@@ -304,6 +307,56 @@ func ContractCoverage(contract intent.Contract, graph model.Graph) Result {
 	slices.SortStableFunc(result.Unknowns, func(a, b evidence.Unknown) int {
 		return strings.Compare(a.Reason, b.Reason)
 	})
+	return result
+}
+
+// ResourceCoverage reports resources a mapper understood and no rule judged.
+//
+// Coverage otherwise holds by accident. Every resource is currently either
+// opaque, which raises a required unknown because its cloud is not established,
+// or object storage, which the exposure rule judges. A second mapped family
+// would break that with no symptom: the resource produces no finding, raises no
+// unknown, and the PASS beside it means "not checked" while reading as "checked
+// and fine". That is absence read as permission at the level above a rule.
+//
+// evaluated is what the rules reported judging, so this cannot go stale. A rule
+// added later that judges a new family reports it and this falls silent; a
+// mapper added without a rule does not, and this says so.
+func ResourceCoverage(graph model.Graph, evaluated []string) Result {
+	var result Result
+
+	judged := make(map[string]bool, len(evaluated))
+	for _, address := range evaluated {
+		judged[address] = true
+	}
+
+	for _, resource := range graph.Resources {
+		switch {
+		case !resource.Interpreted:
+			// Already reported, and more usefully: an opaque resource raises a
+			// required unknown naming the cloud that could not be established.
+			// Saying it twice in different words tells a reader less.
+			continue
+		case judged[resource.Address]:
+			continue
+		}
+
+		address := inline(resource.Address)
+		result.Unknowns = append(result.Unknowns, evidence.Unknown{
+			CheckID: CheckResourceEvaluated,
+			// Required. The resource was understood well enough to be
+			// normalized, so this build knows what it is and has no rule for
+			// it — which is a question this run did not answer, not a limit on
+			// an answer it gave.
+			Required: true,
+			Reason: fmt.Sprintf(
+				"This resource was normalized as %s, and no rule in this build judges that family, "+
+					"so nothing about it was checked against the contract.", resource.Family),
+			ResourceAddress: &address,
+			Evidence:        []evidence.EvidenceRef{},
+		})
+	}
+
 	return result
 }
 

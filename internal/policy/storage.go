@@ -13,6 +13,20 @@ import (
 type Result struct {
 	Findings []evidence.Finding
 	Unknowns []evidence.Unknown
+	// Evaluated names the resources whose capabilities this rule judged
+	// against the contract, by address.
+	//
+	// It exists so that coverage can be derived rather than assumed. A rule
+	// that reaches a resource and reaches no verdict about it leaves the same
+	// silence as a rule that never ran, and silence is what a PASS is made of.
+	// Reporting what was judged lets the engine say what was not, without
+	// keeping a list of families that goes stale the moment one is added.
+	//
+	// Rules that apply to every resource regardless of family — destruction,
+	// the allowed cloud set — do not populate it. They ask a question about the
+	// change, not about what the resource is for, and answering it is not
+	// evidence that the resource's own semantics were examined.
+	Evaluated []string
 }
 
 // Rule identifiers, stable across releases because consumers branch on them.
@@ -53,10 +67,13 @@ func StorageExposure(contract intent.Contract, graph model.Graph) Result {
 	for _, resource := range graph.OfFamily(model.FamilyObjectStorage) {
 		if resource.ObjectStorage == nil {
 			// A control resource: understood, but exposure belongs to the
-			// resource it controls.
+			// resource it controls. It is still evaluated — through the
+			// subject it governs, which is where its meaning went.
+			result.Evaluated = append(result.Evaluated, resource.Address)
 			continue
 		}
 		capabilities := *resource.ObjectStorage
+		result.Evaluated = append(result.Evaluated, resource.Address)
 
 		switch {
 		case capabilities.PublicAccess.IsKnown() && capabilities.PublicAccess.Get():

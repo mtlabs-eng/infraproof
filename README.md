@@ -82,7 +82,9 @@ The intent contract must be JSON. The format is documented in
 name rather than failing as a syntax error.
 
 A constraint the contract states and this build does not evaluate is reported as an unknown rather
-than passed over, so a restriction enforced by nothing never sits silently beside a `PASS`.
+than passed over, so a restriction enforced by nothing never sits silently beside a `PASS`. The same
+applies to coverage: a resource no rule judged, and a declaration the plan gave nothing to apply to,
+are both recorded. A `PASS` means everything was checked, not that nothing objected.
 
 ```sh
 go run ./cmd/infraproof inspect --plan internal/terraformplan/testdata/nested-sensitive.json

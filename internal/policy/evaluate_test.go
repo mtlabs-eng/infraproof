@@ -256,3 +256,129 @@ func TestTheSummaryNeverCarriesAPlanValue(t *testing.T) {
 		t.Fatalf("the summary carries a plan value: %q", bundle.Summary)
 	}
 }
+
+// TestAResourceNoRuleEvaluatedCannotPass closes the hole the review named as
+// the next place this project's recurring defect would live.
+//
+// Today every resource is either opaque — which raises a required unknown
+// because its cloud is not established — or object storage, which the exposure
+// rule evaluates. Coverage therefore holds by accident, not by construction.
+// The moment a second family is mapped, a resource with a known cloud and no
+// rule for its family is reached by nothing: it produces no finding, raises no
+// unknown, and the PASS beside it means "not checked" while reading as
+// "checked and fine".
+//
+// That is reading absence as permission at the coverage level, and it is the
+// one level above where the last review looked. The engine now derives what
+// was evaluated from what the rules report, rather than from a list of
+// families that would go stale the moment someone forgot to add to it.
+func TestAResourceNoRuleEvaluatedCannotPass(t *testing.T) {
+	// A mapped resource of a family this build has no rule for. It is
+	// constructed rather than parsed because no mapper produces one yet —
+	// which is the point: the guarantee must exist before the mapper does.
+	unevaluated := model.NormalizedResource{
+		Address:     "aws_sqs_queue.orders",
+		Provider:    "registry.terraform.io/hashicorp/aws",
+		Cloud:       model.CloudAWS,
+		Family:      model.Family("message_queue"),
+		Interpreted: true,
+		Environment: model.Known("staging",
+			model.Provenance{ResourceAddress: "aws_sqs_queue.orders", AttributePath: "tags.environment"}),
+	}
+
+	bundle := bundleFor(t, contract(nil), private("aws_s3_bucket.a"), unevaluated)
+
+	if bundle.Decision == evidence.DecisionPass {
+		t.Fatalf("a resource no rule evaluated reported a pass:\nfindings=%v\nunknowns=%v",
+			bundle.Findings, bundle.Unknowns)
+	}
+
+	var reported bool
+	for _, unknown := range bundle.Unknowns {
+		if unknown.CheckID != policy.CheckResourceEvaluated {
+			continue
+		}
+		reported = true
+		if unknown.ResourceAddress == nil || *unknown.ResourceAddress != "aws_sqs_queue.orders" {
+			t.Errorf("the unknown names %v, want the unevaluated resource", unknown.ResourceAddress)
+		}
+		if unknown.Reason == "" {
+			t.Error("the gap is named but not explained")
+		}
+	}
+	if !reported {
+		t.Fatalf("the unevaluated resource was not reported: %v", bundle.Unknowns)
+	}
+}
+
+// TestAnEvaluatedResourceIsNotReportedAsUnevaluated keeps the guarantee from
+// costing every clean run a note about work that was done.
+func TestAnEvaluatedResourceIsNotReportedAsUnevaluated(t *testing.T) {
+	bundle := bundleFor(t, contract(nil), private("aws_s3_bucket.a"), private("aws_s3_bucket.b"))
+
+	for _, unknown := range bundle.Unknowns {
+		if unknown.CheckID == policy.CheckResourceEvaluated {
+			t.Fatalf("an evaluated resource was reported as unevaluated: %v", unknown)
+		}
+	}
+	if bundle.Decision != evidence.DecisionPass {
+		t.Fatalf("decision = %q, want PASS", bundle.Decision)
+	}
+}
+
+// TestAControlResourceIsEvaluatedThroughItsSubject keeps the guarantee from
+// firing on resources that have no verdict of their own. A public-access block
+// is understood, and its meaning belongs to the bucket it governs; reporting it
+// as unevaluated would make every correct plan noisy and teach a reader to skip
+// the section.
+func TestAControlResourceIsEvaluatedThroughItsSubject(t *testing.T) {
+	control := model.NormalizedResource{
+		Address:     "aws_s3_bucket_public_access_block.a",
+		Provider:    "registry.terraform.io/hashicorp/aws",
+		Cloud:       model.CloudAWS,
+		Family:      model.FamilyObjectStorage,
+		Interpreted: true,
+		// No ObjectStorage: its meaning belongs to the resource it controls.
+	}
+
+	bundle := bundleFor(t, contract(nil), private("aws_s3_bucket.a"), control)
+
+	for _, unknown := range bundle.Unknowns {
+		if unknown.CheckID == policy.CheckResourceEvaluated {
+			t.Fatalf("a control resource was reported as unevaluated: %v", unknown)
+		}
+	}
+	if bundle.Decision != evidence.DecisionPass {
+		t.Fatalf("decision = %q, want PASS", bundle.Decision)
+	}
+}
+
+// TestAnOpaqueResourceIsReportedOnceNotTwice keeps the two coverage gaps
+// distinct. A resource no mapper claimed already raises a required unknown
+// saying its cloud is not established; adding a second saying no rule evaluated
+// it tells the reader the same thing in different words.
+func TestAnOpaqueResourceIsReportedOnceNotTwice(t *testing.T) {
+	opaque := model.NormalizedResource{
+		Address: "vendor_thing.x",
+		Cloud:   model.CloudUnknown,
+		Family:  model.FamilyUnknown,
+	}
+
+	bundle := bundleFor(t, contract(nil), opaque)
+
+	var evaluated, determinable int
+	for _, unknown := range bundle.Unknowns {
+		switch unknown.CheckID {
+		case policy.CheckResourceEvaluated:
+			evaluated++
+		case policy.CheckCloudDeterminable:
+			determinable++
+		}
+	}
+	if determinable != 1 {
+		t.Errorf("CLOUD_DETERMINABLE raised %d times, want 1", determinable)
+	}
+	if evaluated != 0 {
+		t.Errorf("an opaque resource was also reported as unevaluated %d times", evaluated)
+	}
+}
