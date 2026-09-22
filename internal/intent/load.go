@@ -32,6 +32,15 @@ func Parse(raw []byte, source string) (Contract, error) {
 	// for parsing must not change what the contract is identified as.
 	body := bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
 
+	if strings.HasSuffix(strings.ToLower(source), ".yaml") ||
+		strings.HasSuffix(strings.ToLower(source), ".yml") {
+		// By name as well as by content. A flow-style YAML document begins
+		// with "{" and reaches the JSON decoder, where it fails as a syntax
+		// error — the puzzle this refusal exists to prevent — and the
+		// documentation says the refusal is by name.
+		return Contract{}, fmt.Errorf(
+			"reading intent contract %s: YAML is not supported in this build; supply the contract as JSON", source)
+	}
 	if looksLikeYAML(body) {
 		return Contract{}, fmt.Errorf(
 			"reading intent contract %s: YAML is not supported in this build; supply the contract as JSON", source)
@@ -160,6 +169,16 @@ func walkForDuplicates(decoder *json.Decoder, path string, depth int) error {
 
 	switch delimiter {
 	case '{':
+		// Keys are compared folded, because that is how the decoder matches
+		// them: encoding/json fills the field "exposure" names from a key
+		// spelled "Exposure", and DisallowUnknownFields does not fire, because
+		// a field was matched. Comparing exact bytes let a contract declare
+		// private exposure and then public and be read as declaring public.
+		//
+		// The exception is a field holding names rather than schema fields.
+		// Cloud tag keys are case-sensitive, so two that differ only in case
+		// are two tags, and refusing them would reject an ordinary contract.
+		folded := !holdsNames(path)
 		seen := map[string]bool{}
 		for decoder.More() {
 			keyToken, err := decoder.Token()
@@ -170,10 +189,14 @@ func walkForDuplicates(decoder *json.Decoder, path string, depth int) error {
 			if !ok {
 				return errMalformed
 			}
-			if seen[key] {
+			identity := key
+			if folded {
+				identity = strings.ToLower(key)
+			}
+			if seen[identity] {
 				return fmt.Errorf("has %s named more than once", join(path, key))
 			}
-			seen[key] = true
+			seen[identity] = true
 
 			if err := walkForDuplicates(decoder, join(path, key), depth+1); err != nil {
 				return err
@@ -192,6 +215,13 @@ func walkForDuplicates(decoder *json.Decoder, path string, depth int) error {
 		return errMalformed
 	}
 	return nil
+}
+
+// holdsNames reports the contract paths whose keys are names a user chose
+// rather than fields this build defines. It is derived from the contract type:
+// required_tags is the only map in it.
+func holdsNames(path string) bool {
+	return path == "constraints.required_tags"
 }
 
 func join(path, key string) string {

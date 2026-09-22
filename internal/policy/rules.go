@@ -37,6 +37,9 @@ const (
 	// CheckResourceEvaluated reports a resource this build understood and no
 	// rule judged.
 	CheckResourceEvaluated = "RESOURCE_EVALUATED"
+	// CheckActionRecognized reports a change naming an operation this build
+	// does not know.
+	CheckActionRecognized = "CHANGE_ACTION_RECOGNIZED"
 )
 
 // DestructiveChange reports changes that destroy an existing object.
@@ -58,6 +61,30 @@ func DestructiveChange(contract intent.Contract, graph model.Graph) Result {
 	}
 
 	for _, resource := range graph.Resources {
+		if resource.ReadOnly {
+			continue
+		}
+		if resource.UnrecognizedAction {
+			// Destruction is read from the actions, so an action this build
+			// does not know would make this change look like one that destroys
+			// nothing. What the verb means is Terraform's to say, and a run
+			// that could not read it has not established that the change is
+			// safe.
+			address := inline(resource.Address)
+			result.Unknowns = append(result.Unknowns, evidence.Unknown{
+				CheckID:  CheckActionRecognized,
+				Required: true,
+				Reason: "This change names an operation this build does not recognize, so whether it " +
+					"destroys anything could not be determined.",
+				ResourceAddress: &address,
+				Evidence: []evidence.EvidenceRef{{
+					Source:          "terraform_plan",
+					ResourceAddress: address,
+					Path:            "resource_changes[].change.actions",
+				}},
+			})
+			continue
+		}
 		if !resource.Destructive {
 			continue
 		}
@@ -97,6 +124,10 @@ func CloudAllowed(contract intent.Contract, graph model.Graph) Result {
 
 	reported := map[model.Cloud]bool{}
 	for _, resource := range graph.Resources {
+		if resource.ReadOnly {
+			// A read does not affect a cloud; it observes one.
+			continue
+		}
 		if resource.Cloud == model.CloudUnknown || resource.Cloud == "" {
 			address := inline(resource.Address)
 			result.Unknowns = append(result.Unknowns, evidence.Unknown{
@@ -161,6 +192,9 @@ func EnvironmentMatch(contract intent.Contract, graph model.Graph) Result {
 	var result Result
 
 	for _, resource := range graph.Resources {
+		if resource.ReadOnly {
+			continue
+		}
 		declared := resource.Environment
 
 		if !declared.IsKnown() {
@@ -182,14 +216,19 @@ func EnvironmentMatch(contract intent.Contract, graph model.Graph) Result {
 			})
 			continue
 		}
-		// The comparison is exact. A tag key is a convention and its
-		// capitalization is incidental, which is why the key is matched without
-		// regard to case; a tag value is a name the author chose, and two
-		// spellings of it are two names. Folding them would let "Production"
-		// satisfy a contract written for "production", and where those are
-		// deliberately distinct environments the mismatch this rule exists to
-		// find would go unreported.
-		if declared.Get() == contract.Environment {
+		// The comparison is exact in case and forgiving of surrounding space.
+		// A tag key is a convention and its capitalization is incidental, which
+		// is why the key is matched without regard to case; a tag value is a
+		// name the author chose, and two spellings of it are two names.
+		// Folding them would let "Production" satisfy a contract written for
+		// "production", and where those are deliberately distinct environments
+		// the mismatch this rule exists to find would go unreported.
+		//
+		// Space around a name is not part of it. Both sides are trimmed where
+		// they are produced, and trimming here as well is the difference
+		// between a rule that is correct and one that is correct because of
+		// what two other packages happen to do.
+		if strings.TrimSpace(declared.Get()) == strings.TrimSpace(contract.Environment) {
 			continue
 		}
 
@@ -344,6 +383,9 @@ func ResourceCoverage(graph model.Graph, evaluated []string) Result {
 
 	for _, resource := range graph.Resources {
 		switch {
+		case resource.ReadOnly:
+			// Nothing judges a read, and nothing needs to.
+			continue
 		case !resource.Interpreted:
 			// Already reported, and more usefully: an opaque resource raises a
 			// required unknown naming the cloud that could not be established.

@@ -488,3 +488,31 @@ func TestAControlDefersOnlyToASubjectThatWasJudged(t *testing.T) {
 		})
 	}
 }
+
+// TestADataSourceNeitherBlocksNorBlocksAPass keeps a read from deciding
+// anything about a change, in either direction.
+func TestADataSourceNeitherBlocksNorBlocksAPass(t *testing.T) {
+	read := model.NormalizedResource{
+		Address: "data.aws_s3_bucket.existing", Provider: "p",
+		Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
+		ReadOnly: true,
+	}
+
+	bundle := bundleFor(t, contract(nil), private("aws_s3_bucket.a"), read)
+
+	if bundle.Decision != evidence.DecisionPass {
+		t.Fatalf("decision = %q, want PASS: findings=%v unknowns=%v",
+			bundle.Decision, bundle.Findings, bundle.Unknowns)
+	}
+	for _, finding := range bundle.Findings {
+		if finding.Resource != nil && finding.Resource.Address == read.Address {
+			t.Errorf("a data source produced a finding: %s", finding.RuleID)
+		}
+	}
+	for _, unknown := range bundle.Unknowns {
+		if unknown.Required && unknown.ResourceAddress != nil &&
+			*unknown.ResourceAddress == read.Address {
+			t.Errorf("a data source prevented a pass: %s", unknown.CheckID)
+		}
+	}
+}

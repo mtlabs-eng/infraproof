@@ -179,7 +179,13 @@ func dividers(n int) []string {
 // escapeCell keeps a cell on one row: a literal pipe is escaped and any line
 // break collapses to a space, so free-text reasons cannot break the table.
 func escapeCell(s string) string {
-	return strings.ReplaceAll(collapseBreaks(s), "|", `\|`)
+	// The backslash goes first. Escaping the pipe alone turns a cell
+	// containing "\|" into "\\|", which a Markdown renderer reads as an
+	// escaped backslash followed by a live pipe — an extra cell, and the
+	// columns past the header count are silently dropped from the report. A
+	// for_each key may contain a backslash, so a plan can produce one.
+	s = strings.ReplaceAll(collapseBreaks(s), `\`, `\\`)
+	return strings.ReplaceAll(s, "|", `\|`)
 }
 
 // prose renders a free-text field as a standalone paragraph. The bundle

@@ -31,6 +31,23 @@ type NormalizedResource struct {
 	// matters: "understood, and folded into something else" is not the same
 	// claim as "no mapper recognized this".
 	Interpreted bool
+	// ReadOnly reports that the entry describes a data source: something the
+	// plan reads rather than changes.
+	//
+	// A verdict is about a change. A data source of a type a mapper
+	// understands would otherwise be normalized as a subject and judged, so
+	// reading an existing production bucket became an environment mismatch,
+	// and reading one became a required unknown asking a read to prove its
+	// exposure. It is kept in the graph, because a plan's contents are not
+	// filtered, and it decides nothing.
+	ReadOnly bool
+	// UnrecognizedAction reports that the change names an operation this build
+	// does not know.
+	//
+	// Destructive is read from the actions, so an unfamiliar verb would make a
+	// change look like one that destroys nothing. A rule must decline to
+	// conclude rather than treat it as safe.
+	UnrecognizedAction bool
 	// DefersTo names the subjects a control resource's meaning belongs to, by
 	// address, in deterministic order.
 	//

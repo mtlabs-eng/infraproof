@@ -290,3 +290,79 @@ func TestADuplicateAddressDiagnosticCarriesNoPlanValue(t *testing.T) {
 		t.Errorf("the diagnostic is %d bytes; it is not bounded", len(err.Error()))
 	}
 }
+
+// TestAnUnrecognizedActionIsCarriedAndFlagged keeps an unfamiliar verb from
+// reading as harmless, without discarding the rest of a plan over it.
+//
+// Milestone 02 decided the parser carries what it does not understand and the
+// policy layer refuses to conclude, and Action.Valid's doc comment says so.
+// Nothing called it: IsDestructive asks whether "delete" is among the actions,
+// so "Delete", "destroy" and any invented verb read as a change that destroys
+// nothing, and a contract forbidding destruction passed them.
+func TestAnUnrecognizedActionIsCarriedAndFlagged(t *testing.T) {
+	plan := func(actions string) []byte {
+		return []byte(`{"format_version": "1.2", "resource_changes": [
+		  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+		   "provider_name": "p",
+		   "change": {"actions": ` + actions + `, "before": {"bucket": "b"}, "after": null}}
+		]}`)
+	}
+
+	for name, actions := range map[string]string{
+		"a miscased delete": `["Delete"]`,
+		"another word":      `["destroy"]`,
+		"an invented verb":  `["evaporate"]`,
+		"empty":             `[""]`,
+		"one of a pair":     `["delete", "recreate"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := Parse(plan(actions))
+			if err != nil {
+				t.Fatalf("an unrecognized action must not fail the parse: %v", err)
+			}
+			if !parsed.ResourceChanges[0].HasUnrecognizedAction() {
+				t.Fatalf("%s was not flagged as unrecognized", actions)
+			}
+		})
+	}
+
+	for name, actions := range map[string]string{
+		"a delete":              `["delete"]`,
+		"a replace":             `["delete", "create"]`,
+		"the other replace":     `["create", "delete"]`,
+		"a no-op":               `["no-op"]`,
+		"a read":                `["read"]`,
+		"an update":             `["update"]`,
+		"a forgotten resource":  `["forget"]`,
+		"a forgotten and taken": `["create", "forget"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := Parse(plan(actions))
+			if err != nil {
+				t.Fatalf("a plan Terraform emits was rejected: %v", err)
+			}
+			if parsed.ResourceChanges[0].HasUnrecognizedAction() {
+				t.Fatalf("%s is an action Terraform emits and was flagged", actions)
+			}
+		})
+	}
+}
+
+// TestForgettingAnObjectIsNotDestroyingIt keeps the new verb's meaning
+// straight. A removed block drops a resource from state and leaves the object
+// alone, so it destroys nothing — but it is understood rather than ignored.
+func TestForgettingAnObjectIsNotDestroyingIt(t *testing.T) {
+	raw := []byte(`{"format_version": "1.2", "resource_changes": [
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p",
+	   "change": {"actions": ["forget"], "before": {"bucket": "b"}, "after": null}}
+	]}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if plan.ResourceChanges[0].IsDestructive() {
+		t.Error("forgetting an object was read as destroying it")
+	}
+}

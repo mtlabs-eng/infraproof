@@ -1532,10 +1532,6 @@ func TestCountCarriesTheBindingLikeForEach(t *testing.T) {
 	}
 }
 
-// stubMapper interprets one invented type and is not a Binder, so the
-// correlation layer must treat its references as it treats any type it cannot
-// describe: admitted, because narrowing what is not understood drops
-// correlations this build cannot reason about either way.
 // stubMapper stands in for a mapper this build does not ship. It claims a type
 // the shipped registry also claims, and binds that type by a different
 // argument, so consulting the registry instead of the mappers Normalize was
@@ -1669,4 +1665,165 @@ func (openMapper) IsSubject(t string) bool  { return t == "stub_thing" }
 func (openMapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	return model.NormalizedResource{Address: subject.Address, Cloud: model.Cloud("stub"),
 		Family: model.FamilyObjectStorage, ObjectStorage: &model.ObjectStorageCapabilities{}}
+}
+
+// TestARelationHoldsOnlyBetweenTheTypesItNames covers both ends of a declared
+// relation, which a comment in this package wrongly called unobservable.
+//
+// The reasoning was that an edge between wrongly-paired types is inert, because
+// every mapper filters its related set by type. It misses the case where both
+// ends are the declared To type: two buckets, one naming the other through
+// "bucket" — which is the very attribute all four AWS relations name. Without
+// the From filter the edge is admitted, and a bucket that pairs with nothing is
+// told its correlation is open.
+func TestARelationHoldsOnlyBetweenTheTypesItNames(t *testing.T) {
+	t.Run("the claiming type must match", func(t *testing.T) {
+		// aws_s3_bucket.index names the repeated bucket in its own "bucket"
+		// argument, the way "idx-${length(aws_s3_bucket.b)}" does. No relation
+		// is declared from a bucket, so it is a mention.
+		raw := []byte(`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.b[\"alpha\"]", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "b", "index": "alpha", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "alpha"}}},
+		    {"address": "aws_s3_bucket.b[\"beta\"]", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "b", "index": "beta", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "beta"}}},
+		    {"address": "aws_s3_bucket.index", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "index", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "idx"}}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+		     "for_each_expression": {"constant_value": ["alpha", "beta"]}, "expressions": {}},
+		    {"address": "aws_s3_bucket.index", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "index",
+		     "expressions": {"bucket": {"references": ["aws_s3_bucket.b"]}}}
+		  ]}}
+		}`)
+
+		plan, err := terraformplan.Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		graph := providers.Normalize(plan, providers.Default())
+
+		resource, ok := graph.At("aws_s3_bucket.index")
+		if !ok || resource.ObjectStorage == nil {
+			t.Fatal("no normalized bucket")
+		}
+		for _, control := range resource.ObjectStorage.Unresolved {
+			if control.CheckID == "CORRELATION_UNRESOLVED" {
+				t.Fatal("a bucket mentioning another was told its correlation is open")
+			}
+		}
+	})
+
+	t.Run("the claimed type must match", func(t *testing.T) {
+		// An AWS ACL whose "bucket" argument reaches a repeated GCP bucket.
+		// The argument is one a relation names; the type it reaches is not.
+		raw := []byte(`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "google_storage_bucket.g[\"a\"]", "mode": "managed",
+		     "type": "google_storage_bucket", "name": "g", "index": "a", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"name": "a"}}},
+		    {"address": "google_storage_bucket.g[\"z\"]", "mode": "managed",
+		     "type": "google_storage_bucket", "name": "g", "index": "z", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"name": "z"}}},
+		    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+		     "name": "open", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"acl": "private"}}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "google_storage_bucket.g", "mode": "managed", "type": "google_storage_bucket",
+		     "name": "g", "for_each_expression": {"constant_value": ["a", "z"]}, "expressions": {}},
+		    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+		     "name": "open",
+		     "expressions": {"bucket": {"references": ["google_storage_bucket.g"]}}}
+		  ]}}
+		}`)
+
+		plan, err := terraformplan.Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		graph := providers.Normalize(plan, providers.Default())
+
+		for _, address := range []string{
+			`google_storage_bucket.g["a"]`, `google_storage_bucket.g["z"]`,
+		} {
+			resource, ok := graph.At(address)
+			if !ok || resource.ObjectStorage == nil {
+				t.Fatalf("no normalized bucket at %s", address)
+			}
+			for _, control := range resource.ObjectStorage.Unresolved {
+				if control.CheckID == "CORRELATION_UNRESOLVED" {
+					t.Errorf("%s was told a correlation is open with a control of another cloud",
+						address)
+				}
+			}
+		}
+	})
+}
+
+// TestAMapperThatDeclaresNothingIsNotSilent pins the third behaviour the
+// redesign changed without a test: a mapper that understands a type and does
+// not implement Binder has said nothing about what its references mean, so its
+// references are admitted. A mapper that implements Binder and declares no
+// relation from the type has said the type makes no claims.
+func TestAMapperThatDeclaresNothingIsNotSilent(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "stub_thing.a", "mode": "managed", "type": "stub_thing", "name": "a",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"name": "a"}}},
+	    {"address": "stub_control.c", "mode": "managed", "type": "stub_control", "name": "c",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"name": "c"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "stub_thing.a", "mode": "managed", "type": "stub_thing", "name": "a",
+	     "expressions": {}},
+	    {"address": "stub_control.c", "mode": "managed", "type": "stub_control", "name": "c",
+	     "expressions": {"anything": {"references": ["stub_thing.a"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	// openMapper understands both types and implements no Binder: silence.
+	silent := providers.Normalize(plan, []providers.Mapper{openMapper{}})
+	control, ok := silent.At("stub_control.c")
+	if !ok {
+		t.Fatal("no normalized control")
+	}
+	if len(control.DefersTo) != 1 {
+		t.Fatalf("defers to %v; a mapper that declared nothing has not forbidden anything",
+			control.DefersTo)
+	}
+
+	// muteMapper understands both and declares no relation from the control:
+	// a statement that it makes no claims.
+	spoken := providers.Normalize(plan, []providers.Mapper{muteMapper{}})
+	control, ok = spoken.At("stub_control.c")
+	if !ok {
+		t.Fatal("no normalized control")
+	}
+	if len(control.DefersTo) != 0 {
+		t.Fatalf("defers to %v; the mapper declared no relation from this type",
+			control.DefersTo)
+	}
+}
+
+// muteMapper declares relations and declares none from stub_control.
+type muteMapper struct{ openMapper }
+
+func (muteMapper) Bindings() []declared.Binding {
+	return []declared.Binding{{From: "stub_thing", Attribute: "x", To: "stub_thing"}}
 }

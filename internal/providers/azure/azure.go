@@ -245,3 +245,9 @@ func (Mapper) Bindings() []declared.Binding {
 		{From: typeContainer, Attribute: "storage_account_name", To: typeAccount},
 	}
 }
+
+// Environment reads a resource's declared environment with this provider's
+// vocabulary, so a control resource is asked the same question as a subject.
+func (m Mapper) Environment(change terraformplan.ResourceChange) model.Fact[string] {
+	return declared.Environment(change, attrTags, model.CloudAzure)
+}

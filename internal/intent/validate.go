@@ -86,12 +86,19 @@ func (c Contract) validateEnvelope() []error {
 // A later minor version may add fields this build can safely ignore; a later
 // major version may redefine one it believes it understands.
 func validateSchemaVersion(version string) error {
-	major, _, found := strings.Cut(version, ".")
+	major, minor, found := strings.Cut(version, ".")
 	if !found {
 		return fmt.Errorf("schema_version is %q, want a major.minor version such as %q",
 			version, SchemaVersion)
 	}
 
+	// Both components, and both by the Evidence Bundle's own rule: strconv.Atoi
+	// accepts "+1" and "001", and leaving the minor unchecked accepted "1.x.y"
+	// as a version this build understands.
+	if !isPlainNumber(major) || !isPlainNumber(minor) {
+		return fmt.Errorf("schema_version is %q, want a major.minor version such as %q",
+			version, SchemaVersion)
+	}
 	number, err := strconv.Atoi(major)
 	if err != nil {
 		return fmt.Errorf("schema_version is %q, want a numeric major version", version)
@@ -103,6 +110,20 @@ func validateSchemaVersion(version string) error {
 		return fmt.Errorf("schema_version is %q; this build understands major version %d", version, want)
 	}
 	return nil
+}
+
+// isPlainNumber matches the Evidence Bundle's rule for a version component:
+// digits, no sign, no leading zero beyond zero itself.
+func isPlainNumber(s string) bool {
+	if s == "" || (len(s) > 1 && s[0] == '0') {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (c Contract) validateClouds() []error {

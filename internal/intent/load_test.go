@@ -489,3 +489,115 @@ func TestAContractOfOrdinaryShapeIsNotRefusedForDepth(t *testing.T) {
 		t.Fatalf("an ordinary contract was rejected: %v", err)
 	}
 }
+
+// TestKeysThatFoldTogetherAreRejected closes a contract that says two things in
+// one field and is read as saying the second.
+//
+// encoding/json matches a struct tag case-insensitively, so "Exposure" fills
+// the field "exposure" names. DisallowUnknownFields does not fire, because a
+// field was matched. The duplicate walk compared exact bytes and saw two
+// different keys. A contract declaring private exposure and then public was
+// therefore read as declaring public, which downgrades a proven public bucket
+// from a block to a warning.
+//
+// The walk now refuses any two keys the decoder would fold together, which is
+// the same rule it already applied to keys spelled identically, for the same
+// reason: they either agree and one is noise, or disagree and neither can be
+// applied.
+func TestKeysThatFoldTogetherAreRejected(t *testing.T) {
+	cases := map[string]string{
+		"a folded exposure": strings.Replace(valid,
+			`"exposure": "private"`, `"exposure": "private", "Exposure": "public"`, 1),
+		"a folded envelope field": strings.Replace(valid,
+			`"environment": "staging",`, `"environment": "staging", "Environment": "production",`, 1),
+		"a folded destructive policy": strings.Replace(valid,
+			`"destructive_changes": "forbidden",`,
+			`"destructive_changes": "forbidden", "DESTRUCTIVE_CHANGES": "allowed_with_warning",`, 1),
+		"a folded schema version": strings.Replace(valid,
+			`"schema_version": "1.0",`, `"schema_version": "1.0", "Schema_Version": "9.0",`, 1),
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			if raw == valid {
+				t.Fatal("the test did not change the contract")
+			}
+			_, err := intent.Parse([]byte(raw), "contract.json")
+			if err == nil {
+				t.Fatal("a contract naming one field twice was accepted")
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "more than once") {
+				t.Errorf("the error does not name the problem: %v", err)
+			}
+		})
+	}
+}
+
+// TestTagsDifferingOnlyInCaseAreTwoTags keeps the folding rule off the one
+// place a contract carries names rather than fields. Cloud tag keys are
+// case-sensitive, so "Owner" and "owner" are two tags, and refusing them would
+// reject a contract that says something perfectly ordinary.
+func TestTagsDifferingOnlyInCaseAreTwoTags(t *testing.T) {
+	raw := strings.Replace(valid, `"destructive_changes": "forbidden",`,
+		`"destructive_changes": "forbidden",
+		 "constraints": {"required_tags": {"Owner": "checkout", "owner": "payments"}},`, 1)
+
+	contract, err := intent.Parse([]byte(raw), "contract.json")
+	if err != nil {
+		t.Fatalf("two tags differing in case were rejected: %v", err)
+	}
+	if len(contract.Constraints.RequiredTags) != 2 {
+		t.Fatalf("required tags = %v, want both", contract.Constraints.RequiredTags)
+	}
+}
+
+// TestSchemaVersionMatchesTheBundlesRule keeps the contract's version check as
+// strict as the one the Evidence Bundle applies to its own. strconv.Atoi
+// accepts a sign and leading zeros; a version is digits.
+func TestSchemaVersionMatchesTheBundlesRule(t *testing.T) {
+	for version, accepted := range map[string]bool{
+		"1.0":   true,
+		"1.12":  true,
+		"+1.0":  false,
+		"001.0": false,
+		"1.x.y": false,
+		// Surrounding space is trimmed at load, as it is for every other
+		// field a contract carries; a version with a stray space is a typo
+		// rather than a different version.
+		" 1.0": true,
+		"1.0 ": true,
+	} {
+		t.Run(version, func(t *testing.T) {
+			raw := strings.Replace(valid, `"schema_version": "1.0"`,
+				`"schema_version": "`+version+`"`, 1)
+			_, err := intent.Parse([]byte(raw), "contract.json")
+			if accepted && err != nil {
+				t.Fatalf("version %q was rejected: %v", version, err)
+			}
+			if !accepted && err == nil {
+				t.Fatalf("version %q was accepted", version)
+			}
+		})
+	}
+}
+
+// TestAYAMLNameIsRefusedWhateverIsInside keeps the refusal matching what the
+// documentation promises. A flow-style YAML document begins with "{" and
+// reaches the JSON decoder, where it fails as a syntax error — which is the
+// puzzle the refusal exists to prevent.
+func TestAYAMLNameIsRefusedWhateverIsInside(t *testing.T) {
+	for _, name := range []string{"intent.yaml", "intent.yml", "INTENT.YAML", "a/b/c.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			// Flow style: valid YAML, and valid-looking JSON openers.
+			raw := `{schema_version: "1.0", change_id: c}`
+
+			_, err := intent.Parse([]byte(raw), name)
+			if err == nil {
+				t.Fatal("a YAML file was accepted")
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "yaml") {
+				t.Errorf("the error does not say the format is the problem: %v", err)
+			}
+		})
+	}
+}

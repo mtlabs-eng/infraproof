@@ -516,7 +516,7 @@ func TestTheEnvironmentValueIsComparedExactly(t *testing.T) {
 		"the same spelling":     {"staging", false},
 		"a different case":      {"Staging", true},
 		"a different name":      {"production", true},
-		"surrounding space":     {"staging", false},
+		"surrounding space":     {" staging ", false},
 		"a different case only": {"STAGING", true},
 	}
 
@@ -628,5 +628,53 @@ func TestAHostilePlanValueIsReportedNotRefused(t *testing.T) {
 	}
 	if !strings.Contains(found[0].Observed.Value.Display(), "production") {
 		t.Errorf("the reported value lost its content: %q", found[0].Observed.Value.Display())
+	}
+}
+
+// TestAnUnrecognizedActionPreventsAConclusion is the refusal Action.Valid's doc
+// comment has promised since milestone 02 and nothing performed.
+//
+// Destruction is read as "delete is among the actions", so an action this build
+// does not know reads as a change that destroys nothing. A plan whose verb is
+// "destroy", or "Delete", or something a later Terraform invents, passed a
+// contract forbidding destruction with exit 0. What the verb means is
+// Terraform's to say; this build must decline rather than assume it is safe.
+func TestAnUnrecognizedActionPreventsAConclusion(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+			Interpreted: true, UnrecognizedAction: true},
+	}}
+
+	result := policy.DestructiveChange(contract(nil), graph)
+
+	if len(result.Findings) != 0 {
+		t.Fatalf("findings = %v; an action this build cannot read proves nothing", result.Findings)
+	}
+	unknowns := unknownsFor(result, policy.CheckActionRecognized)
+	if len(unknowns) != 1 {
+		t.Fatalf("unknowns = %v, want the unreadable action reported", result.Unknowns)
+	}
+	if !unknowns[0].Required {
+		t.Error("a change this build cannot read must not pass")
+	}
+	if unknowns[0].ResourceAddress == nil || *unknowns[0].ResourceAddress != "aws_s3_bucket.b" {
+		t.Errorf("the unknown names %v", unknowns[0].ResourceAddress)
+	}
+}
+
+// TestARecognizedActionIsJudgedNormally keeps the refusal off every ordinary
+// change.
+func TestARecognizedActionIsJudgedNormally(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.gone", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+			Interpreted: true, Destructive: true},
+	}}
+
+	result := policy.DestructiveChange(contract(nil), graph)
+	if len(findingsFor(result, policy.RuleDestructiveChange)) != 1 {
+		t.Fatalf("findings = %v, want the destruction reported", result.Findings)
+	}
+	if len(unknownsFor(result, policy.CheckActionRecognized)) != 0 {
+		t.Errorf("unknowns = %v, want none", result.Unknowns)
 	}
 }

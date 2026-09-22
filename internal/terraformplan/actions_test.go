@@ -72,6 +72,9 @@ func TestSingleActionShapes(t *testing.T) {
 // breaking the parser outright. The action is preserved and reported invalid so
 // the policy layer can refuse to conclude, rather than being silently dropped
 // or treated as safe.
+// The example verb was "forget" until Terraform 1.14 made it real, for a
+// removed block. Carrying an actual action as the illustration of an unknown
+// one would have tested nothing once this build learned it.
 func TestUnrecognizedActionIsCarriedNotRejected(t *testing.T) {
 	raw := []byte(`{
 	  "format_version": "1.2",
@@ -82,7 +85,7 @@ func TestUnrecognizedActionIsCarriedNotRejected(t *testing.T) {
 	      "type": "aws_s3_bucket",
 	      "name": "assets",
 	      "provider_name": "registry.terraform.io/hashicorp/aws",
-	      "change": {"actions": ["forget"], "before": null, "after": {}}
+	      "change": {"actions": ["evaporate"], "before": null, "after": {}}
 	    }
 	  ]
 	}`)
@@ -92,7 +95,7 @@ func TestUnrecognizedActionIsCarriedNotRejected(t *testing.T) {
 		t.Fatalf("an unrecognized action must not fail the parse: %v", err)
 	}
 	change := plan.ResourceChanges[0]
-	if want := []Action{Action("forget")}; !reflect.DeepEqual(change.Actions, want) {
+	if want := []Action{Action("evaporate")}; !reflect.DeepEqual(change.Actions, want) {
 		t.Fatalf("actions = %v, want %v", change.Actions, want)
 	}
 	if change.Actions[0].Valid() {

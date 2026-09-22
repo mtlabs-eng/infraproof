@@ -546,3 +546,101 @@ func TestGovernsClaimsOnlyWhatItGoverns(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryResourceIsAskedWhereItBelongs closes a claim the bundle made about
+// resources nothing had read.
+//
+// Only a subject went through the environment reader. A control resource and an
+// opaque one kept the zero fact, which the rule then reported as "the resource
+// declares no environment" — a false statement in a document whose only value
+// is that its statements are true, and the same defect the CLOUD_DETERMINABLE
+// wording was corrected for.
+//
+// A control carries tags like anything else, and a resource no mapper
+// understood carries whatever it carries. Reading the attribute is one call;
+// not reading it and then describing the result was the error.
+func TestEveryResourceIsAskedWhereItBelongs(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "tags": {"environment": "staging"}}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"tags": {"environment": "production"},
+	                          "block_public_acls": true}}},
+	    {"address": "vendor_thing.x", "mode": "managed", "type": "vendor_thing", "name": "x",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"tags": {"environment": "production"}}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "vendor_thing.x", "mode": "managed", "type": "vendor_thing", "name": "x",
+	     "expressions": {}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_bucket_public_access_block.assets")
+	if !control.Environment.IsKnown() || control.Environment.Get() != "production" {
+		t.Errorf("a control's environment was not read: %v/%q",
+			control.Environment.State, control.Environment.Get())
+	}
+
+	// A resource no mapper understood has no provider vocabulary to read it
+	// by, so it declares nothing — and must say that rather than nothing at
+	// all, which is what a zero fact says.
+	opaque := normalizedAt(t, raw, "vendor_thing.x")
+	if opaque.Interpreted {
+		t.Fatal("no mapper should have claimed this resource")
+	}
+	if opaque.Environment.State == "" {
+		t.Error("an opaque resource carries no answer at all, not even that none was reachable")
+	}
+	if opaque.Environment.IsKnown() {
+		t.Errorf("an opaque resource's tags were read by a vocabulary no mapper vouched for: %q",
+			opaque.Environment.Get())
+	}
+}
+
+// TestADataSourceIsNotAChange keeps a read out of a verdict about a change.
+//
+// Mode was parsed and read by nothing, so a data source of a supported type was
+// normalized as a subject and judged: reading an existing production bucket
+// produced an environment mismatch, and reading one alone produced a required
+// unknown asking a read to prove its exposure. Neither is about the change, and
+// docs/PRODUCT.md disclaims saying anything about existing infrastructure.
+//
+// A data source is kept in the graph, because a plan's contents are not
+// filtered, and it carries no capabilities, because it changes nothing.
+func TestADataSourceIsNotAChange(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+	     "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "prod", "tags": {"environment": "production"}}}}
+	  ]
+	}`
+
+	resource := normalizedAt(t, raw, "data.aws_s3_bucket.existing")
+
+	if resource.ObjectStorage != nil {
+		t.Error("a data source was given capabilities; it changes nothing to have them about")
+	}
+	if resource.Environment.IsKnown() {
+		t.Errorf("a data source declared an environment for the change: %q", resource.Environment.Get())
+	}
+	if resource.Destructive {
+		t.Error("a read was called destructive")
+	}
+}

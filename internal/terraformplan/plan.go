@@ -64,6 +64,10 @@ const (
 	ActionUpdate Action = "update"
 	// ActionDelete means the object is destroyed.
 	ActionDelete Action = "delete"
+	// ActionForget means the object is dropped from state and left alone,
+	// which a "removed" block asks for. It is not destruction: the object
+	// survives the change, and only Terraform's record of it does not.
+	ActionForget Action = "forget"
 )
 
 // Valid reports whether a is an action this build recognizes. An unrecognized
@@ -72,7 +76,7 @@ const (
 // conclude rather than treat an unfamiliar action as safe.
 func (a Action) Valid() bool {
 	switch a {
-	case ActionNoOp, ActionCreate, ActionRead, ActionUpdate, ActionDelete:
+	case ActionNoOp, ActionCreate, ActionRead, ActionUpdate, ActionDelete, ActionForget:
 		return true
 	}
 	return false
@@ -195,6 +199,25 @@ func (c ResourceChange) IsReplace() bool {
 // object, which covers a plain delete and both replace orderings.
 func (c ResourceChange) IsDestructive() bool {
 	return slices.Contains(c.Actions, ActionDelete)
+}
+
+// HasUnrecognizedAction reports that the change names an operation this build
+// does not know.
+//
+// It matters because IsDestructive asks whether "delete" is among the actions,
+// so an unfamiliar verb reads as a change that destroys nothing — and a
+// contract forbidding destruction passed one. What the verb means is
+// Terraform's to say and not this program's to guess, so a caller must refuse
+// to conclude rather than treat it as safe. The parser carries it rather than
+// rejecting the plan, because a plan using a feature this build has not learned
+// is still a plan, and the rest of it is still worth reading.
+func (c ResourceChange) HasUnrecognizedAction() bool {
+	for _, action := range c.Actions {
+		if !action.Valid() {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateBeforeDestroy reports the replacement ordering in which the new object

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,6 +31,14 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	format := flags.String("format", "json", "output format: json or markdown")
 
 	if err := flags.Parse(args); err != nil {
+		// Asking a command to describe itself is not a usage error, and the
+		// exit contract reserves 10 for one. The flag package reports --help
+		// through the same error path as a malformed flag, so the two are
+		// separated here.
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, checkUsage)
+			return evidence.ExitPass
+		}
 		return evidence.ExitInvalidInput
 	}
 	if flags.NArg() > 0 {
@@ -82,6 +91,29 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 
 	return evidence.ExitCode(bundle.Decision)
 }
+
+// checkUsage describes the command. It is written out rather than left to the
+// flag package so that the two places a reader can ask — this and the top-level
+// --help — say the same thing.
+const checkUsage = `Usage:
+  infraproof check --intent <path> --plan <path> [--format json|markdown]
+
+  --intent   path to an intent contract JSON file
+  --plan     path to a Terraform or OpenTofu plan JSON file
+  --format   output format: json (default) or markdown
+
+Both files are read locally. The command reaches no network, needs no cloud
+account, and never applies anything. The intent contract must be JSON; YAML is
+not supported in this build.
+
+Exit codes:
+  0   PASS
+  2   WARN
+  3   BLOCK
+  4   UNKNOWN
+  10  invalid input or usage
+  11  internal failure
+`
 
 // renderers are the output formats. Both render the same bundle, so a reader
 // and a pipeline cannot be told different things.

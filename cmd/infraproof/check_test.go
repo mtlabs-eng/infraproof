@@ -227,8 +227,11 @@ func TestOperationalErrorsAreNotDecisions(t *testing.T) {
 func TestAYAMLContractIsRefusedByName(t *testing.T) {
 	yaml := "schema_version: \"1.0\"\nchange_id: c\nenvironment: staging\n"
 
+	// The file is deliberately not named .yaml: the path appears in every
+	// error, so naming it there would make the assertion true whatever the
+	// code did. internal/intent/load_test.go warns about exactly this.
 	code, _, stderr := check(t,
-		"--intent", write(t, "intent.yaml", yaml),
+		"--intent", write(t, "contract.txt", yaml),
 		"--plan", write(t, "plan.json", passingPlan))
 
 	if code != evidence.ExitInvalidInput {
@@ -387,5 +390,25 @@ func TestNoNetworkOrCloudCredentialIsReachable(t *testing.T) {
 				t.Errorf("the command depends on %s", banned)
 			}
 		}
+	}
+}
+
+// TestCheckHelpExitsSuccessfully keeps the exit contract whole. The README
+// defines 10 as invalid input or usage, and asking a command to describe itself
+// is neither. The top-level --help exits 0; this one went through the flag
+// package's own error path and exited 10.
+func TestCheckHelpExitsSuccessfully(t *testing.T) {
+	for _, flag := range []string{"--help", "-h"} {
+		t.Run(flag, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			code := run([]string{"check", flag}, &stdout, &stderr)
+
+			if code != evidence.ExitPass {
+				t.Fatalf("exit = %d, want %d", code, evidence.ExitPass)
+			}
+			if !strings.Contains(stdout.String(), "--intent") {
+				t.Errorf("help does not describe the command:\n%s", stdout.String())
+			}
+		})
 	}
 }

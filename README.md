@@ -24,7 +24,7 @@ The initial product is an offline CLI. It consumes a structured intent contract 
 
 ## Status
 
-Two milestones are implemented.
+Four milestones are implemented.
 
 **Evidence Bundle** — modelled, validated, ordered canonically, and rendered as stable JSON and
 Markdown, with an exit-code contract.

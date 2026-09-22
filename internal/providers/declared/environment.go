@@ -1,9 +1,12 @@
-// Package declared reads facts that every cloud states in the same shape under
-// a different name.
+// Package declared holds what a mapper states about its own provider, in forms
+// the correlation and normalization layers can use without knowing any cloud.
 //
-// It exists so that the reading rule is written once and the provider-specific
-// part is reduced to what it genuinely is: the name of an attribute. A mapper
-// passes its own key and gets back a fact with provenance.
+// Two kinds of statement live here. A fact every cloud states in the same shape
+// under a different name — an environment carried in tags or labels — is read
+// once here, so the provider-specific part is reduced to what it genuinely is:
+// the name of an attribute. And a governance relation a mapper declares is
+// described here because the mappers that declare them cannot import the
+// package that assembles them.
 package declared
 
 import (

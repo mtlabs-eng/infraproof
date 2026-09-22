@@ -78,6 +78,19 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange, mappers []Mapper) model.NormalizedResource {
 
+	if change.Mode == terraformplan.ModeData {
+		// A data source is read, not changed. It is kept, because nothing in a
+		// plan is filtered away, and it is given no capabilities, because a
+		// verdict is about a change and this is not one.
+		return model.NormalizedResource{
+			Address:  change.Address,
+			Provider: change.ProviderName,
+			Cloud:    model.CloudUnknown,
+			Family:   model.FamilyUnknown,
+			ReadOnly: true,
+		}
+	}
+
 	for _, mapper := range mappers {
 		if !mapper.Interprets(change.Type) {
 			continue
@@ -88,18 +101,25 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 			// recorded, because "it was judged through its subject" is a claim
 			// nothing downstream can check without it — and a control whose
 			// subject is managed elsewhere defers to nobody.
+			// A control carries tags like anything else. Leaving the fact at
+			// its zero value made the rule say the resource declared no
+			// environment, which is a statement about a resource nothing had
+			// read.
 			return model.NormalizedResource{
-				Address:     change.Address,
-				Provider:    change.ProviderName,
-				Cloud:       mapper.Cloud(),
-				Family:      model.FamilyObjectStorage,
-				Destructive: change.IsDestructive(),
-				Interpreted: true,
-				DefersTo:    defersTo(change, edges[change.Address], scope, mapper),
+				Address:            change.Address,
+				Provider:           change.ProviderName,
+				Cloud:              mapper.Cloud(),
+				Family:             model.FamilyObjectStorage,
+				Destructive:        change.IsDestructive(),
+				Interpreted:        true,
+				UnrecognizedAction: change.HasUnrecognizedAction(),
+				Environment:        environmentOf(change, mapper),
+				DefersTo:           defersTo(change, edges[change.Address], scope, mapper),
 			}
 		}
 		resource := mapper.Map(change, edges[change.Address], scope)
 		resource.Interpreted = true
+		resource.UnrecognizedAction = change.HasUnrecognizedAction()
 		if resource.ObjectStorage == nil {
 			// A subject that reached no verdict of its own has deferred to
 			// something. An Azure account with a container in the plan is the
@@ -109,13 +129,40 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 		return resource
 	}
 
+	// No mapper claimed this resource, so there is no provider vocabulary to
+	// read an environment by: whichever attribute a tag block would sit in is
+	// this build's guess, not a fact. The answer is that none was reachable,
+	// which is not the same as the resource having said nothing — and not the
+	// same as no answer at all, which is what a zero fact reports.
 	return model.NormalizedResource{
-		Address:     change.Address,
-		Provider:    change.ProviderName,
-		Cloud:       model.CloudUnknown,
-		Family:      model.FamilyUnknown,
-		Destructive: change.IsDestructive(),
+		Address:            change.Address,
+		Provider:           change.ProviderName,
+		Cloud:              model.CloudUnknown,
+		Family:             model.FamilyUnknown,
+		Destructive:        change.IsDestructive(),
+		UnrecognizedAction: change.HasUnrecognizedAction(),
+		// No provenance: whichever attribute a tag block would sit in is this
+		// build's guess, so there is nothing to cite.
+		Environment: model.Unknown[string](),
 	}
+}
+
+// environmentOf reads a control resource's declared environment, using the
+// vocabulary of the mapper that claimed it.
+//
+// A mapper that does not offer one leaves the answer unreachable rather than
+// absent: this build did not look, which is not the same as the resource
+// having said nothing.
+func environmentOf(change terraformplan.ResourceChange, mapper Mapper) model.Fact[string] {
+	reader, ok := mapper.(interface {
+		Environment(terraformplan.ResourceChange) model.Fact[string]
+	})
+	if !ok {
+		// No provenance: there is no attribute to name, because none was
+		// consulted. A reference that locates nothing is not evidence.
+		return model.Unknown[string]()
+	}
+	return reader.Environment(change)
 }
 
 // defersTo returns the addresses whose judgement answers for this resource.
@@ -247,13 +294,15 @@ func governs(from, to terraformplan.ResourceChange,
 		return reference.Attribute != orderingAttribute
 	}
 
-	// Both ends of a relation are checked, and the claimed type is checked
-	// even though nothing observes it today: every mapper filters its related
-	// set by type, and the undecidability record attaches only to a subject, so
-	// an edge between two wrongly-paired types is inert wherever it lands.
-	// It is kept because "inert" is a property of today's three mappers rather
-	// than of this function, and because a relation that names three things and
-	// checks two is not the design this replaced a patch with.
+	// Both ends of the relation are checked, and both matter. An earlier
+	// comment here claimed neither was observable, reasoning that every mapper
+	// re-filters its related set by type. That misses the case where both ends
+	// are the declared To type — two buckets, one naming the other through the
+	// very argument all four AWS relations name — and the case where the
+	// claimed type belongs to another cloud entirely. Both admit an edge that
+	// reaches the undecidability record, which tells a reader their plan
+	// leaves a correlation open between resources the configuration never
+	// related.
 	var declaredBetween bool
 	for _, binding := range declared {
 		if binding.To != to.Type {
@@ -304,28 +353,13 @@ func declarationsFor(resourceType string, mappers []Mapper) (bool, []declared.Bi
 		spoken = true
 		for _, binding := range binder.Bindings() {
 			// Filtering by From here and by To at the call site checks both
-			// ends of the relation. Neither is observable with today's three
-			// mappers, because each filters its related set by type and the
-			// undecidability record attaches only to a subject — but which
-			// half of a three-part relation is worth checking is not a
-			// question this function should answer differently by accident.
+			// ends of the relation. Both are observable, and both have tests.
 			if binding.From == resourceType {
 				relations = append(relations, binding)
 			}
 		}
 	}
 	return spoken, relations
-}
-
-// bindings collects every relation the given mappers declare.
-func bindings(mappers []Mapper) []declared.Binding {
-	var relations []declared.Binding
-	for _, mapper := range mappers {
-		if binder, ok := mapper.(Binder); ok {
-			relations = append(relations, binder.Bindings()...)
-		}
-	}
-	return relations
 }
 
 // relation is what a reference establishes about one candidate target. Not

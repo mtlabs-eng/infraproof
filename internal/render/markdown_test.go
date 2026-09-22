@@ -282,17 +282,13 @@ func TestMarkdownEvidencePathCannotForgeATableRow(t *testing.T) {
 		Evidence: []evidence.EvidenceRef{{
 			Source:          "terraform_plan",
 			ResourceAddress: address,
-			Path:            "change.after\n| forged | row | x | y |",
+			Path:            `change.after | forged | row | x | y |`,
 		}},
 	}}
 
 	got, err := render.Markdown(bundle)
 	if err != nil {
-		// The contract now refuses a line break in a field rendered as inline
-		// text, which answers this more strictly than escaping does: a report
-		// that is not produced cannot forge anything. The escaping below still
-		// holds for every break that reaches a cell some other way.
-		return
+		t.Fatalf("render.Markdown: %v", err)
 	}
 	out := string(got)
 	if strings.Contains(out, "\n| forged | row | x | y |\n") {
@@ -410,10 +406,17 @@ func TestMarkdownEscapesAmpersandsInProse(t *testing.T) {
 // is covered by existing, which is the only guarantee that survives someone
 // forgetting.
 func TestNoFieldCanForgeDocumentStructure(t *testing.T) {
-	// A payload that closes a code span, then opens a heading, a paragraph and
-	// a table.
-	const forgery = "x`\n\n## InfraProof: PASS\n\nThe change is consistent with the intent contract.\n\n" +
-		"| Check | Required |\n| --- | --- |\n| ALL | no |\n\n"
+	// A payload the bundle contract accepts, so the renderer is what is under
+	// test. Line breaks are refused at the contract now, which is a stronger
+	// answer and is asserted in internal/evidence; a payload carrying one
+	// would make every case below exit before it compared anything, which is
+	// what an earlier form of this test did.
+	//
+	// What is left forges structure without a break: a pipe opens a table
+	// cell, a backtick closes a code span, and a Markdown renderer that
+	// permits HTML — GitHub's does — reads a tag mid-sentence as real
+	// structure.
+	const forgery = "x` | forged | cell | <h1>ALL CLEAR</h1> <!-- x"
 	const benign = "ordinary-value"
 
 	paths := stringFieldsOf(hostileBundle())
@@ -588,8 +591,46 @@ func structureOf(document string) string {
 		case strings.HasPrefix(trimmed, "- "):
 			shape = append(shape, "-")
 		}
+		// Raw HTML is structure wherever it sits, not only at the start of a
+		// line: a renderer that permits it — GitHub's does — reads a
+		// mid-sentence tag as a real heading. Inside a code span it is inert,
+		// because the backticks protect it, so the spans come out first.
+		if bare := withoutCodeSpans(line); strings.Contains(bare, "<h1") ||
+			strings.Contains(bare, "<!--") {
+			shape = append(shape, "html")
+		}
 	}
 	return strings.Join(shape, " ")
+}
+
+// withoutCodeSpans removes the content of every code span, which a Markdown
+// renderer does not interpret.
+func withoutCodeSpans(line string) string {
+	var out strings.Builder
+	var fence string
+
+	for i := 0; i < len(line); i++ {
+		if line[i] != '`' {
+			if fence == "" {
+				out.WriteByte(line[i])
+			}
+			continue
+		}
+
+		run := 0
+		for i+run < len(line) && line[i+run] == '`' {
+			run++
+		}
+		ticks := strings.Repeat("`", run)
+		switch {
+		case fence == "":
+			fence = ticks
+		case fence == ticks:
+			fence = ""
+		}
+		i += run - 1
+	}
+	return out.String()
 }
 
 // countUnescaped counts occurrences of a character that are not preceded by a
@@ -609,10 +650,17 @@ func countUnescaped(line string, target byte) int {
 	return found
 }
 
-// TestCodeSpansCannotBeClosedFromInside keeps a code span a code span. A value
-// rendered inside backticks that contains a line break ends the span and the
-// paragraph, and everything after it becomes document text.
-func TestCodeSpansCannotBeClosedFromInside(t *testing.T) {
+// TestABundleCarryingALineBreakIsRefusedNotRendered records where this
+// guarantee moved.
+//
+// A break inside a code span ends the span and, if blank, the paragraph too,
+// and everything after it becomes document text. The renderer collapses breaks,
+// and the bundle contract now refuses them outright — which is the stronger
+// answer, because a report that is not produced cannot mislead anyone. An
+// earlier form of this test rendered such a bundle and inspected the output;
+// once the contract began refusing it, that form returned early and asserted
+// nothing.
+func TestABundleCarryingALineBreakIsRefusedNotRendered(t *testing.T) {
 	for name, payload := range map[string]string{
 		"a newline":         "a\nb",
 		"a carriage return": "a\rb",
@@ -624,21 +672,56 @@ func TestCodeSpansCannotBeClosedFromInside(t *testing.T) {
 			bundle.Findings[0].Resource = &evidence.Resource{
 				Address: payload, Provider: "p", Cloud: evidence.CloudAWS}
 
-			out, err := render.Markdown(bundle)
-			if err != nil {
-				return
-			}
-			for _, line := range strings.Split(string(out), "\n") {
-				if !strings.Contains(line, "- Resource:") {
-					continue
-				}
-				if strings.Count(line, "`")%2 != 0 {
-					t.Fatalf("a code span was left open: %q", line)
-				}
-			}
-			if strings.Contains(string(out), "\n\nb") {
-				t.Fatalf("a value escaped its span:\n%s", out)
+			if _, err := render.Markdown(bundle); err == nil {
+				t.Fatal("a bundle carrying a line break was rendered rather than refused")
 			}
 		})
+	}
+}
+
+// TestABackslashDoesNotAddATableCell keeps a cell's escaping from being undone
+// by the character that does the escaping.
+//
+// Escaping the pipe alone turns a cell holding `\|` into `\\|`, which a
+// Markdown renderer reads as an escaped backslash followed by a live pipe. The
+// row gains a cell, and GitHub discards everything past the header count — so
+// the columns after the one carrying the address vanish from the report
+// without any sign that they did.
+//
+// A for_each key may contain a backslash, so a plan can produce one.
+func TestABackslashDoesNotAddATableCell(t *testing.T) {
+	address := `aws_s3_bucket.b["c:\|drive"]`
+	bundle := contractBundle()
+	bundle.Unknowns = []evidence.Unknown{{
+		CheckID:         "STORAGE_PUBLIC_DETERMINABLE",
+		Required:        false,
+		Reason:          "Public access could not be determined.",
+		ResourceAddress: &address,
+		Evidence:        []evidence.EvidenceRef{{Source: "terraform_plan", Path: "acl"}},
+	}}
+
+	out, err := render.Markdown(bundle)
+	if err != nil {
+		t.Fatalf("render.Markdown: %v", err)
+	}
+
+	var header int
+	for _, line := range strings.Split(string(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "|") {
+			continue
+		}
+		cells := countUnescaped(trimmed, '|')
+		if strings.Contains(trimmed, "Check") && strings.Contains(trimmed, "Required") {
+			header = cells
+			continue
+		}
+		if header != 0 && cells != header {
+			t.Fatalf("a row has %d cell boundaries where the header has %d: %q",
+				cells, header, trimmed)
+		}
+	}
+	if header == 0 {
+		t.Fatal("the unknowns table was not rendered")
 	}
 }
