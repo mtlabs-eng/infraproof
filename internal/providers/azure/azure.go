@@ -234,14 +234,14 @@ func provenance(address, attribute string) model.Provenance {
 	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAzure}
 }
 
-// BindingAttributes reports the arguments that place a container in an account.
+// Bindings declares that a container is placed in an account, and how.
 //
 // The provider accepts either the account's resource id or its name, and a
-// container carries one of them; both are the application, so both bind. An
-// account is a subject in its own right and binds to nothing.
-func (Mapper) BindingAttributes(resourceType string) []string {
-	if resourceType == typeContainer {
-		return []string{"storage_account_id", "storage_account_name"}
+// container carries one of them; both are the application, so both are
+// declared. An account declares nothing: containers name it, not the reverse.
+func (Mapper) Bindings() []declared.Binding {
+	return []declared.Binding{
+		{From: typeContainer, Attribute: "storage_account_id", To: typeAccount},
+		{From: typeContainer, Attribute: "storage_account_name", To: typeAccount},
 	}
-	return nil
 }

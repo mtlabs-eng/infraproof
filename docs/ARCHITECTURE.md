@@ -40,6 +40,8 @@ Loads the documented Terraform plan JSON representation. It validates supported 
 - sensitive-value metadata;
 - configuration references needed for dependency edges.
 
+A reference is not a relation. Correlation admits one only where a mapper declares the relation whole — the type that claims, the argument carrying the claim, and the type claimed — so a mention, an ordering dependency, or an interpolation of another resource's name cannot become a governance edge. A type a mapper describes and declares no relation from makes no claims at all; a type no mapper describes admits every argument, because narrowing what is not understood drops correlations this build cannot reason about either way.
+
 The loader must not render raw sensitive values in diagnostics.
 
 ### Provider mappers

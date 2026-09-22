@@ -7,6 +7,7 @@ import (
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
 	"github.com/mtlabs-eng/infraproof/internal/providers"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -1549,14 +1550,14 @@ func (stubMapper) Map(subject terraformplan.ResourceChange, related, scope []ter
 		Family: model.FamilyObjectStorage, ObjectStorage: &model.ObjectStorageCapabilities{}}
 }
 
-// BindingAttributes binds the ACL by an argument the shipped AWS mapper does
-// not name, so a reference under "bucket" is a governance claim to the registry
-// and not to this mapper.
-func (stubMapper) BindingAttributes(t string) []string {
-	if t == "aws_s3_bucket_acl" {
-		return []string{"governed_by"}
+// Bindings declares a relation the shipped registry does not know: an ACL
+// governing this mapper's own subject type. The registry declares the same
+// argument to a different type, so consulting it instead of the mappers
+// Normalize was given produces the opposite answer.
+func (stubMapper) Bindings() []declared.Binding {
+	return []declared.Binding{
+		{From: "aws_s3_bucket_acl", Attribute: "bucket", To: "stub_thing"},
 	}
-	return nil
 }
 
 // TestCorrelationUsesTheMappersItWasGiven keeps Normalize's injection point
@@ -1592,17 +1593,11 @@ func TestCorrelationUsesTheMappersItWasGiven(t *testing.T) {
 	if !ok {
 		t.Fatal("no normalized control")
 	}
-	// The injected mapper binds this type by "governed_by", so a reference
-	// under "bucket" is not a governance claim — however the shipped registry
-	// would read it.
-	if len(control.DefersTo) != 0 {
+	// The injected mapper declares this relation; the shipped registry declares
+	// the same argument to a different type and would refuse it.
+	if len(control.DefersTo) != 1 || control.DefersTo[0] != "stub_thing.a" {
 		t.Fatalf("defers to %v; the shipped registry was consulted instead of the injected mapper",
 			control.DefersTo)
-	}
-
-	// And the argument the injected mapper does name is a claim.
-	if _, ok := graph.At("stub_thing.a"); !ok {
-		t.Fatal("no normalized subject")
 	}
 }
 

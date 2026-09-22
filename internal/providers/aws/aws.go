@@ -583,21 +583,24 @@ func (m Mapper) Governs(resource terraformplan.ResourceChange,
 	return buckets
 }
 
-// BindingAttributes reports the argument that applies an S3 control to a bucket.
+// Bindings declares which S3 resources govern which, and through what.
 //
 // Every bucket-scoped control carries the bucket's name or id in "bucket", and
 // that argument alone is the application. A policy document interpolating a
 // bucket ARN, or an ordering dependency, names a bucket without being applied
-// to it, and reading either as governance let a control for one bucket answer
-// for another.
+// to it.
 //
-// The bucket itself binds to nothing, and an account-wide block is scoped to
-// the provider instance rather than to a resource; both report false.
-func (Mapper) BindingAttributes(resourceType string) []string {
-	switch resourceType {
-	case typePublicAccessBlock, typeBucketPolicy, typeBucketACL, typeOwnershipControls:
-		return []string{"bucket"}
-	default:
-		return nil
+// A bucket declares nothing: it makes no claims about what governs it, so a
+// reference it writes is a mention. An account-wide block declares nothing
+// either — it is scoped to the provider instance rather than to a resource,
+// and says so through Governs.
+func (Mapper) Bindings() []declared.Binding {
+	var relations []declared.Binding
+	for _, control := range []string{
+		typePublicAccessBlock, typeBucketPolicy, typeBucketACL, typeOwnershipControls,
+	} {
+		relations = append(relations, declared.Binding{
+			From: control, Attribute: "bucket", To: typeBucket})
 	}
+	return relations
 }

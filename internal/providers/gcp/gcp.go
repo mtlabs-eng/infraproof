@@ -239,17 +239,17 @@ func provenance(address, attribute string) model.Provenance {
 	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudGCP}
 }
 
-// BindingAttributes reports the argument that applies an IAM grant to a bucket.
+// Bindings declares which IAM resources grant on which buckets, and through
+// what.
 //
 // A member, a binding and a policy all carry the bucket in "bucket". A
 // condition expression or an ordering dependency may name a bucket without
-// granting anything on it, and reading either as the application would
-// attribute one bucket's grant to another. The bucket itself binds to nothing.
-func (Mapper) BindingAttributes(resourceType string) []string {
-	switch resourceType {
-	case typeIAMMember, typeIAMBinding, typeIAMPolicy:
-		return []string{"bucket"}
-	default:
-		return nil
+// granting anything on it. A bucket declares nothing.
+func (Mapper) Bindings() []declared.Binding {
+	var relations []declared.Binding
+	for _, grant := range []string{typeIAMMember, typeIAMBinding, typeIAMPolicy} {
+		relations = append(relations, declared.Binding{
+			From: grant, Attribute: "bucket", To: typeBucket})
 	}
+	return relations
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -172,11 +173,11 @@ func relate(changes []terraformplan.ResourceChange, mappers []Mapper) (map[strin
 	unresolved := map[string]bool{}
 	for _, change := range changes {
 		for _, reference := range change.References {
-			if !governs(change, reference, mappers) {
-				continue
-			}
 			candidates := byConfigAddress[reference.Target]
 			for _, target := range candidates {
+				if !governs(change, target, reference, mappers) {
+					continue
+				}
 				switch relates(change, target, reference, len(candidates)) {
 				case relationUndecidable:
 					// The reference reaches this target but cannot say which
@@ -204,105 +205,127 @@ func relate(changes []terraformplan.ResourceChange, mappers []Mapper) (map[strin
 	return edges, unresolved
 }
 
+// Binder is implemented by a mapper that declares governance relations between
+// its resource types.
+//
+// A mapper that implements it and declares nothing for a type is saying that
+// the type makes no governance claims — a subject in its own right, or a
+// control scoped to something that is not a resource. That is a statement, not
+// a silence, and it is why a type this build understands cannot acquire a
+// relation by accident.
+type Binder interface {
+	// Bindings returns every governance relation this mapper declares.
+	Bindings() []declared.Binding
+}
+
 // orderingAttribute is the meta-argument Terraform writes an explicit ordering
-// dependency under.
+// dependency under. No binding names it, so nothing has to exclude it.
 const orderingAttribute = "depends_on"
 
 // governs reports whether a reference is a claim about what controls what,
 // rather than merely a mention of one resource by another.
 //
-// Two references are not: an ordering dependency, which Terraform documents as
-// sequencing alone and which says nothing about governance; and a reference in
-// an argument that is not the one binding a control to its subject — a policy
-// document interpolating a bucket's ARN mentions that bucket without being
-// applied to it.
+// A mention is not a relation. An ordering dependency sequences two resources
+// and says nothing about governance; a policy document interpolating a bucket's
+// ARN names that bucket without being applied to it; and a bucket tagged with
+// another resource's name names it without being governed by it. Each of those
+// was read as a correlation at some point, and each produced a public bucket
+// reported as provably private.
 //
-// Reading either as a correlation let a public-access block that names some
-// other bucket by a literal string answer for this one, and turned a proven
-// public bucket into a PASS. A correlation the configuration does not declare
-// is not a correlation.
-// Both halves are checked, and both are needed: the ordering rule holds for a
-// type no mapper describes, and the binding rule holds for one that is.
-func governs(change terraformplan.ResourceChange, reference terraformplan.ExpressionReference,
-	mappers []Mapper) bool {
+// The test is whether some mapper declares this exact relation: this type,
+// through this argument, to that type. A relation nobody declared is not one.
+func governs(from, to terraformplan.ResourceChange,
+	reference terraformplan.ExpressionReference, mappers []Mapper) bool {
 
-	if reference.Attribute == orderingAttribute {
-		return false
+	spoken, declared := declarationsFor(from.Type, mappers)
+	if !spoken {
+		// No mapper has said anything about what this type's references mean,
+		// so this build has no grounds to judge them. Every argument is
+		// admitted, because narrowing what is not understood would drop
+		// correlations it cannot reason about either way — except an ordering
+		// dependency, which is sequencing whoever wrote it.
+		return reference.Attribute != orderingAttribute
 	}
 
-	binding, described := bindingAttributes(change.Type, mappers)
-	switch {
-	case !described:
-		// No mapper describes this type. Every argument is admitted, because
-		// narrowing what is not understood would drop correlations this build
-		// cannot reason about either way.
-		return true
-	case len(binding) == 0:
-		// A mapper describes it and says it binds by no argument: a subject in
-		// its own right, or a control scoped to something that is not a
-		// resource. Such a type makes no governance claims, so nothing it
-		// writes is one.
-		//
-		// Keeping this apart from the case above is the whole point. Storing
-		// both as "nothing is known" let a bucket's own tag reference stand as
-		// a governance claim, and the same block that could no longer arrive
-		// through depends_on walked back in from the other end of the edge —
-		// an unstated fact matching another unstated fact.
-		return false
-	case isMetaArgument(reference.Attribute):
-		// A control repeated over the resources it governs names them only
-		// here: its own arguments refer to each.value, which names nothing.
-		// The meta-argument carries the binding rather than replacing it, and
-		// dropping it loses the only link there is.
-		return true
-	default:
-		return slices.Contains(binding, reference.Attribute)
+	// Both ends of a relation are checked, and the claimed type is checked
+	// even though nothing observes it today: every mapper filters its related
+	// set by type, and the undecidability record attaches only to a subject, so
+	// an edge between two wrongly-paired types is inert wherever it lands.
+	// It is kept because "inert" is a property of today's three mappers rather
+	// than of this function, and because a relation that names three things and
+	// checks two is not the design this replaced a patch with.
+	var declaredBetween bool
+	for _, binding := range declared {
+		if binding.To != to.Type {
+			continue
+		}
+		declaredBetween = true
+		if binding.Attribute == reference.Attribute {
+			return true
+		}
 	}
+
+	// A control repeated over the resources it governs names them only in a
+	// meta-argument: its own arguments refer to each.value, which names
+	// nothing. The meta-argument carries a binding declared between these two
+	// types; it does not create one that was not.
+	return declaredBetween && isMetaArgument(reference.Attribute)
 }
 
-// isMetaArgument reports the arguments Terraform uses to repeat a resource,
-// which internal/terraformplan records references under for that reason.
+// isMetaArgument reports the arguments Terraform repeats a resource with, which
+// internal/terraformplan records references under for that reason.
 func isMetaArgument(attribute string) bool {
 	return attribute == "for_each" || attribute == "count"
 }
 
-// bindingAttributes returns the arguments that bind a control to the subject it
-// governs, and whether any mapper describes the type at all.
+// declarationsFor returns the relations declared from a type, and whether any
+// mapper has spoken about that type at all.
 //
-// The two answers are separate because they license different behaviour: an
-// undescribed type admits every argument, and a described one that binds by
-// none makes no governance claims.
-func bindingAttributes(resourceType string, mappers []Mapper) ([]string, bool) {
+// The two answers are kept apart deliberately, and keeping them apart is the
+// point of this design. "No mapper describes this type" licenses admitting
+// every argument; "a mapper describes it and declares no relation from it"
+// forbids every argument, because the mapper has said the type makes no
+// governance claims. Storing both as one empty value is what let a bucket's own
+// tag stand as a claim about the block that governs it.
+func declarationsFor(resourceType string, mappers []Mapper) (bool, []declared.Binding) {
+	var spoken bool
+	var relations []declared.Binding
+
 	for _, mapper := range mappers {
 		if !mapper.Interprets(resourceType) {
 			continue
 		}
 		binder, ok := mapper.(Binder)
 		if !ok {
-			// The mapper understands the type but has not said how it binds.
-			// Its references are admitted, as before.
-			return nil, false
+			// The mapper understands the type but has not declared how it
+			// relates to anything. Silence is not a statement.
+			continue
 		}
-		return binder.BindingAttributes(resourceType), true
+		spoken = true
+		for _, binding := range binder.Bindings() {
+			// Filtering by From here and by To at the call site checks both
+			// ends of the relation. Neither is observable with today's three
+			// mappers, because each filters its related set by type and the
+			// undecidability record attaches only to a subject — but which
+			// half of a three-part relation is worth checking is not a
+			// question this function should answer differently by accident.
+			if binding.From == resourceType {
+				relations = append(relations, binding)
+			}
+		}
 	}
-	return nil, false
+	return spoken, relations
 }
 
-// Binder is implemented by a mapper that knows which argument binds one of its
-// resource types to the subject it governs.
-//
-// The alternative is to admit every reference, which cannot distinguish a
-// control applied to a bucket from one that merely names it. Only the provider
-// knows which argument carries the application, so only the provider can say.
-type Binder interface {
-	// BindingAttributes returns the arguments binding this resource type to its
-	// subject. A provider may accept more than one — an id or a name.
-	//
-	// Returning none is a statement, not a silence: this type binds to no
-	// subject by reference, so nothing it writes is a claim about what governs
-	// what. A subject in its own right returns none, and so does a control
-	// scoped to something that is not a resource.
-	BindingAttributes(resourceType string) []string
+// bindings collects every relation the given mappers declare.
+func bindings(mappers []Mapper) []declared.Binding {
+	var relations []declared.Binding
+	for _, mapper := range mappers {
+		if binder, ok := mapper.(Binder); ok {
+			relations = append(relations, binder.Bindings()...)
+		}
+	}
+	return relations
 }
 
 // relation is what a reference establishes about one candidate target. Not
