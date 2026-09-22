@@ -404,3 +404,59 @@ func TestTwoAccountsAreAmbiguousNotAbsent(t *testing.T) {
 		t.Fatal("the gap is named but not explained")
 	}
 }
+
+// TestAContainerBindsOnlyThroughItsAccountArgument keeps an Azure container
+// from being placed in an account it merely mentions.
+//
+// A container carries its account in storage_account_id or
+// storage_account_name. Anything else naming an account — metadata
+// interpolating its name, an ordering dependency — is a mention, not a
+// placement, and the realistic one is the interpolation: writing the account
+// name into a container's metadata is ordinary.
+// Reading a mention as a placement would let a forbidding account answer for a
+// container that belongs to a permissive one.
+func TestAContainerBindsOnlyThroughItsAccountArgument(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.forbidding", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "forbidding", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "f", "allow_nested_items_to_be_public": false}}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.forbidding", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "forbidding", "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {
+	       "storage_account_id": {"constant_value": "/subscriptions/x/other-account"},
+	       "metadata": {"references": [
+	         "azurerm_storage_account.forbidding.name", "azurerm_storage_account.forbidding"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	found, ok := providers.Normalize(plan, providers.Default()).At("azurerm_storage_container.assets")
+	if !ok || found.ObjectStorage == nil {
+		t.Fatal("no normalized container")
+	}
+
+	// The container asks to be public and its account is not in the plan, so
+	// nothing here proves it private.
+	if found.ObjectStorage.PublicAccess.IsKnown() && !found.ObjectStorage.PublicAccess.Get() {
+		t.Fatal("an account the container only mentions was read as the one gating it")
+	}
+	for _, source := range found.ObjectStorage.PublicAccess.Sources {
+		if source.ResourceAddress == "azurerm_storage_account.forbidding" {
+			t.Fatalf("an account the container does not name was consulted: %s", source.ResourceAddress)
+		}
+	}
+}

@@ -218,3 +218,43 @@ func TestAChangeWithoutAProviderIsInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+// TestTwoChangesAtOneAddressAreInvalid keeps the address usable as an identity.
+//
+// Terraform emits one change per address, and everything downstream relies on
+// that: correlation joins by address, and coverage records which addresses were
+// judged. A plan carrying two changes at one address makes one resource's
+// verdict answer for another's — a public bucket covered by a private one that
+// happens to share its name.
+//
+// A deposed object is the one case Terraform writes twice, and it is
+// distinguished by its deposed key, so it is admitted.
+func TestTwoChangesAtOneAddressAreInvalid(t *testing.T) {
+	const change = `"change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}`
+
+	duplicate := `{"format_version": "1.2", "resource_changes": [
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", ` + change + `},
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket_policy", "name": "b",
+	   "provider_name": "p", ` + change + `}
+	]}`
+
+	_, err := Parse([]byte(duplicate))
+	if err == nil {
+		t.Fatal("two changes at one address were accepted")
+	}
+	if !strings.Contains(err.Error(), "aws_s3_bucket.b") {
+		t.Errorf("the error does not name the address: %v", err)
+	}
+
+	deposed := `{"format_version": "1.2", "resource_changes": [
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", ` + change + `},
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", "deposed": "abc123", ` + change + `}
+	]}`
+
+	if _, err := Parse([]byte(deposed)); err != nil {
+		t.Fatalf("a deposed object beside its current one was rejected: %v", err)
+	}
+}

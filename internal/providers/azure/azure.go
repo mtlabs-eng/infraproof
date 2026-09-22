@@ -234,25 +234,14 @@ func provenance(address, attribute string) model.Provenance {
 	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAzure}
 }
 
-// Governs reports the containers an account answers for.
+// BindingAttributes reports the arguments that place a container in an account.
 //
-// A container names its account, not the other way round, so the
-// reference-based default finds the account from the container and nothing
-// from the account. When a container is in the plan the account defers to it —
-// the container carries the verdict — and that deferral has to be recorded for
-// the account not to read as a resource nothing examined.
-func (m Mapper) Governs(resource terraformplan.ResourceChange,
-	scope []terraformplan.ResourceChange) []string {
-
-	if resource.Type != typeAccount {
-		return nil
+// The provider accepts either the account's resource id or its name, and a
+// container carries one of them; both are the application, so both bind. An
+// account is a subject in its own right and binds to nothing.
+func (Mapper) BindingAttributes(resourceType string) []string {
+	if resourceType == typeContainer {
+		return []string{"storage_account_id", "storage_account_name"}
 	}
-
-	var containers []string
-	for i := range scope {
-		if scope[i].Type == typeContainer {
-			containers = append(containers, scope[i].Address)
-		}
-	}
-	return containers
+	return nil
 }

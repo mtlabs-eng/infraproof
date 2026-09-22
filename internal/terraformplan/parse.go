@@ -165,6 +165,13 @@ func parseResourceChanges(document map[string]any, errs *[]error) []ResourceChan
 	}
 
 	changes := make([]ResourceChange, 0, len(list))
+	// An address identifies a change, and everything downstream relies on it:
+	// correlation joins by address, and coverage records which addresses were
+	// judged. Two changes sharing one would make a verdict about one answer
+	// for the other. Terraform writes one change per address, except for a
+	// deposed object, which carries a key distinguishing it.
+	seen := map[string]bool{}
+
 	for i, item := range list {
 		path := "resource_changes" + indexPath(i)
 		object, ok := item.(map[string]any)
@@ -172,7 +179,18 @@ func parseResourceChanges(document map[string]any, errs *[]error) []ResourceChan
 			*errs = append(*errs, invalid(path, "must be an object"))
 			continue
 		}
-		changes = append(changes, parseResourceChange(path, object, errs))
+
+		change := parseResourceChange(path, object, errs)
+		identity := change.Address + "\x00" + change.Deposed
+		if change.Address != "" && seen[identity] {
+			*errs = append(*errs, invalid(path+".address",
+				"is %q, which another change already uses; an address identifies one change",
+				change.Address))
+			continue
+		}
+		seen[identity] = true
+
+		changes = append(changes, change)
 	}
 	return changes
 }

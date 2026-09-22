@@ -238,3 +238,18 @@ func unreadable(value terraformplan.Value) answer {
 func provenance(address, attribute string) model.Provenance {
 	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudGCP}
 }
+
+// BindingAttributes reports the argument that applies an IAM grant to a bucket.
+//
+// A member, a binding and a policy all carry the bucket in "bucket". A
+// condition expression or an ordering dependency may name a bucket without
+// granting anything on it, and reading either as the application would
+// attribute one bucket's grant to another. The bucket itself binds to nothing.
+func (Mapper) BindingAttributes(resourceType string) []string {
+	switch resourceType {
+	case typeIAMMember, typeIAMBinding, typeIAMPolicy:
+		return []string{"bucket"}
+	default:
+		return nil
+	}
+}

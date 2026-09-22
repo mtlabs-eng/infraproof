@@ -277,10 +277,15 @@ func ContractUnevaluated(contract intent.Contract) Result {
 // as permission at the level above a rule — not a fact wrongly concluded, but a
 // conclusion drawn from no facts at all.
 //
-// It is not required. Nothing here is wrong with the change: a contract may
-// legitimately describe more than one plan carries out. What must not happen is
-// for that to be indistinguishable from a contract whose requirements were
-// checked and met.
+// It is required. An intent contract carries a change_id and is written for one
+// change, so a declaration the change gives nothing to apply to is a
+// requirement this run could not verify — and docs/PRODUCT.md states that a
+// PASS means everything was checked, not that nothing objected. Reporting it
+// without preventing the PASS left the summary saying the change was
+// consistent with the contract in every supported check when no check had run.
+//
+// An author who meant to leave the question open writes exposure:
+// "unspecified", which is skipped below.
 func ContractCoverage(contract intent.Contract, graph model.Graph) Result {
 	var result Result
 
@@ -296,7 +301,7 @@ func ContractCoverage(contract intent.Contract, graph model.Graph) Result {
 
 		result.Unknowns = append(result.Unknowns, evidence.Unknown{
 			CheckID:  CheckContractFamilyAbsent,
-			Required: false,
+			Required: true,
 			Reason: fmt.Sprintf(
 				"The contract declares %s exposure for %s, and the plan contains no resource of that "+
 					"family, so the declaration was not exercised.", declared.Exposure, declared.Family),

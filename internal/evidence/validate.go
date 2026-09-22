@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -61,14 +60,18 @@ func (b Bundle) Validate() error {
 // through the validators, because scattering is how five of these came to be
 // missing: each was added to the contract without anyone remembering there was
 // a rule to add it to.
-func (b Bundle) inlineFields() map[string]string {
-	fields := map[string]string{
-		"subject.intent_source":       b.Subject.IntentSource,
-		"subject.plan_format_version": b.Subject.PlanFormatVersion,
+func (b Bundle) inlineFields() [][2]string {
+	fields := [][2]string{
+		{"subject.intent_source", b.Subject.IntentSource},
+		{"subject.plan_format_version", b.Subject.PlanFormatVersion},
+		// The digest is computed rather than plan-derived, but the rule is
+		// about what a field can carry, not about who happens to fill it.
+		{"subject.plan_digest", b.Subject.PlanDigest},
 	}
 	for i, check := range b.Verification {
-		fields[fmt.Sprintf("verification[%d].name", i)] = check.Name
-		fields[fmt.Sprintf("verification[%d].method", i)] = check.Method
+		fields = append(fields,
+			[2]string{fmt.Sprintf("verification[%d].name", i), check.Name},
+			[2]string{fmt.Sprintf("verification[%d].method", i), check.Method})
 	}
 	return fields
 }
@@ -76,13 +79,8 @@ func (b Bundle) inlineFields() map[string]string {
 func (b Bundle) validateEnvelope() []error {
 	var errs []error
 
-	paths := make([]string, 0, len(b.inlineFields()))
-	for path := range b.inlineFields() {
-		paths = append(paths, path)
-	}
-	slices.Sort(paths)
-	for _, path := range paths {
-		if err := validateSingleLine(path, b.inlineFields()[path]); err != nil {
+	for _, field := range b.inlineFields() {
+		if err := validateSingleLine(field[0], field[1]); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -265,11 +263,15 @@ func validateEvidence(parent string, refs []EvidenceRef) []error {
 			errs = append(errs, violation(path+".path", "must locate the data within the source"))
 		}
 		// Every field of a reference reaches a report as inline text, and a
-		// reference is assembled from plan-derived strings.
-		for field, value := range map[string]string{
-			".source": ref.Source, ".resource_address": ref.ResourceAddress, ".path": ref.Path,
+		// reference is assembled from plan-derived strings. The order is fixed
+		// rather than a map's, because a tool whose output is a function of its
+		// input must not describe one bundle two ways.
+		for _, field := range [][2]string{
+			{".source", ref.Source},
+			{".resource_address", ref.ResourceAddress},
+			{".path", ref.Path},
 		} {
-			if err := validateSingleLine(path+field, value); err != nil {
+			if err := validateSingleLine(path+field[0], field[1]); err != nil {
 				errs = append(errs, err)
 			}
 		}

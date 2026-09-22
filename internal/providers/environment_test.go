@@ -399,6 +399,9 @@ func TestAResourceThatGovernsWithoutNamingDefersToWhatItGoverns(t *testing.T) {
 		}
 	})
 
+	// The Azure account's deferral comes from the container's own reference to
+	// it, not from Governs: a container names its account, so the reference
+	// loop already supplies the link and a Governs for Azure was dead code.
 	t.Run("an Azure account with a container", func(t *testing.T) {
 		raw := `{
 		  "format_version": "1.2",
@@ -503,8 +506,9 @@ func TestGovernsClaimsOnlyWhatItGoverns(t *testing.T) {
 		t.Fatalf("an ACL for a bucket managed elsewhere defers to %v", acl.DefersTo)
 	}
 
-	// The same shape in Azure: a container whose account is not in the plan,
-	// beside an unrelated account that is.
+	// The same shape in Azure. There is no Governs here — a container names its
+	// account, so the reference loop is the only route — and what must hold is
+	// that an account the container never names is not consulted for it.
 	azure := `{
 	  "format_version": "1.2",
 	  "resource_changes": [

@@ -1209,3 +1209,161 @@ func TestAnUndecidableCorrelationAcrossModulesSaysSo(t *testing.T) {
 		t.Fatal("the gap is named but not explained")
 	}
 }
+
+// TestAnOrderingEdgeIsNotAGovernanceClaim is the defect a fourteenth review
+// found, and it is the most serious this project has produced: one ordinary
+// line of HCL turned a BLOCK into a PASS on a bucket the plan proves is
+// public-read.
+//
+// depends_on states that one resource must be created before another. It says
+// nothing about what governs what, and Terraform documents it as ordering
+// alone. Reading it as a correlation let a public-access block that names some
+// other bucket by a literal string answer for this one — a correlation the
+// configuration does not declare, which is the failure CLAUDE.md names.
+func TestAnOrderingEdgeIsNotAGovernanceClaim(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+	    {"address": "aws_s3_bucket_public_access_block.elsewhere", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "elsewhere", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a-bucket-managed-elsewhere",
+	                          "block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "aws_s3_bucket_public_access_block.elsewhere", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "elsewhere",
+	     "expressions": {"bucket": {"constant_value": "a-bucket-managed-elsewhere"}},
+	     "depends_on": ["aws_s3_bucket.assets"]}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	fact := publicAccess(t, graph, "aws_s3_bucket.assets")
+	if fact.IsKnown() && !fact.Get() {
+		t.Fatal("an ordering dependency was read as the block that governs this bucket")
+	}
+	if !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("the bucket's own ACL grants public access: state=%q grants=%v", fact.State, fact.Get())
+	}
+	for _, source := range fact.Sources {
+		if contains(source.ResourceAddress, "elsewhere") {
+			t.Fatalf("a control that governs another bucket was cited: %s", source.ResourceAddress)
+		}
+	}
+}
+
+// TestAnOrderingEdgeDoesNotCoverAnOrphanControl is the same defect at the
+// coverage layer. A control whose governing argument names a bucket managed
+// elsewhere defers to nobody, and an ordering dependency must not supply the
+// deferral that a governing reference would.
+func TestAnOrderingEdgeDoesNotCoverAnOrphanControl(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "block_public_acls": true}}},
+	    {"address": "aws_s3_bucket_policy.elsewhere", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "elsewhere", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a-bucket-managed-elsewhere", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_policy.elsewhere", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "elsewhere",
+	     "expressions": {"bucket": {"constant_value": "a-bucket-managed-elsewhere"},
+	                     "policy": {"references": ["aws_s3_bucket.assets.arn", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	policy, ok := graph.At("aws_s3_bucket_policy.elsewhere")
+	if !ok {
+		t.Fatal("no normalized policy")
+	}
+	if len(policy.DefersTo) != 0 {
+		t.Fatalf("a policy governing another bucket defers to %v; mentioning a bucket is not governing it",
+			policy.DefersTo)
+	}
+}
+
+// TestAnOrderingEdgeIsRefusedEvenWhereNoMapperNamesTheBinding holds the half of
+// the rule that is universal.
+//
+// A control's binding argument is provider knowledge, and where no mapper
+// claims to know, every argument is admitted rather than none — narrowing what
+// is not understood would drop correlations this build cannot reason about
+// either way. depends_on is different: Terraform documents it as sequencing,
+// and it is never a claim about what governs what, whoever wrote the resource.
+//
+// Without this, the rule is held only by the attribute filter, and a resource
+// type no mapper describes would correlate through an ordering dependency.
+func TestAnOrderingEdgeIsRefusedEvenWhereNoMapperNamesTheBinding(t *testing.T) {
+	// aws_s3_bucket itself binds by nothing, so every argument of it is
+	// admitted — except an ordering dependency.
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket", "name": "a",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket", "name": "a",
+	     "expressions": {}, "depends_on": ["aws_s3_bucket.b"]},
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(plan.ResourceChanges) != 2 {
+		t.Fatalf("changes = %d, want 2", len(plan.ResourceChanges))
+	}
+
+	// The ordering edge must not appear in the graph as a relation. A bucket
+	// that defers to another bucket would let one subject's verdict answer for
+	// the other's.
+	graph := providers.Normalize(plan, providers.Default())
+	for _, address := range []string{"aws_s3_bucket.a", "aws_s3_bucket.b"} {
+		resource, ok := graph.At(address)
+		if !ok {
+			t.Fatalf("no normalized resource at %s", address)
+		}
+		if len(resource.DefersTo) != 0 {
+			t.Errorf("%s defers to %v through an ordering dependency", address, resource.DefersTo)
+		}
+	}
+}

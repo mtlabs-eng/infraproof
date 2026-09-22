@@ -157,3 +157,62 @@ func TestADefiniteGrantOutranksAnUnreadableOne(t *testing.T) {
 		t.Fatalf("state=%q grants=%v, want a known true", fact.State, fact.Get())
 	}
 }
+
+// TestAnIAMBindingBindsOnlyThroughItsBucketArgument is the AWS defect in GCP.
+//
+// An IAM member, binding or policy carries the bucket it applies to in
+// "bucket". An ordering dependency on some other bucket, or a condition
+// interpolating one, names a bucket without granting anything on it — and
+// reading either as the application let a public grant on one bucket be
+// attributed to another.
+func TestAnIAMBindingBindsOnlyThroughItsBucketArgument(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "google_storage_bucket.private", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "private", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "p", "public_access_prevention": "enforced"}}},
+	    {"address": "google_storage_bucket_iam_member.elsewhere", "mode": "managed",
+	     "type": "google_storage_bucket_iam_member", "name": "elsewhere", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a-bucket-managed-elsewhere",
+	                          "role": "roles/storage.objectViewer", "member": "allUsers"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "google_storage_bucket.private", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "private", "expressions": {}},
+	    {"address": "google_storage_bucket_iam_member.elsewhere", "mode": "managed",
+	     "type": "google_storage_bucket_iam_member", "name": "elsewhere",
+	     "expressions": {
+	       "bucket": {"constant_value": "a-bucket-managed-elsewhere"},
+	       "condition": {"references": [
+	         "google_storage_bucket.private.name", "google_storage_bucket.private"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	bucket, ok := graph.At("google_storage_bucket.private")
+	if !ok || bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	for _, source := range bucket.ObjectStorage.PublicAccess.Sources {
+		if source.ResourceAddress == "google_storage_bucket_iam_member.elsewhere" {
+			t.Fatalf("a grant on another bucket was attributed to this one: %s", source.ResourceAddress)
+		}
+	}
+
+	// And the grant defers to nobody: it governs a bucket that is not here.
+	member, ok := graph.At("google_storage_bucket_iam_member.elsewhere")
+	if !ok {
+		t.Fatal("no normalized IAM member")
+	}
+	if len(member.DefersTo) != 0 {
+		t.Fatalf("a grant on a bucket managed elsewhere defers to %v", member.DefersTo)
+	}
+}

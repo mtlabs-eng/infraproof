@@ -551,8 +551,9 @@ func TestAPlanWithNothingToCheckSaysSo(t *testing.T) {
 	if len(unknowns) != 1 {
 		t.Fatalf("unknowns = %v, want the unexercised declaration reported", result.Unknowns)
 	}
-	if unknowns[0].Required {
-		t.Error("a declaration with nothing to apply to bounds the report; it does not invalidate it")
+	if !unknowns[0].Required {
+		t.Error("a declaration the change gave nothing to apply to is a requirement this run " +
+			"could not verify, and must not read as one that was met")
 	}
 	if unknowns[0].Reason == "" {
 		t.Error("the gap is named but not explained")

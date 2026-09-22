@@ -172,6 +172,9 @@ func relate(changes []terraformplan.ResourceChange) (map[string][]terraformplan.
 	unresolved := map[string]bool{}
 	for _, change := range changes {
 		for _, reference := range change.References {
+			if !governs(change, reference) {
+				continue
+			}
 			candidates := byConfigAddress[reference.Target]
 			for _, target := range candidates {
 				switch relates(change, target, reference, len(candidates)) {
@@ -226,6 +229,72 @@ func relate(changes []terraformplan.ResourceChange) (map[string][]terraformplan.
 // outright, a target with a single instance, and the module keys two resources
 // share by sitting in the same module instance. Everything else is a question
 // the plan leaves open, and CLAUDE.md is explicit about what to do with those.
+// orderingAttribute is the meta-argument Terraform writes an explicit ordering
+// dependency under.
+const orderingAttribute = "depends_on"
+
+// governs reports whether a reference is a claim about what controls what,
+// rather than merely a mention of one resource by another.
+//
+// Two references are not: an ordering dependency, which Terraform documents as
+// sequencing alone and which says nothing about governance; and a reference in
+// an argument that is not the one binding a control to its subject — a policy
+// document interpolating a bucket's ARN mentions that bucket without being
+// applied to it.
+//
+// Reading either as a correlation let a public-access block that names some
+// other bucket by a literal string answer for this one, and turned a proven
+// public bucket into a PASS. A correlation the configuration does not declare
+// is not a correlation.
+// Both halves are checked. The per-mapper binding subsumes the ordering rule
+// for every type a mapper describes, so removing the ordering rule changes
+// nothing today; it is the floor under the fallback below, which admits every
+// argument of a type no mapper claims, and it is true independently of any
+// provider.
+func governs(change terraformplan.ResourceChange, reference terraformplan.ExpressionReference) bool {
+	if reference.Attribute == orderingAttribute {
+		return false
+	}
+	binding := bindingAttributes(change.Type)
+	if len(binding) == 0 {
+		// A resource type no mapper described, or one that binds by something
+		// other than a reference. Every argument is admitted, as before:
+		// narrowing what is not understood would drop correlations this build
+		// cannot reason about either way.
+		return true
+	}
+	return slices.Contains(binding, reference.Attribute)
+}
+
+// bindingAttributes returns the arguments that bind a control to the subject it
+// governs, empty when no mapper claims to know.
+func bindingAttributes(resourceType string) []string {
+	for _, mapper := range Default() {
+		binder, ok := mapper.(Binder)
+		if !ok || !mapper.Interprets(resourceType) {
+			continue
+		}
+		if attributes := binder.BindingAttributes(resourceType); len(attributes) > 0 {
+			return attributes
+		}
+	}
+	return nil
+}
+
+// Binder is implemented by a mapper that knows which argument binds one of its
+// resource types to the subject it governs.
+//
+// The alternative is to admit every reference, which cannot distinguish a
+// control applied to a bucket from one that merely names it. Only the provider
+// knows which argument carries the application, so only the provider can say.
+type Binder interface {
+	// BindingAttributes returns the arguments binding this resource type to its
+	// subject. A provider may accept more than one — an id or a name — and a
+	// resource binding by something other than a reference, such as an
+	// account-wide control or a subject in its own right, returns none.
+	BindingAttributes(resourceType string) []string
+}
+
 // relation is what a reference establishes about one candidate target. Not
 // reaching a target and reaching it without being able to say which instance
 // was meant are different facts, and only the second is worth reporting: the

@@ -386,3 +386,46 @@ func validBundle() Bundle {
 		}},
 	}
 }
+
+// TestDiagnosticsAreDeterministic keeps one bundle from being described two
+// ways.
+//
+// Go iterates a map in a random order, and a validator that reports its
+// violations from one describes the same bundle differently on different runs.
+// This package defines the canonical format; if anything here must be a
+// function of its input alone, it is this.
+func TestDiagnosticsAreDeterministic(t *testing.T) {
+	bundle := validBundle()
+	bundle.Subject.IntentSource = "a\nb"
+	bundle.Verification[0].Name = "c\nd"
+	bundle.Verification[0].Method = "e\nf"
+	bundle.Findings[0].Evidence[0].Source = "g\nh"
+	bundle.Findings[0].Evidence[0].ResourceAddress = "i\nj"
+	bundle.Findings[0].Evidence[0].Path = "k\nl"
+	bundle.Unknowns[0].Evidence[0].Path = "m\nn"
+
+	first := bundle.Validate()
+	if first == nil {
+		t.Fatal("a bundle with line breaks in seven fields was accepted")
+	}
+	for range 200 {
+		again := bundle.Validate()
+		if again == nil || again.Error() != first.Error() {
+			t.Fatalf("one bundle produced two diagnostics:\n %v\n %v", first, again)
+		}
+	}
+}
+
+// TestThePlanDigestCannotForgeStructure closes the one envelope field the
+// inline rule had left out. It is computed rather than plan-derived today, so
+// nothing reaches it — but the rule is about what a field can carry, not about
+// who happens to fill it, and the renderer was the only thing standing in the
+// way.
+func TestThePlanDigestCannotForgeStructure(t *testing.T) {
+	bundle := validBundle()
+	bundle.Subject.PlanDigest = "sha256:0000\n\n## InfraProof: BLOCK\n\nforged.\n"
+
+	if err := bundle.Validate(); err == nil {
+		t.Fatal("a plan digest carrying a line break was accepted")
+	}
+}
