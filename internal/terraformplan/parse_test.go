@@ -229,6 +229,10 @@ func TestAChangeWithoutAProviderIsInvalidInput(t *testing.T) {
 //
 // A deposed object is the one case Terraform writes twice, and it is
 // distinguished by its deposed key, so it is admitted.
+//
+// The diagnostic names the path and a bounded token, never the address: an
+// address is a plan value, and a ParseError has no field capable of holding
+// one.
 func TestTwoChangesAtOneAddressAreInvalid(t *testing.T) {
 	const change = `"change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}`
 
@@ -243,8 +247,10 @@ func TestTwoChangesAtOneAddressAreInvalid(t *testing.T) {
 	if err == nil {
 		t.Fatal("two changes at one address were accepted")
 	}
-	if !strings.Contains(err.Error(), "aws_s3_bucket.b") {
-		t.Errorf("the error does not name the address: %v", err)
+	// The address is a plan value, so the diagnostic reports the path and a
+	// bounded token rather than the address itself.
+	if !strings.Contains(err.Error(), "resource_changes[1].address") {
+		t.Errorf("the error does not locate the duplicate: %v", err)
 	}
 
 	deposed := `{"format_version": "1.2", "resource_changes": [
@@ -256,5 +262,31 @@ func TestTwoChangesAtOneAddressAreInvalid(t *testing.T) {
 
 	if _, err := Parse([]byte(deposed)); err != nil {
 		t.Fatalf("a deposed object beside its current one was rejected: %v", err)
+	}
+}
+
+// TestADuplicateAddressDiagnosticCarriesNoPlanValue keeps the last plan-derived
+// string out of a diagnostic. Every other one goes through safeToken; this was
+// the only bypass, and an address is as much a plan value as any other.
+func TestADuplicateAddressDiagnosticCarriesNoPlanValue(t *testing.T) {
+	const secret = "aws_s3_bucket.hunter2-the-secret-name-and-more-besides"
+	const change = `"change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}`
+
+	raw := `{"format_version": "1.2", "resource_changes": [
+	  {"address": "` + secret + `", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", ` + change + `},
+	  {"address": "` + secret + `", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", ` + change + `}
+	]}`
+
+	_, err := Parse([]byte(raw))
+	if err == nil {
+		t.Fatal("two changes at one address were accepted")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("the diagnostic carries a plan value: %v", err)
+	}
+	if len(err.Error()) > 300 {
+		t.Errorf("the diagnostic is %d bytes; it is not bounded", len(err.Error()))
 	}
 }

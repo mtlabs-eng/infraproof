@@ -52,6 +52,8 @@ purpose: optional string
 
 A resource entry carries no address, and resource cardinality is deferred below. An entry therefore constrains **every** resource of its family in the plan. That is the only reading which does not require the cardinality this contract cannot yet express, and it fails safe: adding a resource to a plan does not escape a declared intent.
 
+An entry is also a requirement to be exercised, not only a constraint to be satisfied. A contract carries a `change_id` and is written for one change, so a declaration the change gives nothing to apply to is a requirement the run could not verify, and it produces `UNKNOWN` rather than `PASS` — a constraint satisfied by an empty set was checked against nothing. An author who means to leave the question open writes `exposure: unspecified`, which asks for nothing and is never reported as unexercised.
+
 ## Matching rules
 
 - A plan affecting a cloud outside `allowed_clouds` is a blocking mismatch.

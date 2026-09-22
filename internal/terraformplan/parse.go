@@ -183,9 +183,12 @@ func parseResourceChanges(document map[string]any, errs *[]error) []ResourceChan
 		change := parseResourceChange(path, object, errs)
 		identity := change.Address + "\x00" + change.Deposed
 		if change.Address != "" && seen[identity] {
+			// safeToken, like every other plan-derived string in a
+			// diagnostic: a ParseError has no field capable of holding a
+			// value, and an address is a plan value.
 			*errs = append(*errs, invalid(path+".address",
-				"is %q, which another change already uses; an address identifies one change",
-				change.Address))
+				"is %s, which another change already uses; an address identifies one change",
+				safeToken(change.Address)))
 			continue
 		}
 		seen[identity] = true

@@ -1313,35 +1313,51 @@ func TestAnOrderingEdgeDoesNotCoverAnOrphanControl(t *testing.T) {
 	}
 }
 
-// TestAnOrderingEdgeIsRefusedEvenWhereNoMapperNamesTheBinding holds the half of
-// the rule that is universal.
+// TestAGovernanceClaimIsRefusedFromEitherEnd closes the half of the previous
+// round's fix that was open.
 //
-// A control's binding argument is provider knowledge, and where no mapper
-// claims to know, every argument is admitted rather than none — narrowing what
-// is not understood would drop correlations this build cannot reason about
-// either way. depends_on is different: Terraform documents it as sequencing,
-// and it is never a claim about what governs what, whoever wrote the resource.
+// An edge is a claim one resource makes about another, and the graph stores it
+// as a symmetric relation. The filter read the type of the resource that wrote
+// the reference, so the identical claim written from the bucket instead of from
+// the control passed unexamined: a bucket states no binding argument, and a
+// type stating none admitted every argument. The same public-access block that
+// depends_on could no longer smuggle in walked back through an ordinary tag.
 //
-// Without this, the rule is held only by the attribute filter, and a resource
-// type no mapper describes would correlate through an ordering dependency.
-func TestAnOrderingEdgeIsRefusedEvenWhereNoMapperNamesTheBinding(t *testing.T) {
-	// aws_s3_bucket itself binds by nothing, so every argument of it is
-	// admitted — except an ordering dependency.
+// A bucket makes no governance claims at all. Saying so is what distinguishes
+// "this type binds by no argument" from "no mapper describes this type", which
+// the code previously stored as one value — an unstated fact matching another
+// unstated fact.
+func TestAGovernanceClaimIsRefusedFromEitherEnd(t *testing.T) {
 	raw := []byte(`{
 	  "format_version": "1.2",
 	  "resource_changes": [
-	    {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket", "name": "a",
-	     "provider_name": "p",
-	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
-	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
-	     "provider_name": "p",
-	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}
+	    {"address": "aws_s3_bucket_public_access_block.legacy", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "legacy", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a-bucket-managed-elsewhere",
+	                          "block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "tags": {"replaces": "a-bucket-managed-elsewhere"}}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
 	  ],
 	  "configuration": {"root_module": {"resources": [
-	    {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket", "name": "a",
-	     "expressions": {}, "depends_on": ["aws_s3_bucket.b"]},
-	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
-	     "expressions": {}}
+	    {"address": "aws_s3_bucket_public_access_block.legacy", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "legacy",
+	     "expressions": {"bucket": {"constant_value": "a-bucket-managed-elsewhere"}}},
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets",
+	     "expressions": {"tags": {"references": [
+	       "aws_s3_bucket_public_access_block.legacy.bucket",
+	       "aws_s3_bucket_public_access_block.legacy"]}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
 	  ]}}
 	}`)
 
@@ -1349,21 +1365,313 @@ func TestAnOrderingEdgeIsRefusedEvenWhereNoMapperNamesTheBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if len(plan.ResourceChanges) != 2 {
-		t.Fatalf("changes = %d, want 2", len(plan.ResourceChanges))
+	graph := providers.Normalize(plan, providers.Default())
+
+	fact := publicAccess(t, graph, "aws_s3_bucket.assets")
+	if fact.IsKnown() && !fact.Get() {
+		t.Fatal("a block named from the bucket's own tags answered for this bucket")
+	}
+	if !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("the bucket's own ACL grants public access: state=%q grants=%v", fact.State, fact.Get())
+	}
+	for _, source := range fact.Sources {
+		if contains(source.ResourceAddress, "legacy") {
+			t.Fatalf("a block governing another bucket was cited: %s", source.ResourceAddress)
+		}
+	}
+}
+
+// TestAnOrderingEdgeOnASubjectIsStillRefused replaces a test that could not
+// fail. The previous form asserted DefersTo on two buckets, and DefersTo is
+// populated only for a subject that reaches no verdict of its own — which an
+// AWS bucket never is — so it was empty whatever the code did.
+//
+// This states the rule where it bites: an ordering dependency written by the
+// bucket, on a control that governs some other bucket.
+func TestAnOrderingEdgeOnASubjectIsStillRefused(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket_public_access_block.elsewhere", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "elsewhere", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a-bucket-managed-elsewhere",
+	                          "block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket_public_access_block.elsewhere", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "elsewhere",
+	     "expressions": {"bucket": {"constant_value": "a-bucket-managed-elsewhere"}}},
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {},
+	     "depends_on": ["aws_s3_bucket_public_access_block.elsewhere"]},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, providers.Default())
+
+	fact := publicAccess(t, graph, "aws_s3_bucket.assets")
+	if fact.IsKnown() && !fact.Get() {
+		t.Fatal("an ordering dependency written by the bucket admitted a foreign block")
+	}
+	if !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("the bucket's own ACL grants public access: state=%q grants=%v", fact.State, fact.Get())
+	}
+}
+
+// TestAMetaArgumentStillCarriesTheBinding is the regression for what the
+// attribute filter broke.
+//
+// A control repeated over the resources it governs names them only in
+// for_each: its own arguments refer to each.value, which names nothing.
+// internal/terraformplan/config.go synthesises those references for exactly
+// that reason, and filtering them out as "not the binding argument" lost the
+// only link there was — producing a BLOCK on a bucket whose own plan contains
+// the block that shuts it, and an UNKNOWN where a proven grant had been.
+func TestAMetaArgumentStillCarriesTheBinding(t *testing.T) {
+	plan := func(controlType, controlArgs string) []byte {
+		return []byte(`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+		    {"address": "` + controlType + `.c[\"assets\"]", "mode": "managed",
+		     "type": "` + controlType + `", "name": "c", "index": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {` + controlArgs + `}}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "expressions": {}},
+		    {"address": "` + controlType + `.c", "mode": "managed", "type": "` + controlType + `",
+		     "name": "c",
+		     "for_each_expression": {"references": ["aws_s3_bucket.assets"]},
+		     "expressions": {"bucket": {"references": ["each.value"]}}}
+		  ]}}
+		}`)
 	}
 
-	// The ordering edge must not appear in the graph as a relation. A bucket
-	// that defers to another bucket would let one subject's verdict answer for
-	// the other's.
-	graph := providers.Normalize(plan, providers.Default())
-	for _, address := range []string{"aws_s3_bucket.a", "aws_s3_bucket.b"} {
-		resource, ok := graph.At(address)
-		if !ok {
-			t.Fatalf("no normalized resource at %s", address)
+	t.Run("a block repeated over its buckets still shuts them", func(t *testing.T) {
+		raw := plan("aws_s3_bucket_public_access_block",
+			`"block_public_acls": true, "block_public_policy": true,
+			 "ignore_public_acls": true, "restrict_public_buckets": true`)
+
+		parsed, err := terraformplan.Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
 		}
-		if len(resource.DefersTo) != 0 {
-			t.Errorf("%s defers to %v through an ordering dependency", address, resource.DefersTo)
+		fact := publicAccess(t, providers.Normalize(parsed, providers.Default()), "aws_s3_bucket.assets")
+		if fact.IsKnown() && fact.Get() {
+			t.Fatal("a bucket was called public while the plan holds the block that shuts it")
 		}
+	})
+
+	t.Run("a grant repeated over its buckets is still attributed", func(t *testing.T) {
+		raw := plan("aws_s3_bucket_acl", `"acl": "public-read"`)
+
+		parsed, err := terraformplan.Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		fact := publicAccess(t, providers.Normalize(parsed, providers.Default()), "aws_s3_bucket.assets")
+		if !fact.IsKnown() || !fact.Get() {
+			t.Fatalf("a proven public grant went unattributed: state=%q grants=%v",
+				fact.State, fact.Get())
+		}
+	})
+}
+
+// TestCountCarriesTheBindingLikeForEach covers the other meta-argument.
+// Terraform repeats a resource with either, internal/terraformplan records
+// both, and a control counted over its buckets names them only there.
+func TestCountCarriesTheBindingLikeForEach(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.c[0]", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "c", "index": "0", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.c", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "c",
+	     "count_expression": {"references": ["aws_s3_bucket.assets"]},
+	     "expressions": {"bucket": {"references": ["count.index"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
+	fact := publicAccess(t, providers.Normalize(plan, providers.Default()), "aws_s3_bucket.assets")
+	if !fact.IsKnown() || !fact.Get() {
+		t.Fatalf("a grant counted over its bucket went unattributed: state=%q grants=%v",
+			fact.State, fact.Get())
+	}
+}
+
+// stubMapper interprets one invented type and is not a Binder, so the
+// correlation layer must treat its references as it treats any type it cannot
+// describe: admitted, because narrowing what is not understood drops
+// correlations this build cannot reason about either way.
+// stubMapper stands in for a mapper this build does not ship. It claims a type
+// the shipped registry also claims, and binds that type by a different
+// argument, so consulting the registry instead of the mappers Normalize was
+// given produces a different answer.
+type stubMapper struct{}
+
+func (stubMapper) Cloud() model.Cloud       { return model.Cloud("stub") }
+func (stubMapper) Interprets(t string) bool { return t == "stub_thing" || t == "aws_s3_bucket_acl" }
+func (stubMapper) IsSubject(t string) bool  { return t == "stub_thing" }
+func (stubMapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
+	return model.NormalizedResource{Address: subject.Address, Cloud: model.Cloud("stub"),
+		Family: model.FamilyObjectStorage, ObjectStorage: &model.ObjectStorageCapabilities{}}
+}
+
+// BindingAttributes binds the ACL by an argument the shipped AWS mapper does
+// not name, so a reference under "bucket" is a governance claim to the registry
+// and not to this mapper.
+func (stubMapper) BindingAttributes(t string) []string {
+	if t == "aws_s3_bucket_acl" {
+		return []string{"governed_by"}
+	}
+	return nil
+}
+
+// TestCorrelationUsesTheMappersItWasGiven keeps Normalize's injection point
+// honest. The correlation layer asks mappers how their types bind, and asking
+// the shipped registry instead would make a custom mapper's answer unreachable
+// while quietly applying the built-in ones to its types.
+func TestCorrelationUsesTheMappersItWasGiven(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "stub_thing.a", "mode": "managed", "type": "stub_thing", "name": "a",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"name": "a"}}},
+	    {"address": "aws_s3_bucket_acl.c", "mode": "managed", "type": "aws_s3_bucket_acl", "name": "c",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "private"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "stub_thing.a", "mode": "managed", "type": "stub_thing", "name": "a",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.c", "mode": "managed", "type": "aws_s3_bucket_acl", "name": "c",
+	     "expressions": {"bucket": {"references": ["stub_thing.a"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, []providers.Mapper{stubMapper{}})
+
+	control, ok := graph.At("aws_s3_bucket_acl.c")
+	if !ok {
+		t.Fatal("no normalized control")
+	}
+	// The injected mapper binds this type by "governed_by", so a reference
+	// under "bucket" is not a governance claim — however the shipped registry
+	// would read it.
+	if len(control.DefersTo) != 0 {
+		t.Fatalf("defers to %v; the shipped registry was consulted instead of the injected mapper",
+			control.DefersTo)
+	}
+
+	// And the argument the injected mapper does name is a claim.
+	if _, ok := graph.At("stub_thing.a"); !ok {
+		t.Fatal("no normalized subject")
+	}
+}
+
+// TestAnOrderingEdgeIsRefusedForATypeNoMapperDescribes holds the universal half
+// of the rule where it is the only half there is.
+//
+// A type whose mapper declares no binding admits every argument, because
+// narrowing what is not understood drops correlations this build cannot reason
+// about either way. Ordering is the exception, and it is an exception that owes
+// nothing to any provider: Terraform documents depends_on as sequencing.
+func TestAnOrderingEdgeIsRefusedForATypeNoMapperDescribes(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "stub_thing.a", "mode": "managed", "type": "stub_thing", "name": "a",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"name": "a"}}},
+	    {"address": "stub_control.c", "mode": "managed", "type": "stub_control", "name": "c",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"name": "c"}}},
+	    {"address": "stub_control.named", "mode": "managed", "type": "stub_control", "name": "named",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"name": "n"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "stub_thing.a", "mode": "managed", "type": "stub_thing", "name": "a",
+	     "expressions": {}},
+	    {"address": "stub_control.c", "mode": "managed", "type": "stub_control", "name": "c",
+	     "expressions": {}, "depends_on": ["stub_thing.a"]},
+	    {"address": "stub_control.named", "mode": "managed", "type": "stub_control", "name": "named",
+	     "expressions": {"anything": {"references": ["stub_thing.a"]}}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	graph := providers.Normalize(plan, []providers.Mapper{openMapper{}})
+
+	control, ok := graph.At("stub_control.c")
+	if !ok {
+		t.Fatal("no normalized control")
+	}
+	if len(control.DefersTo) != 0 {
+		t.Fatalf("an ordering dependency supplied the deferral: %v", control.DefersTo)
+	}
+
+	// The other half: every argument that is not an ordering dependency is
+	// admitted for a type no mapper describes, because narrowing what is not
+	// understood drops correlations this build cannot reason about either way.
+	named, ok := graph.At("stub_control.named")
+	if !ok {
+		t.Fatal("no normalized control")
+	}
+	if len(named.DefersTo) != 1 || named.DefersTo[0] != "stub_thing.a" {
+		t.Fatalf("defers to %v; an undescribed type must admit its ordinary arguments",
+			named.DefersTo)
+	}
+}
+
+// openMapper describes its types without declaring how they bind, which is the
+// case that admits every argument.
+type openMapper struct{}
+
+func (openMapper) Cloud() model.Cloud       { return model.Cloud("stub") }
+func (openMapper) Interprets(t string) bool { return t == "stub_thing" || t == "stub_control" }
+func (openMapper) IsSubject(t string) bool  { return t == "stub_thing" }
+func (openMapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
+	return model.NormalizedResource{Address: subject.Address, Cloud: model.Cloud("stub"),
+		Family: model.FamilyObjectStorage, ObjectStorage: &model.ObjectStorageCapabilities{}}
 }

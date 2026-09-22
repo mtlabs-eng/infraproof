@@ -33,12 +33,19 @@ func TestEveryExportedDeclarationIsDocumented(t *testing.T) {
 			for _, file := range parsed.Files {
 				for _, declaration := range file.Decls {
 					name, documented, position := documentationOf(declaration)
-					if name == "" || !ast.IsExported(exportedPart(name)) {
+					if name == "" {
+						continue
+					}
+					// Unexported declarations are checked too. The defect this
+					// catches — a declaration inserted between a comment and
+					// the thing it documents — has now happened three times,
+					// and the third time it displaced the comment on an
+					// unexported function, which an exported-only check missed.
+					if !ast.IsExported(exportedPart(name)) && !documentedByConvention(name) {
 						continue
 					}
 					if !documented {
-						t.Errorf("%s: %s is exported and carries no doc comment",
-							set.Position(position), name)
+						t.Errorf("%s: %s carries no doc comment", set.Position(position), name)
 					}
 				}
 			}
@@ -79,6 +86,17 @@ func documentationOf(declaration ast.Decl) (string, bool, token.Pos) {
 		}
 	}
 	return "", false, 0
+}
+
+// documentedByConvention names the unexported declarations this project keeps
+// documented because they carry the reasoning a reader needs: the correlation
+// rules, which four review rounds were spent arriving at.
+func documentedByConvention(name string) bool {
+	switch name {
+	case "relates", "relate", "governs", "defersTo", "bindingAttributes", "sameInstance", "namesInstance":
+		return true
+	}
+	return false
 }
 
 // exportedPart returns the part of a name that decides whether it is exported:
