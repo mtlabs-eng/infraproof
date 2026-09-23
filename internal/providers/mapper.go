@@ -76,13 +76,20 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 	// deletion: two accounts became one and the survivor became authoritative.
 	edges, unresolved := relate(present, mappers)
 
+	// Hoisted: the admissible view of the graph does not depend on which
+	// change is being normalized, and rebuilding it per change made
+	// normalization quadratic — eight seconds on a four-megabyte plan.
+	visible := admissibleEdges(edges)
+	// Hoisted for the same reason: which reads a mapper could have consulted
+	// is a property of the plan, not of the resource being normalized, and
+	// scanning every change per change is the quadratic this fixed once
+	// already, one loop further in.
+	reads := interpretedReads(present, mappers)
+
 	graph := model.Graph{Resources: make([]model.NormalizedResource, 0, len(present))}
 	for _, change := range present {
-		// The mapper sees only what the change controls; withhold sees
-		// everything the configuration related to it, so it can say what the
-		// mapper was not shown.
-		resource := normalizeOne(change, admissibleEdges(edges), admissible, mappers)
-		withhold(&resource, edges[change.Address], mappers)
+		resource := normalizeOne(change, visible, edges, admissible, mappers)
+		withhold(&resource, change, visible, edges, admissible, reads, mappers)
 		if unresolved[change.Address] && resource.ObjectStorage != nil {
 			// Saying only "undetermined" would leave a reader with nowhere to
 			// go. Naming the reason lets them fix it: an argument that names
@@ -155,63 +162,232 @@ func governsOnlyReads(change terraformplan.ResourceChange,
 	return subjects > 0 && subjects == reads
 }
 
-// withhold downgrades a capability computed while a source was kept from the
-// mapper, and names what was kept.
+// withhold reports the sources kept from a mapper whose verdict would have
+// been different had it seen them, and refuses the verdict that rests on one.
 //
-// A fact whose candidate set contained something this build declined to read is
-// not Known. The alternative is what the previous form did: delete the
-// candidate and let the rest settle the question, which turns "one of these two
-// governs it and I may only read one" into "this one governs it".
+// Which sources those are is a question about a particular derivation, and an
+// earlier form answered it by type: anything a mapper interprets, related to
+// the subject. That is a static stand-in for a dynamic question, and it was
+// wrong in both directions at once.
 //
-// Only a source the mapper would have consulted counts — one it interprets, and
-// one the configuration relates to this resource. A plan that reads something
-// no mapper understands, or something nothing here refers to, has withheld
-// nothing from this verdict.
-func withhold(resource *model.NormalizedResource, related []terraformplan.ResourceChange,
-	mappers []Mapper) {
+// It over-corrected where no choice was made. A GCP bucket whose prevention is
+// enforced is proven private from its own attribute, before a binding is read,
+// and an IAM policy read alongside it turned a PASS into an UNKNOWN.
+//
+// It under-corrected where a choice was made. A container naming two accounts,
+// one managed and one read, had the read removed from the candidate count and
+// the survivor attributed — so a read made this build more certain than a
+// managed resource would have, and produced a BLOCK the plan does not
+// determine. Direction was the wrong axis: what matters is not whether a
+// withheld source could have loosened the answer, but whether the answer was
+// reached by choosing among candidates it belonged to.
+//
+// So the mapper is asked rather than modelled. Each withheld candidate is added
+// back on its own and the subject mapped again; a candidate that changes the
+// answer is one the verdict depends on. The second answer is never used as a
+// verdict — only the difference between the two is read — so nothing a read
+// says ever reaches a bundle.
+func withhold(resource *model.NormalizedResource, change terraformplan.ResourceChange,
+	visible, edges map[string][]terraformplan.ResourceChange,
+	admissible, reads []terraformplan.ResourceChange, mappers []Mapper) {
 
 	if resource.ObjectStorage == nil || resource.ReadOnly {
 		return
 	}
 
-	var withheld []string
-	for _, candidate := range related {
-		if !candidate.IsRead() {
+	var undecided, wouldAnswer, contradicts []string
+	for _, candidate := range withheldCandidates(change, edges, reads, mappers) {
+		switch bearingOf(resource, change, candidate, visible, edges, admissible, mappers) {
+		case bearingUndecides:
+			undecided = append(undecided, candidate.Address)
+		case bearingWouldAnswer:
+			wouldAnswer = append(wouldAnswer, candidate.Address)
+		case bearingContradicts:
+			contradicts = append(contradicts, candidate.Address)
+		}
+	}
+
+	if len(undecided) > 0 {
+		// The verdict rested on an attribution this candidate makes
+		// undecidable: with it present the mapper cannot say which control
+		// governs, and without it the survivor answered alone. That is an
+		// identity the configuration does not attribute, and this build does
+		// not attribute it either.
+		slices.Sort(undecided)
+		if resource.ObjectStorage.PublicAccess.IsKnown() {
+			resource.ObjectStorage.PublicAccess = model.Unknown[bool](
+				resource.ObjectStorage.PublicAccess.Canonical().Sources...)
+		}
+		resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved,
+			model.MissingControl{
+				CheckID: "SOURCE_WITHHELD",
+				Reason: fmt.Sprintf(
+					"This plan reads %s rather than changing it, and which control governs this "+
+						"resource cannot be settled without it.",
+					strings.Join(slices.Compact(undecided), ", ")),
+				Cloud: resource.Cloud,
+			})
+	}
+
+	if len(wouldAnswer) > 0 {
+		// The verdict was already open. Nothing is being corrected here; the
+		// reader is being told that the plan contains something that bears on
+		// the question and that this build declined to read.
+		slices.Sort(wouldAnswer)
+		resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved,
+			model.MissingControl{
+				CheckID: "SOURCE_WITHHELD",
+				Reason: fmt.Sprintf(
+					"This plan reads %s rather than changing it, so what it says was not used as "+
+						"evidence, and it would have answered a question this change leaves open.",
+					strings.Join(slices.Compact(wouldAnswer), ", ")),
+				Cloud: resource.Cloud,
+			})
+	}
+
+	if len(contradicts) > 0 {
+		// A different thing: the candidate settles the question too, and
+		// settles it the other way. What it describes is state as it already
+		// is, which a change does not make or unmake — so the verdict about
+		// the change stands, and the reader is told what would have disagreed.
+		slices.Sort(contradicts)
+		resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved,
+			model.MissingControl{
+				CheckID: "SOURCE_WITHHELD_DISAGREES",
+				Reason: fmt.Sprintf(
+					"This plan reads %s rather than changing it, and what it describes would have "+
+						"answered differently; the verdict is about what the change does.",
+					strings.Join(slices.Compact(contradicts), ", ")),
+				Cloud: resource.Cloud,
+			})
+	}
+}
+
+// bearing is what a withheld candidate would have done to the answer.
+type bearing int
+
+const (
+	// bearingNone: the mapper reaches the same verdict either way, so the
+	// candidate is not one this verdict rests on.
+	bearingNone bearing = iota
+	// bearingUndecides: with the candidate present the mapper can no longer
+	// say, which means the answer without it was reached by choosing.
+	bearingUndecides
+	// bearingContradicts: the candidate settles the question the other way.
+	bearingContradicts
+	// bearingWouldAnswer: the answer was already open and the candidate would
+	// have closed it. Nothing was attributed and nothing is contradicted, but
+	// a reader looking at an UNKNOWN deserves to know the plan contains
+	// something that bears on it.
+	bearingWouldAnswer
+)
+
+// withheldCandidates bounds the search. A read of a type no mapper interprets
+// cannot affect any mapper, and one the configuration relates to nothing and
+// that governs nothing by scope cannot affect this subject — but the decision
+// about the rest is made by asking, not by this list.
+func withheldCandidates(change terraformplan.ResourceChange,
+	edges map[string][]terraformplan.ResourceChange, reads []terraformplan.ResourceChange,
+	mappers []Mapper) []terraformplan.ResourceChange {
+
+	if len(reads) == 0 {
+		return nil
+	}
+
+	related := map[string]bool{}
+	for _, candidate := range edges[change.Address] {
+		related[candidate.Address] = true
+	}
+
+	var candidates []terraformplan.ResourceChange
+	for _, candidate := range reads {
+		// Either the configuration relates it to this subject, or it is the
+		// kind of control that governs by scope rather than by reference —
+		// an account-wide block names no bucket at all.
+		if related[candidate.Address] || governsByScope(candidate, mappers) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+// interpretedReads returns the reads some mapper understands, which is the
+// whole of what could ever have been withheld from one.
+func interpretedReads(changes []terraformplan.ResourceChange,
+	mappers []Mapper) []terraformplan.ResourceChange {
+
+	var reads []terraformplan.ResourceChange
+	for _, change := range changes {
+		if !change.IsRead() {
 			continue
 		}
 		for _, mapper := range mappers {
-			if mapper.Interprets(candidate.Type) {
-				withheld = append(withheld, candidate.Address)
+			if mapper.Interprets(change.Type) {
+				reads = append(reads, change)
 				break
 			}
 		}
 	}
-	if len(withheld) == 0 {
-		return
-	}
-	slices.Sort(withheld)
-	withheld = slices.Compact(withheld)
-
-	// A proof of prevention is what a withheld source can undo: it rests on
-	// having seen every route, and one was not shown. A proof of a grant is
-	// not — the change grants what it grants, and a restriction living in
-	// state this change does not touch does not unsay it. That is the same
-	// position the account-level block is already reported under.
-	if exposure := resource.ObjectStorage.PublicAccess; exposure.IsKnown() && !exposure.Get() {
-		resource.ObjectStorage.PublicAccess = model.Unknown[bool](exposure.Canonical().Sources...)
-	}
-	resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved,
-		model.MissingControl{
-			CheckID: "SOURCE_WITHHELD",
-			Reason: fmt.Sprintf(
-				"This plan reads %s rather than changing it, so what it says was not used as "+
-					"evidence about this change, and the question it would have answered is open.",
-				strings.Join(withheld, ", ")),
-			Cloud: resource.Cloud,
-		})
+	return reads
 }
 
-func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraformplan.ResourceChange,
+// governsByScope reports a type whose mapper declares no relation from it, and
+// which therefore reaches its subjects through the scope rather than through a
+// reference. Such a control is invisible to the edge map.
+func governsByScope(change terraformplan.ResourceChange, mappers []Mapper) bool {
+	spoken, declared := declarationsFor(change.Type, mappers)
+	return spoken && len(declared) == 0
+}
+
+// bearingOf maps the subject again with one withheld candidate added back, and
+// reports what its presence would have done.
+//
+// The two outcomes are not the same fault and do not have the same answer. A
+// candidate that makes the question undecidable shows that the verdict was an
+// attribution — the mapper chose between candidates and one of them was removed
+// from the choice. A candidate that answers the other way is a counter-fact
+// about existing state, which a change neither makes nor unmakes.
+func bearingOf(resource *model.NormalizedResource, change,
+	candidate terraformplan.ResourceChange,
+	visible, edges map[string][]terraformplan.ResourceChange,
+	admissible []terraformplan.ResourceChange, mappers []Mapper) bearing {
+
+	withCandidate := make(map[string][]terraformplan.ResourceChange, len(visible))
+	for address, related := range visible {
+		withCandidate[address] = related
+	}
+	for _, related := range edges[change.Address] {
+		if related.Address == candidate.Address {
+			withCandidate[change.Address] = append(
+				slices.Clone(visible[change.Address]), candidate)
+			break
+		}
+	}
+
+	scope := append(slices.Clone(admissible), candidate)
+	again := normalizeOne(change, withCandidate, edges, scope, mappers)
+	if again.ObjectStorage == nil {
+		return bearingUndecides
+	}
+
+	before, after := resource.ObjectStorage.PublicAccess, again.ObjectStorage.PublicAccess
+	switch {
+	case before.State == after.State && (!before.IsKnown() || before.Get() == after.Get()):
+		return bearingNone
+	case before.IsKnown() && !after.IsKnown():
+		return bearingUndecides
+	case before.IsKnown() && after.IsKnown():
+		return bearingContradicts
+	default:
+		return bearingWouldAnswer
+	}
+}
+
+// normalizeOne builds one entry. edges is the admissible view a mapper may
+// reason from; every is the whole correlation graph, which only the
+// bookkeeping about what was withheld may look at.
+func normalizeOne(change terraformplan.ResourceChange,
+	edges, every map[string][]terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange, mappers []Mapper) model.NormalizedResource {
 
 	if change.IsRead() {
@@ -255,7 +431,7 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 				UnrecognizedAction: change.HasUnrecognizedAction(),
 				Environment:        environmentOf(change, mapper),
 				DefersTo:           defersTo(change, edges[change.Address], scope, mapper),
-				GovernsWithheld:    governsOnlyReads(change, edges[change.Address], mapper),
+				GovernsWithheld:    governsOnlyReads(change, every[change.Address], mapper),
 			}
 		}
 		resource := mapper.Map(change, edges[change.Address], scope)

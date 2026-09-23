@@ -772,3 +772,48 @@ func TestAControlOverAReadSaysWhatIsActuallyWrong(t *testing.T) {
 		t.Errorf("the reason does not say what is actually wrong: %q", unknowns[0].Reason)
 	}
 }
+
+// TestRedactedEvidenceSaysSo keeps a contract field from asserting the opposite
+// of the fact it is attached to.
+//
+// docs/EVIDENCE-BUNDLE.md defines EvidenceRef.Redacted as saying the located
+// value is sensitive and was not read. Every storage reference set it to false,
+// including the references of a capability whose own state is REDACTED — so a
+// bundle carried "the deciding value is REDACTED" beside six references each
+// claiming nothing was.
+//
+// The environment rule already marks them; the storage rule did not.
+func TestRedactedEvidenceSaysSo(t *testing.T) {
+	source := model.Provenance{ResourceAddress: "aws_s3_bucket_policy.p", AttributePath: "policy"}
+
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+			Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
+				PublicAccess: model.Redacted[bool](source)}},
+	}}
+
+	result := policy.StorageExposure(contract(nil), graph)
+	unknowns := unknownsFor(result, policy.CheckStoragePublicDeterminable)
+	if len(unknowns) != 1 {
+		t.Fatalf("unknowns = %v, want one", result.Unknowns)
+	}
+	for _, ref := range unknowns[0].Evidence {
+		if !ref.Redacted {
+			t.Errorf("a reference to a sensitive value claims it was read: %+v", ref)
+		}
+	}
+
+	// And an ordinary fact is not marked.
+	plain := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+			Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
+				PublicAccess: model.Known(true, source)}},
+	}}
+	for _, finding := range policy.StorageExposure(contract(nil), plain).Findings {
+		for _, ref := range finding.Evidence {
+			if ref.Redacted {
+				t.Errorf("a reference to a value that was read claims it was not: %+v", ref)
+			}
+		}
+	}
+}

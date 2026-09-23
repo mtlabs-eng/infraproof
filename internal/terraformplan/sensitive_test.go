@@ -113,8 +113,21 @@ func TestSensitiveContainerRetainsNoChildren(t *testing.T) {
 	if credentials.Len() != 0 || credentials.Keys() != nil {
 		t.Fatalf("a redacted container retained %d children", credentials.Len())
 	}
-	if credentials.Field("password").State() != StateAbsent {
-		t.Fatal("a child of a redacted container must not be reachable")
+	// Not reachable, and not absent either. This assertion read StateAbsent
+	// until a review found that the difference decides verdicts: absent is the
+	// answer a rule may conclude from, so a whole object marked sensitive made
+	// every attribute under it look like one the plan never mentioned, and a
+	// container set to public access came back UNKNOWN where it should have
+	// been REDACTED — with its evidence claiming nothing was withheld.
+	//
+	// Redacted is the stronger answer for the same property: the child carries
+	// no payload, and it says why it cannot be read.
+	child := credentials.Field("password")
+	if child.State() != StateRedacted {
+		t.Fatalf("a child of a redacted container is %q, want %q", child.State(), StateRedacted)
+	}
+	if child.Kind() != KindAbsent || child.Text() != "" || child.Bool() || child.Len() != 0 {
+		t.Fatal("a child of a redacted container must carry no payload")
 	}
 }
 

@@ -282,3 +282,71 @@ func TestBeforeIsNotAffectedByTheAfterUnknownMask(t *testing.T) {
 		t.Fatalf("after.arn state = %q, want %q", got, StateUnknown)
 	}
 }
+
+// TestReadingInsideAWithheldValueStaysWithheld keeps a mask from being read as
+// an absence one level down.
+//
+// Field and At answer about a receiver they can see. When the receiver itself
+// was withheld — a whole "after" marked sensitive, or not known until apply —
+// nothing inside it is absent: it is unreadable for the same reason the
+// receiver was. Returning the zero value there turned REDACTED into ABSENT,
+// and absent is the answer that lets a rule conclude.
+func TestReadingInsideAWithheldValueStaysWithheld(t *testing.T) {
+	cases := map[string]struct {
+		change string
+		want   State
+	}{
+		"a sensitive object": {
+			`"actions": ["create"], "before": null,
+			 "after": {"tags": {"environment": "production"}}, "after_sensitive": true`,
+			StateRedacted,
+		},
+		"an object not yet known": {
+			`"actions": ["create"], "before": null, "after": null, "after_unknown": true`,
+			StateUnknown,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := []byte(`{"format_version": "1.2", "resource_changes": [
+			  {"address": "r.b", "mode": "managed", "type": "r", "name": "b", "provider_name": "p",
+			   "change": {` + tc.change + `}}
+			]}`)
+
+			plan, err := Parse(raw)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			after := plan.ResourceChanges[0].After
+
+			if got := after.State(); got != tc.want {
+				t.Fatalf("after state = %q, want %q", got, tc.want)
+			}
+			// One level down, and two.
+			if got := after.Field("tags").State(); got != tc.want {
+				t.Errorf("a field of a withheld object is %q, want %q", got, tc.want)
+			}
+			if got := after.Field("tags").Field("environment").State(); got != tc.want {
+				t.Errorf("a field two levels inside a withheld object is %q, want %q", got, tc.want)
+			}
+			if got := after.At(0).State(); got != tc.want {
+				t.Errorf("an element of a withheld value is %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// A readable object still answers ABSENT for a key it does not carry,
+	// which is how a caller learns the plan never mentioned the field.
+	raw := []byte(`{"format_version": "1.2", "resource_changes": [
+	  {"address": "r.b", "mode": "managed", "type": "r", "name": "b", "provider_name": "p",
+	   "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}
+	]}`)
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := plan.ResourceChanges[0].After.Field("absent").State(); got != StateAbsent {
+		t.Errorf("a key a readable object does not carry is %q, want %q", got, StateAbsent)
+	}
+}

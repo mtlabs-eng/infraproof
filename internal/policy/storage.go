@@ -195,6 +195,10 @@ func bundleCloud(cloud model.Cloud) evidence.Cloud {
 
 // referencesOf turns a fact's provenance into evidence. A reference locates the
 // provider attribute a conclusion came from and can carry nothing else.
+//
+// It carries whether that attribute was readable, because the bundle contract
+// defines the field as saying so and every storage reference said "read" —
+// including the references of a capability whose own state was REDACTED.
 func referencesOf(fact model.Fact[bool]) []evidence.EvidenceRef {
 	canonical := fact.Canonical()
 
@@ -204,6 +208,7 @@ func referencesOf(fact model.Fact[bool]) []evidence.EvidenceRef {
 			Source:          "terraform_plan",
 			ResourceAddress: inline(source.ResourceAddress),
 			Path:            inline(source.AttributePath),
+			Redacted:        fact.State == model.FactRedacted,
 		})
 	}
 	return refs
