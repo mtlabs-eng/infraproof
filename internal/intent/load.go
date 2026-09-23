@@ -43,9 +43,10 @@ func Parse(raw []byte, source string) (Contract, error) {
 		return Contract{}, fmt.Errorf(
 			"reading intent contract %s: YAML is not supported in this build; supply the contract as JSON", source)
 	}
-	if looksLikeYAML(body) {
+	if notJSON(body) {
 		return Contract{}, fmt.Errorf(
-			"reading intent contract %s: YAML is not supported in this build; supply the contract as JSON", source)
+			"reading intent contract %s: this is not JSON; YAML is not supported in this build, "+
+				"so supply the contract as JSON", source)
 	}
 
 	// A contract that names one field twice is read as saying the second
@@ -70,36 +71,23 @@ func Parse(raw []byte, source string) (Contract, error) {
 	return contract, nil
 }
 
-// looksLikeYAML recognizes the deferred format well enough to refuse it by
-// name. A YAML file fed to a JSON decoder fails as a syntax error, which tells
-// a reader nothing about why their file was rejected.
+// notJSON reports that a document is not JSON at all, and therefore cannot be
+// a contract this build reads.
 //
-// The test is what the document cannot be rather than what it might be: valid
-// JSON begins with one of a small, closed set of bytes, so anything else is not
-// JSON, and YAML is overwhelmingly what it will be. The document marker "---"
-// and a top-level list both begin with "-", which is also how a negative number
-// begins, so that one byte is disambiguated by what follows it: a contract is a
-// mapping, never a bare number.
-func looksLikeYAML(raw []byte) bool {
-	trimmed := bytes.TrimLeft(raw, " \t\r\n")
-	if len(trimmed) == 0 {
-		return false
-	}
-
-	switch trimmed[0] {
-	case '{', '[', '"', 't', 'f', 'n':
-		// JSON's own openers.
-		return false
-	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		return false
-	case '-':
-		// A negative number is JSON; "---" is a document marker and "- " opens
-		// a list, and neither is.
-		rest := trimmed[1:]
-		return len(rest) == 0 || rest[0] == '-' || rest[0] == ' ' || rest[0] == '\t' ||
-			rest[0] == '\n' || rest[0] == '\r'
-	}
-	return true
+// It asks the decoder rather than inspecting the first byte. An earlier form
+// classified the document from a table of openers, which is a restatement of
+// the decoder's own grammar: the two agree almost everywhere, and this project
+// has now been caught three times by the gap in an "almost". Decoding into a
+// raw message accepts every JSON document and no other, which is exactly the
+// question being asked.
+//
+// The message names YAML because that is overwhelmingly what a non-JSON
+// contract will be, and because failing as a syntax error at some byte offset
+// tells a reader nothing about why their file was rejected.
+func notJSON(raw []byte) bool {
+	var document json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	return decoder.Decode(&document) != nil
 }
 
 // maxDepth bounds how far the rewrite will descend.

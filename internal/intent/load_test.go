@@ -611,3 +611,58 @@ func TestAYAMLNameIsRefusedWhateverIsInside(t *testing.T) {
 		})
 	}
 }
+
+// TestEveryJSONDocumentReachesTheDecoder holds the boundary between "not JSON"
+// and "not a contract" where the decoder puts it.
+//
+// An earlier form classified the document from its first byte, which restated
+// the decoder's grammar. This project has been caught three times by the gap in
+// an "almost", so the question is asked of the thing that defines the answer.
+func TestEveryJSONDocumentReachesTheDecoder(t *testing.T) {
+	// Valid JSON that is not a contract must be refused as a contract, with
+	// the decoder's own complaint, never as a format problem.
+	for name, raw := range map[string]string{
+		"a bare number":        `42`,
+		"a bare string":        `"hello"`,
+		"a bare true":          `true`,
+		"a bare null":          `null`,
+		"an array":             `[1, 2, 3]`,
+		"a negative number":    `-1`,
+		"an empty object":      `{}`,
+		"an object of nothing": `{"schema_version": "1.0"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := intent.Parse([]byte(raw), "contract.json")
+			if err == nil {
+				t.Fatal("a JSON document that is not a contract was accepted")
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "yaml") {
+				t.Errorf("valid JSON was reported as a format problem: %v", err)
+			}
+		})
+	}
+
+	// Anything that is not JSON is refused as a format problem, whatever it
+	// starts with.
+	for name, raw := range map[string]string{
+		"a plain mapping":   "schema_version: \"1.0\"\n",
+		"a document marker": "---\nschema_version: \"1.0\"\n",
+		"flow style":        `{schema_version: "1.0", change_id: c}`,
+		"a top-level list":  "- schema_version: \"1.0\"\n",
+		"a directive":       "%YAML 1.2\n---\na: b\n",
+		"a comment":         "# a contract\na: b\n",
+		"an unquoted word":  "hello",
+		"a trailing comma":  `{"schema_version": "1.0",}`,
+		"a single quote":    `{'schema_version': '1.0'}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := intent.Parse([]byte(raw), "contract.txt")
+			if err == nil {
+				t.Fatal("a document that is not JSON was accepted")
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "json") {
+				t.Errorf("the error does not say the format is the problem: %v", err)
+			}
+		})
+	}
+}
