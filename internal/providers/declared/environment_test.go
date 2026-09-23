@@ -204,3 +204,58 @@ func TestEveryOutcomeCarriesProvenance(t *testing.T) {
 		}
 	}
 }
+
+// TestAWithheldObjectIsNotAnEmptyOne guards the container the attribute is read
+// out of, which nothing guarded.
+//
+// unreadable checked the attribute and the value and never the object holding
+// them. Value.Field on a non-object receiver returns the zero value, so a whole
+// "after" marked sensitive or not yet known collapsed to ABSENT one level down
+// — and the rule reports ABSENT as "the resource declares no environment",
+// non-required, which passes.
+//
+// Three false statements came out of one mask: the decision, the reason, and a
+// piece of evidence marked not redacted.
+func TestAWithheldObjectIsNotAnEmptyOne(t *testing.T) {
+	cases := map[string]struct {
+		change string
+		want   model.FactState
+	}{
+		"the whole after is sensitive": {
+			`"actions": ["create"], "before": null,
+			 "after": {"name": "b", "tags": {"environment": "production"}},
+			 "after_sensitive": true`,
+			model.FactRedacted,
+		},
+		"the whole after is not yet known": {
+			`"actions": ["create"], "before": null, "after": null, "after_unknown": true`,
+			model.FactUnknown,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := `{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "r.b", "mode": "managed", "type": "r", "name": "b",
+			     "provider_name": "p", "change": {` + tc.change + `}}
+			  ]
+			}`
+
+			plan, err := terraformplan.Parse([]byte(raw))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			fact := declared.Environment(plan.ResourceChanges[0], "tags", model.CloudAWS)
+
+			if fact.IsKnown() {
+				t.Fatalf("a withheld object was read as declaring %q", fact.Get())
+			}
+			if fact.State != tc.want {
+				t.Fatalf("state = %q, want %q; an object this run could not see is not one that "+
+					"said nothing", fact.State, tc.want)
+			}
+		})
+	}
+}

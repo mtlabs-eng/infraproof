@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -68,11 +69,20 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 	// being reported missing, which is the true and actionable answer.
 	present := plan.ResourceChanges
 	admissible := admissibleChanges(present)
-	edges, unresolved := relate(admissible, mappers)
+
+	// Correlation runs over everything. A reference is a reference whoever
+	// wrote it, and an edge that is not built is a candidate that was never
+	// counted — which is how excluding a read resolved an ambiguity by
+	// deletion: two accounts became one and the survivor became authoritative.
+	edges, unresolved := relate(present, mappers)
 
 	graph := model.Graph{Resources: make([]model.NormalizedResource, 0, len(present))}
 	for _, change := range present {
-		resource := normalizeOne(change, edges, admissible, mappers)
+		// The mapper sees only what the change controls; withhold sees
+		// everything the configuration related to it, so it can say what the
+		// mapper was not shown.
+		resource := normalizeOne(change, admissibleEdges(edges), admissible, mappers)
+		withhold(&resource, edges[change.Address], mappers)
 		if unresolved[change.Address] && resource.ObjectStorage != nil {
 			// Saying only "undetermined" would leave a reader with nowhere to
 			// go. Naming the reason lets them fix it: an argument that names
@@ -93,8 +103,14 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 // admissibleChanges returns the changes that may contribute to a verdict.
 //
 // A read is excluded: it observes state the change does not control, so it can
-// explain nothing about what the change does. It stays in the graph as itself —
-// nothing in a plan is filtered away — and simply answers for nobody.
+// explain nothing about what the change does — in either direction. It cannot
+// prove prevention, and it cannot prove a grant either, because what it
+// describes is what is there already rather than what the change will do.
+//
+// Exclusion alone is not enough, and withhold below is the other half. A source
+// this build declines to use is not a source that is absent: leaving it out of
+// a mapper's view without recording that it was left out let a candidate
+// disappear and the survivor answer alone.
 func admissibleChanges(changes []terraformplan.ResourceChange) []terraformplan.ResourceChange {
 	admissible := make([]terraformplan.ResourceChange, 0, len(changes))
 	for _, change := range changes {
@@ -104,6 +120,95 @@ func admissibleChanges(changes []terraformplan.ResourceChange) []terraformplan.R
 		admissible = append(admissible, change)
 	}
 	return admissible
+}
+
+// admissibleEdges is the correlation graph with the inadmissible targets
+// removed, which is what a mapper is allowed to reason from.
+func admissibleEdges(edges map[string][]terraformplan.ResourceChange) map[string][]terraformplan.ResourceChange {
+	out := make(map[string][]terraformplan.ResourceChange, len(edges))
+	for address, related := range edges {
+		out[address] = admissibleChanges(related)
+	}
+	return out
+}
+
+// governsOnlyReads reports a control whose every subject is one the verdict may
+// not read.
+//
+// Such a control defers to nobody, which coverage reports as "it controls a
+// resource that is not part of this plan" — a sentence that is false when the
+// resource is right there and merely inadmissible. Telling a reader to add what
+// they have already added is the mistake this repository names elsewhere.
+func governsOnlyReads(change terraformplan.ResourceChange,
+	related []terraformplan.ResourceChange, mapper Mapper) bool {
+
+	var subjects, reads int
+	for _, candidate := range related {
+		if !mapper.IsSubject(candidate.Type) || candidate.Address == change.Address {
+			continue
+		}
+		subjects++
+		if candidate.IsRead() {
+			reads++
+		}
+	}
+	return subjects > 0 && subjects == reads
+}
+
+// withhold downgrades a capability computed while a source was kept from the
+// mapper, and names what was kept.
+//
+// A fact whose candidate set contained something this build declined to read is
+// not Known. The alternative is what the previous form did: delete the
+// candidate and let the rest settle the question, which turns "one of these two
+// governs it and I may only read one" into "this one governs it".
+//
+// Only a source the mapper would have consulted counts — one it interprets, and
+// one the configuration relates to this resource. A plan that reads something
+// no mapper understands, or something nothing here refers to, has withheld
+// nothing from this verdict.
+func withhold(resource *model.NormalizedResource, related []terraformplan.ResourceChange,
+	mappers []Mapper) {
+
+	if resource.ObjectStorage == nil || resource.ReadOnly {
+		return
+	}
+
+	var withheld []string
+	for _, candidate := range related {
+		if !candidate.IsRead() {
+			continue
+		}
+		for _, mapper := range mappers {
+			if mapper.Interprets(candidate.Type) {
+				withheld = append(withheld, candidate.Address)
+				break
+			}
+		}
+	}
+	if len(withheld) == 0 {
+		return
+	}
+	slices.Sort(withheld)
+	withheld = slices.Compact(withheld)
+
+	// A proof of prevention is what a withheld source can undo: it rests on
+	// having seen every route, and one was not shown. A proof of a grant is
+	// not — the change grants what it grants, and a restriction living in
+	// state this change does not touch does not unsay it. That is the same
+	// position the account-level block is already reported under.
+	if exposure := resource.ObjectStorage.PublicAccess; exposure.IsKnown() && !exposure.Get() {
+		resource.ObjectStorage.PublicAccess = model.Unknown[bool](exposure.Canonical().Sources...)
+	}
+	resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved,
+		model.MissingControl{
+			CheckID: "SOURCE_WITHHELD",
+			Reason: fmt.Sprintf(
+				"This plan reads %s rather than changing it, so what it says was not used as "+
+					"evidence about this change, and the question it would have answered is open.",
+				strings.Join(withheld, ", ")),
+			Cloud: resource.Cloud,
+		})
 }
 
 func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraformplan.ResourceChange,
@@ -150,6 +255,7 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 				UnrecognizedAction: change.HasUnrecognizedAction(),
 				Environment:        environmentOf(change, mapper),
 				DefersTo:           defersTo(change, edges[change.Address], scope, mapper),
+				GovernsWithheld:    governsOnlyReads(change, edges[change.Address], mapper),
 			}
 		}
 		resource := mapper.Map(change, edges[change.Address], scope)

@@ -439,6 +439,10 @@ func ResourceCoverage(graph model.Graph, evaluated []string) Result {
 // coverageReason says which of the two gaps this is, because they have
 // different fixes: one needs a rule, the other needs the resource it governs.
 func coverageReason(resource model.NormalizedResource) string {
+	if resource.GovernsWithheld {
+		return "This resource controls only resources this plan reads rather than changes, so " +
+			"nothing it governs was judged and nothing about it was checked against the contract."
+	}
 	if len(resource.DefersTo) > 0 {
 		return "This resource controls another, and no resource it governs was judged in this plan, " +
 			"so nothing about it was checked against the contract."

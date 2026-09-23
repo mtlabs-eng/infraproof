@@ -48,6 +48,20 @@ const (
 	ModeData Mode = "data"
 )
 
+// Valid reports whether the mode is one this build understands.
+//
+// It matters more than it looks: the mode says whether an entry is something
+// the configuration manages or something it only observes, and a verdict is
+// about what the change controls. A spelling this build does not recognize
+// would be treated as managed, which is the side that admits.
+func (m Mode) Valid() bool {
+	switch m {
+	case ModeManaged, ModeData:
+		return true
+	}
+	return false
+}
+
 // Action is one planned operation. Terraform expresses a replace as an ordered
 // pair of delete and create rather than a single action, so that any caller
 // scanning for "delete" recognizes every case in which an object goes away.

@@ -48,6 +48,10 @@ type NormalizedResource struct {
 	// change look like one that destroys nothing. A rule must decline to
 	// conclude rather than treat it as safe.
 	UnrecognizedAction bool
+	// GovernsWithheld reports that every subject this control governs is one
+	// the verdict may not read — a data source. Its meaning went somewhere,
+	// and nowhere admissible.
+	GovernsWithheld bool
 	// DefersTo names the subjects a control resource's meaning belongs to, by
 	// address, in deterministic order.
 	//

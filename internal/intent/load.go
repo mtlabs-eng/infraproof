@@ -64,6 +64,20 @@ func Parse(raw []byte, source string) (Contract, error) {
 
 	wire, err := decodeContract(body)
 	if err != nil {
+		var kind *json.UnmarshalTypeError
+		if errors.As(err, &kind) {
+			// encoding/json names the Go type it was decoding into, which is
+			// an implementation detail the reader has no way to act on. The
+			// field and the JSON kind are the parts that belong to them.
+			if kind.Field == "" {
+				return Contract{}, fmt.Errorf(
+					"reading intent contract %s: a contract is a JSON object, and this is %s",
+					source, article(kind.Value))
+			}
+			return Contract{}, fmt.Errorf(
+				"reading intent contract %s: %s is %s, which is the wrong kind of value",
+				source, kind.Field, article(kind.Value))
+		}
 		return Contract{}, fmt.Errorf("reading intent contract %s: %w", source, err)
 	}
 
@@ -94,6 +108,16 @@ func notJSON(raw []byte) bool {
 	var document json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	return decoder.Decode(&document) != nil
+}
+
+// article prefixes a JSON kind so a message reads as a sentence.
+func article(kind string) string {
+	switch kind {
+	case "array", "object":
+		return "an " + kind
+	default:
+		return "a " + kind
+	}
 }
 
 // opensAsJSON reports that a document starts the way a JSON contract does.
@@ -178,13 +202,23 @@ func rejectRepeatedFields(raw []byte) error {
 	//
 	// So the folded key sets are compared too, using the relation the decoder
 	// folds by rather than a guess at it.
-	for _, collision := range folded {
-		matters, err := namesAField(raw, collision)
+	// One probe per object, not per collision. Whether a position matches
+	// fields or holds names is a property of the position, so every collision
+	// in one object shares the answer — and probing each rewrites and decodes
+	// the whole document again, which made a valid contract of many
+	// case-spelled tag names quadratic in its own size.
+	answered := map[string]bool{}
+	for _, candidate := range folded {
+		if answered[candidate.path] {
+			continue
+		}
+		matters, err := namesAField(raw, candidate)
 		if err != nil {
 			return nil //nolint:nilerr // the decode reports malformed input
 		}
+		answered[candidate.path] = true
 		if matters {
-			return fmt.Errorf("names %s more than once", collision.key)
+			return fmt.Errorf("names %s more than once", candidate.key)
 		}
 	}
 	return nil

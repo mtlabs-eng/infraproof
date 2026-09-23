@@ -568,3 +568,74 @@ func TestAnUnreadableVerbDoesNotHideADestruction(t *testing.T) {
 		t.Error("the unreadable verb was not reported")
 	}
 }
+
+// TestAWithheldSourceReachesTheReport covers the admissibility boundary at the
+// layer where it is observable.
+//
+// It had tests only in the normalizer, both asserting on a fact and both in
+// the prevention direction, so the two defects it introduced — an ambiguity
+// resolved by deleting a candidate, and a grant discarded without a record —
+// were invisible to the suite and to every committed fixture.
+func TestAWithheldSourceReachesTheReport(t *testing.T) {
+	// A container naming two accounts, one managed and one read, which is what
+	// Terraform writes for a conditional.
+	conditional := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.locked", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "locked",
+	     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "l", "allow_nested_items_to_be_public": false}}},
+	    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "legacy",
+	     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "g", "allow_nested_items_to_be_public": true}}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.locked", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "locked", "expressions": {}},
+	    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "legacy", "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {"storage_account_id": {"references": [
+	       "data.azurerm_storage_account.legacy.id", "data.azurerm_storage_account.legacy",
+	       "azurerm_storage_account.locked.id", "azurerm_storage_account.locked"]}}}
+	  ]}}
+	}`
+
+	everyCloud := strings.Replace(privateIntent, `["aws"]`, `["aws", "azure", "gcp"]`, 1)
+
+	code, stdout, stderr := check(t,
+		"--intent", write(t, "intent.json", everyCloud),
+		"--plan", write(t, "plan.json", conditional))
+
+	if code != evidence.ExitUnknown {
+		t.Fatalf("exit = %d, want %d; a candidate was withheld and the question is open\n%s\n%s",
+			code, evidence.ExitUnknown, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "data.azurerm_storage_account.legacy") {
+		t.Fatalf("the report does not say what was withheld:\n%s", stdout)
+	}
+
+	var bundle evidence.Bundle
+	if err := json.Unmarshal([]byte(stdout), &bundle); err != nil {
+		t.Fatalf("the output is not an Evidence Bundle: %v", err)
+	}
+	var withheld bool
+	for _, unknown := range bundle.Unknowns {
+		if unknown.CheckID == "SOURCE_WITHHELD" {
+			withheld = true
+		}
+	}
+	if !withheld {
+		t.Errorf("no record names the withheld source: %v", bundle.Unknowns)
+	}
+}

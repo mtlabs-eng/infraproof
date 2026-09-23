@@ -207,7 +207,7 @@ func parseResourceChange(path string, object map[string]any, errs *[]error) Reso
 		ProviderName:  requiredString(object, "provider_name", path+".provider_name", errs),
 		Deposed:       optionalString(object, "deposed", path+".deposed", errs),
 		ActionReason:  optionalString(object, "action_reason", path+".action_reason", errs),
-		Mode:          Mode(optionalString(object, "mode", path+".mode", errs)),
+		Mode:          parseMode(path+".mode", object, errs),
 	}
 	change.Index, change.HasIndex = parseIndex(path+".index", object, errs)
 
@@ -345,6 +345,19 @@ func parseIndex(path string, object map[string]any, errs *[]error) (string, bool
 		*errs = append(*errs, invalid(path, "must be a string or a number"))
 		return "", false
 	}
+}
+
+// parseMode reads the field that decides whether an entry is a change at all.
+// An unrecognized spelling is refused rather than read as managed: what it
+// means is Terraform's to say, and guessing would guess toward admitting.
+func parseMode(path string, object map[string]any, errs *[]error) Mode {
+	mode := Mode(requiredString(object, "mode", path, errs))
+	if mode != "" && !mode.Valid() {
+		*errs = append(*errs, invalid(path, "is %s, which this build does not recognize",
+			safeToken(string(mode))))
+		return ""
+	}
+	return mode
 }
 
 func requiredString(object map[string]any, name, path string, errs *[]error) string {

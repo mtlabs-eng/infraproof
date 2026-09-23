@@ -744,3 +744,31 @@ func TestAResourceNobodyCouldReadSaysSo(t *testing.T) {
 		t.Errorf("evidence = %v; nothing was read, so there is nothing to cite", unknowns[0].Evidence)
 	}
 }
+
+// TestAControlOverAReadSaysWhatIsActuallyWrong keeps the coverage record from
+// telling a reader to add what they have already added.
+//
+// A control whose only subject is a data source defers to nobody, because a
+// read may not answer for anything — and "defers to nobody" was reported as
+// "it controls a resource that is not part of this plan", which is false when
+// the resource is right there.
+func TestAControlOverAReadSaysWhatIsActuallyWrong(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket_policy.c", Provider: "p", Cloud: model.CloudAWS,
+			Family: model.FamilyObjectStorage, Interpreted: true, GovernsWithheld: true},
+	}}
+
+	result := policy.ResourceCoverage(graph, nil)
+
+	unknowns := unknownsFor(result, policy.CheckResourceEvaluated)
+	if len(unknowns) != 1 {
+		t.Fatalf("unknowns = %v, want the control reported", result.Unknowns)
+	}
+	if strings.Contains(unknowns[0].Reason, "not part of this plan") {
+		t.Errorf("the reason says the subject is absent when it is only inadmissible: %q",
+			unknowns[0].Reason)
+	}
+	if !strings.Contains(unknowns[0].Reason, "reads rather than changes") {
+		t.Errorf("the reason does not say what is actually wrong: %q", unknowns[0].Reason)
+	}
+}

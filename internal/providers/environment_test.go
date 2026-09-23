@@ -822,3 +822,156 @@ func mustParse(t *testing.T, raw string) terraformplan.Plan {
 	}
 	return plan
 }
+
+// TestWithholdingASourceIsNotTheSameAsItsAbsence is the defect the previous
+// round's fix introduced, and the reason it introduced it.
+//
+// Excluding a read from what a mapper sees stops a read exonerating anything.
+// It also makes the read vanish, and an inadmissible fact and an absent fact
+// are different things. A container naming two accounts — one managed, one
+// read, which is what Terraform writes for a conditional — had its ambiguity
+// resolved by deletion: two candidates became one, the survivor became
+// authoritative, and a container explicitly set to blob access came back
+// proven private.
+//
+// A fact computed while something was withheld from it is not Known. The
+// withheld source is named, so the reader can see what the tool declined to
+// use and why the answer is open.
+func TestWithholdingASourceIsNotTheSameAsItsAbsence(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.locked", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "locked", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "l", "allow_nested_items_to_be_public": false}}},
+	    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "legacy", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "g", "allow_nested_items_to_be_public": true}}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.locked", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "locked", "expressions": {}},
+	    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "legacy", "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {"storage_account_id": {"references": [
+	       "data.azurerm_storage_account.legacy.id", "data.azurerm_storage_account.legacy",
+	       "azurerm_storage_account.locked.id", "azurerm_storage_account.locked"]}}}
+	  ]}}
+	}`
+
+	container := normalizedAt(t, raw, "azurerm_storage_container.assets")
+	if container.ObjectStorage == nil {
+		t.Fatal("no normalized container")
+	}
+
+	exposure := container.ObjectStorage.PublicAccess
+	if exposure.IsKnown() {
+		t.Fatalf("a candidate was withheld and the answer was settled anyway: %v", exposure.Get())
+	}
+
+	var named bool
+	for _, control := range container.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			named = true
+			if !contains(control.Reason, "legacy") {
+				t.Errorf("the record does not name what was withheld: %q", control.Reason)
+			}
+		}
+	}
+	if !named {
+		t.Fatalf("nothing recorded that a source was withheld: %v", container.ObjectStorage.Unresolved)
+	}
+}
+
+// TestAWithheldGrantIsRecordedNotDiscarded is the same rule in the other
+// direction. A read cannot incriminate either — what it describes is existing
+// state, not what the change does — but discarding it silently left a bundle
+// saying the change was consistent in every supported check beside a plan that
+// states a public grant.
+func TestAWithheldGrantIsRecordedNotDiscarded(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a",
+	                          "policy": "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\"}]}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if bucket.ObjectStorage.PublicAccess.IsKnown() {
+		t.Fatalf("a withheld grant left the answer settled: %v",
+			bucket.ObjectStorage.PublicAccess.Get())
+	}
+
+	var named bool
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the withheld policy was not recorded: %v", bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestNothingIsWithheldFromAnOrdinaryPlan keeps the record off every plan that
+// has no read in it, so it means something when it appears.
+func TestNothingIsWithheldFromAnOrdinaryPlan(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if !bucket.ObjectStorage.PublicAccess.IsKnown() || bucket.ObjectStorage.PublicAccess.Get() {
+		t.Fatalf("the block shuts every route: %v/%v",
+			bucket.ObjectStorage.PublicAccess.State, bucket.ObjectStorage.PublicAccess.Get())
+	}
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			t.Errorf("a plan with no read recorded a withheld source: %v", control)
+		}
+	}
+}

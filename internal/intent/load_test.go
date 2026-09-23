@@ -1,6 +1,7 @@
 package intent_test
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
@@ -772,6 +773,73 @@ func TestADocumentNestedTooDeepSaysSo(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "levels deep") {
 				t.Errorf("the error does not say what is wrong: %v", err)
+			}
+			if strings.Contains(err.Error(), "wireContract") {
+				t.Errorf("an internal type name reached the user: %v", err)
+			}
+		})
+	}
+}
+
+// TestManyFoldedTagNamesCostLittle keeps a valid contract from paying for the
+// check that clears it.
+//
+// Cloud tag keys are case-sensitive, so a contract may carry many that fold
+// together, and docs/INTENT-CONTRACT.md says so. Confirming each collision
+// separately rewrote and decoded the whole document again, which made such a
+// contract quadratic in its own size: 86 KB took nine seconds. Whether a
+// position matches fields or holds names is a property of the position, so one
+// probe answers for every collision in it.
+func TestManyFoldedTagNamesCostLittle(t *testing.T) {
+	tags := make(map[string]string, 4000)
+	for i := range 4000 {
+		key := []byte("environmenttagx")
+		for bit := range 15 {
+			if i&(1<<bit) != 0 {
+				key[bit] -= 'a' - 'A'
+			}
+		}
+		tags[string(key)] = "v"
+	}
+	encoded, err := json.Marshal(map[string]any{
+		"schema_version":      "1.0",
+		"change_id":           "c",
+		"environment":         "staging",
+		"allowed_clouds":      []string{"aws"},
+		"destructive_changes": "forbidden",
+		"resources":           []map[string]string{{"family": "object_storage", "exposure": "private"}},
+		"constraints":         map[string]any{"required_tags": tags},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := intent.Parse(encoded, "contract.json")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("a valid contract of many case-spelled tag names was rejected: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Parse did not finish in five seconds on %d bytes", len(encoded))
+	}
+}
+
+// TestAnInternalTypeNameNeverReachesTheUser keeps a Go implementation detail
+// out of a message a person has to act on. A document that is JSON and is not
+// an object was reported as failing to unmarshal into intent.wireContract.
+func TestAnInternalTypeNameNeverReachesTheUser(t *testing.T) {
+	for _, raw := range []string{`[1,2]`, `"x"`, `42`, `true`, `null`, `{"schema_version": 1}`,
+		strings.Repeat("[", 200) + strings.Repeat("]", 200)} {
+		t.Run(raw[:min(len(raw), 12)], func(t *testing.T) {
+			_, err := intent.Parse([]byte(raw), "contract.json")
+			if err == nil {
+				t.Fatal("a document that is not a contract was accepted")
 			}
 			if strings.Contains(err.Error(), "wireContract") {
 				t.Errorf("an internal type name reached the user: %v", err)

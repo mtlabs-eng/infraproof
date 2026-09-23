@@ -366,3 +366,44 @@ func TestForgettingAnObjectIsNotDestroyingIt(t *testing.T) {
 		t.Error("forgetting an object was read as destroying it")
 	}
 }
+
+// TestAnUnrecognizedModeIsRefused keeps the field that decides admissibility
+// from being believed without being checked.
+//
+// Mode says whether a plan entry is something the configuration manages or
+// something it only reads, and IsRead keys on it exactly — so any other
+// spelling is silently treated as managed, which is the permissive side. The
+// actions have carried a closed set and a guard since milestone 02; this had
+// neither, and it became load-bearing when admissibility began depending on it.
+func TestAnUnrecognizedModeIsRefused(t *testing.T) {
+	plan := func(mode string) []byte {
+		return []byte(`{"format_version": "1.2", "resource_changes": [
+		  {"address": "aws_s3_bucket.b", "mode": ` + mode + `, "type": "aws_s3_bucket", "name": "b",
+		   "provider_name": "p",
+		   "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}
+		]}`)
+	}
+
+	for name, mode := range map[string]string{
+		"a miscased data":  `"Data"`,
+		"an invented mode": `"observed"`,
+		"empty":            `""`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse(plan(mode)); err == nil {
+				t.Fatalf("an unrecognized mode was accepted: %s", mode)
+			}
+		})
+	}
+
+	for name, mode := range map[string]string{
+		"managed": `"managed"`,
+		"data":    `"data"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse(plan(mode)); err != nil {
+				t.Fatalf("a mode Terraform emits was rejected: %v", err)
+			}
+		})
+	}
+}

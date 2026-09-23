@@ -152,3 +152,5 @@ Exact codes are part of the public interface and require tests before release.
 - Minor `1.x` additions must be backward-compatible.
 - Consumers must ignore unknown fields within the same major version.
 - Breaking field or semantic changes require a new major version.
+
+The bundle walked through above is kept as `docs/examples/evidence-bundle.json`, and `internal/render` renders against it so that this document and the code cannot drift apart.

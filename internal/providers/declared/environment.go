@@ -40,6 +40,14 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 		Cloud:           cloud,
 	}
 
+	// The object the attribute is read out of, before the attribute itself.
+	// Field on a non-object receiver returns the zero value, so a whole "after"
+	// this run could not see collapsed to "the attribute is absent" one level
+	// down — and absent is the answer that passes.
+	if state := unreadable(change.After); state != "" {
+		return unreadableFact(state, source)
+	}
+
 	labels := change.After.Field(attribute)
 	if state := unreadable(labels); state != "" {
 		return unreadableFact(state, source)
