@@ -678,3 +678,69 @@ func TestARecognizedActionIsJudgedNormally(t *testing.T) {
 		t.Errorf("unknowns = %v, want none", result.Unknowns)
 	}
 }
+
+// TestAnUnreadableActionDoesNotUnsayADestruction keeps a provable violation
+// from being replaced by a doubt about it.
+//
+// The unrecognized-action guard raised its unknown and then moved on, before
+// the destruction was reported. A plan naming both "delete" and a verb this
+// build cannot read went from BLOCK to UNKNOWN — and a pipeline that warns on
+// UNKNOWN and stops on BLOCK lets the destruction through.
+//
+// The plan states delete. That is deterministic evidence of destruction under
+// a contract that forbids it, and an extra verb nobody can read does not unsay
+// it. The doubt is raised alongside the finding, not instead of it.
+func TestAnUnreadableActionDoesNotUnsayADestruction(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.gone", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+			Interpreted: true, Destructive: true, UnrecognizedAction: true},
+	}}
+
+	result := policy.DestructiveChange(contract(nil), graph)
+
+	found := findingsFor(result, policy.RuleDestructiveChange)
+	if len(found) != 1 {
+		t.Fatalf("findings = %v; the plan states delete", result.Findings)
+	}
+	if found[0].Disposition != evidence.DispositionBlock {
+		t.Errorf("disposition = %q, want BLOCK", found[0].Disposition)
+	}
+	if len(unknownsFor(result, policy.CheckActionRecognized)) != 1 {
+		t.Fatalf("unknowns = %v, want the unreadable verb reported too", result.Unknowns)
+	}
+}
+
+// TestAResourceNobodyCouldReadSaysSo separates two questions the fact state was
+// being asked to answer at once: what did the resource say, and was it asked.
+//
+// An opaque resource was given Unknown, which the rule reads as "declared but
+// undeterminable" and prints as "not known until apply, or more than one
+// declaration that disagree". Neither is true of a resource whose tags are
+// plainly readable and which no mapper had the vocabulary to read. The old
+// wording was vague and wrong; this replaced it with a specific falsehood and
+// marked it required.
+//
+// A fact nobody produced keeps its zero state, and the reason says that.
+func TestAResourceNobodyCouldReadSaysSo(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "vendor_thing.x", Cloud: model.CloudUnknown, Family: model.FamilyUnknown},
+	}}
+
+	result := policy.EnvironmentMatch(contract(nil), graph)
+
+	unknowns := unknownsFor(result, policy.CheckEnvironmentEvidence)
+	if len(unknowns) != 1 {
+		t.Fatalf("unknowns = %v, want one", result.Unknowns)
+	}
+	if unknowns[0].Required {
+		t.Error("no rule could read this resource; that bounds the report rather than invalidating it")
+	}
+	for _, wrong := range []string{"not known until apply", "disagree", "declares no environment"} {
+		if strings.Contains(unknowns[0].Reason, wrong) {
+			t.Errorf("the reason states something untrue of this resource: %q", unknowns[0].Reason)
+		}
+	}
+	if len(unknowns[0].Evidence) != 0 {
+		t.Errorf("evidence = %v; nothing was read, so there is nothing to cite", unknowns[0].Evidence)
+	}
+}

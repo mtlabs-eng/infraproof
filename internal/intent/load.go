@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -46,24 +48,16 @@ func Parse(raw []byte, source string) (Contract, error) {
 			"reading intent contract %s: YAML is not supported in this build; supply the contract as JSON", source)
 	}
 
-	// A duplicate key is accepted by encoding/json, which silently takes the
-	// last occurrence. A contract declaring private exposure and then public
-	// would be read as declaring public. DisallowUnknownFields exists to stop a
-	// contract being read partially; this stops one being read selectively.
-	if err := rejectDuplicateKeys(body); err != nil {
-		return Contract{}, fmt.Errorf("reading intent contract %s: %w", source, err)
+	// A contract that names one field twice is read as saying the second
+	// thing. DisallowUnknownFields exists to stop a contract being read
+	// partially; this stops one being read selectively.
+	if err := rejectRepeatedFields(body); err != nil {
+		return Contract{}, fmt.Errorf("reading intent contract %s: the document %w", source, err)
 	}
 
-	var wire wireContract
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	decoder.UseNumber()
-	if err := decoder.Decode(&wire); err != nil {
+	wire, err := decodeContract(body)
+	if err != nil {
 		return Contract{}, fmt.Errorf("reading intent contract %s: %w", source, err)
-	}
-	if decoder.More() {
-		return Contract{}, fmt.Errorf(
-			"reading intent contract %s: the file holds more than one document", source)
 	}
 
 	contract := wire.contract()
@@ -108,127 +102,178 @@ func looksLikeYAML(raw []byte) bool {
 	return true
 }
 
-// rejectDuplicateKeys walks the document and refuses any object that names a
-// field more than once, at any depth.
+// maxDepth bounds how far the rewrite will descend.
 //
-// It is written as a walk rather than a decode because the duplicate is gone by
-// the time a decoder has finished: encoding/json keeps the last occurrence and
-// reports nothing.
-//
-// Malformed input is not reported here. The decode that follows produces a
-// better message for it, and reporting the same fault twice in two voices tells
-// a reader less. But the walk must still stop: it cannot skip a token it failed
-// to read and carry on, because a decoder in an error state answers More with
-// true indefinitely.
-func rejectDuplicateKeys(raw []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-
-	err := walkForDuplicates(decoder, "", 0)
-	if errors.Is(err, errMalformed) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("the document %w", err)
-	}
-	return nil
-}
-
-// errMalformed ends the walk without being reported. It carries no payload: the
-// input may be a contract a user would rather not see quoted back.
-var errMalformed = errors.New("intent: the document could not be tokenized")
-
-// maxDepth bounds how far the walk will descend.
-//
-// json.Decoder.Token does not apply the nesting limit that Decode does, so this
-// walk descended where the standard library refuses — and it descended
-// expensively: a 600 KB file of nothing but brackets took forty seconds and two
-// gigabytes, and the process died rather than reporting invalid input. Because
-// the walk runs before the decode, it removed the standard library's guard from
-// the path that runs first.
+// json.Decoder.Token does not apply the nesting limit that Decode does, so a
+// walk over tokens descends where the standard library refuses, and
+// expensively: a file of nothing but brackets took forty seconds and two
+// gigabytes and died rather than reporting invalid input.
 //
 // A contract is a document a human writes. The documented one nests three
 // levels and the schema has no recursive structure, so this costs nothing real.
 const maxDepth = 64
 
-// walkForDuplicates consumes exactly one JSON value from the decoder.
-func walkForDuplicates(decoder *json.Decoder, path string, depth int) error {
+// rejectRepeatedFields refuses a contract that names one field more than once.
+//
+// encoding/json matches a struct tag case-insensitively, and by more than case:
+// it folds with unicode.SimpleFold, under which the long s folds with s. So
+// "expoſure" fills the field "exposure" names, DisallowUnknownFields does not
+// fire because a field was matched, and a contract declaring private exposure
+// and then public is read as declaring public.
+//
+// An earlier form of this check restated the decoder's relation as
+// strings.ToLower and got one that was almost the same. The gap was silent and
+// permissive, which is what a restated predicate always gives: there is no
+// compiler and no test standing between the two definitions.
+//
+// So this calls the relation rather than restating it. The document is decoded
+// twice, once as written and once with every object's members reversed. Where
+// two keys fill one field, the decoder keeps the last, and reversing the order
+// changes which one that is; where no two keys collide, order cannot matter and
+// the two results are identical. A map is unaffected either way, because two
+// keys differing in case are two entries in it — which is why cloud tag names
+// need no exception.
+func rejectRepeatedFields(raw []byte) error {
+	reversed, err := reverseObjectMembers(raw)
+	switch {
+	case errors.Is(err, errRepeatedKey):
+		return err
+	case err != nil:
+		// Malformed input. The decode that follows reports it, with the
+		// message encoding/json produces; saying it twice in two voices tells
+		// a reader less.
+		return nil //nolint:nilerr // the decode below is the reporting path
+	}
+
+	asWritten, err := decodeContract(raw)
+	if err != nil {
+		return nil //nolint:nilerr // see above
+	}
+	asReversed, err := decodeContract(reversed)
+	if err != nil {
+		return nil //nolint:nilerr // see above
+	}
+
+	if !reflect.DeepEqual(asWritten, asReversed) {
+		return errors.New("names one field more than once, and the two spellings disagree")
+	}
+	return nil
+}
+
+// decodeContract reads the wire shape, rejecting a field this build does not
+// know so that a contract is never read partially.
+func decodeContract(raw []byte) (wireContract, error) {
+	var wire wireContract
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	decoder.UseNumber()
+	if err := decoder.Decode(&wire); err != nil {
+		return wireContract{}, err
+	}
+	if decoder.More() {
+		return wireContract{}, errors.New("the file holds more than one document")
+	}
+	return wire, nil
+}
+
+// reverseObjectMembers re-emits the document with the members of every object
+// in the opposite order, leaving arrays and values untouched.
+//
+// maxDepth bounds it for the same reason it bounded the walk before: Token
+// does not apply the nesting limit Decode does, and a document of nothing but
+// brackets would otherwise cost whatever it liked.
+func reverseObjectMembers(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+
+	var out bytes.Buffer
+	if err := rewriteValue(decoder, &out, 0); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// rewriteValue consumes exactly one JSON value and writes it back.
+func rewriteValue(decoder *json.Decoder, out *bytes.Buffer, depth int) error {
 	if depth > maxDepth {
 		return fmt.Errorf("is nested more than %d levels deep", maxDepth)
 	}
 
 	token, err := decoder.Token()
 	if err != nil {
-		return errMalformed
+		return err
 	}
 
 	delimiter, isDelimiter := token.(json.Delim)
 	if !isDelimiter {
-		return nil
+		return writeScalar(out, token)
 	}
 
 	switch delimiter {
 	case '{':
-		// Keys are compared folded, because that is how the decoder matches
-		// them: encoding/json fills the field "exposure" names from a key
-		// spelled "Exposure", and DisallowUnknownFields does not fire, because
-		// a field was matched. Comparing exact bytes let a contract declare
-		// private exposure and then public and be read as declaring public.
-		//
-		// The exception is a field holding names rather than schema fields.
-		// Cloud tag keys are case-sensitive, so two that differ only in case
-		// are two tags, and refusing them would reject an ordinary contract.
-		folded := !holdsNames(path)
+		var members []string
+		// Byte equality is not the decoder's relation; it is a strict subset
+		// of it, so checking it here only ever refuses and never admits. It is
+		// worth checking because two keys spelled identically produce the same
+		// result in either order, and the reversal below cannot see them.
 		seen := map[string]bool{}
 		for decoder.More() {
 			keyToken, err := decoder.Token()
 			if err != nil {
-				return errMalformed
+				return err
 			}
 			key, ok := keyToken.(string)
 			if !ok {
-				return errMalformed
+				return errors.New("an object key must be a string")
 			}
-			identity := key
-			if folded {
-				identity = strings.ToLower(key)
+			if seen[key] {
+				return errRepeatedKey
 			}
-			if seen[identity] {
-				return fmt.Errorf("has %s named more than once", join(path, key))
-			}
-			seen[identity] = true
+			seen[key] = true
 
-			if err := walkForDuplicates(decoder, join(path, key), depth+1); err != nil {
+			var value bytes.Buffer
+			if err := rewriteValue(decoder, &value, depth+1); err != nil {
 				return err
 			}
+			encoded, err := json.Marshal(key)
+			if err != nil {
+				return err
+			}
+			members = append(members, string(encoded)+":"+value.String())
 		}
+		slices.Reverse(members)
+		out.WriteString("{" + strings.Join(members, ",") + "}")
+
 	case '[':
-		for i := 0; decoder.More(); i++ {
-			if err := walkForDuplicates(decoder, fmt.Sprintf("%s[%d]", path, i), depth+1); err != nil {
+		var elements []string
+		for decoder.More() {
+			var element bytes.Buffer
+			if err := rewriteValue(decoder, &element, depth+1); err != nil {
 				return err
 			}
+			elements = append(elements, element.String())
 		}
+		out.WriteString("[" + strings.Join(elements, ",") + "]")
 	}
 
 	// The closing delimiter.
 	if _, err := decoder.Token(); err != nil {
-		return errMalformed
+		return err
 	}
 	return nil
 }
 
-// holdsNames reports the contract paths whose keys are names a user chose
-// rather than fields this build defines. It is derived from the contract type:
-// required_tags is the only map in it.
-func holdsNames(path string) bool {
-	return path == "constraints.required_tags"
-}
+// errRepeatedKey ends the rewrite when an object spells one key twice. It
+// carries no payload: the key is a contract value.
+var errRepeatedKey = errors.New("names one field more than once")
 
-func join(path, key string) string {
-	if path == "" {
-		return key
+func writeScalar(out *bytes.Buffer, token json.Token) error {
+	encoded, err := json.Marshal(token)
+	if err != nil {
+		return err
 	}
-	return path + "." + key
+	out.Write(encoded)
+	return nil
 }
 
 func digest(raw []byte) string {

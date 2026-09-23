@@ -78,10 +78,14 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange, mappers []Mapper) model.NormalizedResource {
 
-	if change.Mode == terraformplan.ModeData {
+	if change.IsRead() {
 		// A data source is read, not changed. It is kept, because nothing in a
 		// plan is filtered away, and it is given no capabilities, because a
 		// verdict is about a change and this is not one.
+		//
+		// IsRead asks the pair, not the mode: a change claiming to read while
+		// its actions say delete has not said it is a read, and believing the
+		// mode alone erased it from the report entirely.
 		return model.NormalizedResource{
 			Address:  change.Address,
 			Provider: change.ProviderName,
@@ -141,9 +145,10 @@ func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraf
 		Family:             model.FamilyUnknown,
 		Destructive:        change.IsDestructive(),
 		UnrecognizedAction: change.HasUnrecognizedAction(),
-		// No provenance: whichever attribute a tag block would sit in is this
-		// build's guess, so there is nothing to cite.
-		Environment: model.Unknown[string](),
+		// The fact is left at its zero state deliberately. "Nobody looked" is
+		// not "looked and could not determine": no mapper claimed this
+		// resource, so whichever attribute a tag block would sit in is this
+		// build's guess, and there is nothing to cite either.
 	}
 }
 
@@ -158,9 +163,10 @@ func environmentOf(change terraformplan.ResourceChange, mapper Mapper) model.Fac
 		Environment(terraformplan.ResourceChange) model.Fact[string]
 	})
 	if !ok {
-		// No provenance: there is no attribute to name, because none was
-		// consulted. A reference that locates nothing is not evidence.
-		return model.Unknown[string]()
+		// The zero fact: this mapper offers no reader, so nobody looked. A
+		// reference that locates nothing is not evidence, and "could not
+		// determine" is not what happened.
+		return model.Fact[string]{}
 	}
 	return reader.Environment(change)
 }

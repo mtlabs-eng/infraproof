@@ -114,6 +114,12 @@ func validateSchemaVersion(version string) error {
 
 // isPlainNumber matches the Evidence Bundle's rule for a version component:
 // digits, no sign, no leading zero beyond zero itself.
+//
+// It is stated here as well as in internal/evidence rather than shared, because
+// this package knows nothing about the Evidence Bundle and should not start
+// now. That is a duplicate rule, not a restated one: neither package is
+// deferring to the other's definition, and a version component is the
+// project's own idea of what a version looks like.
 func isPlainNumber(s string) bool {
 	if s == "" || (len(s) > 1 && s[0] == '0') {
 		return false

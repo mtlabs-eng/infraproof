@@ -26,6 +26,11 @@ import (
 func runCheck(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("check", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	// The flag package prints its own generated usage on any parse failure,
+	// including --help. Two usages that disagree are worse than one, and this
+	// command's is written out below so that both places a reader can ask say
+	// the same thing.
+	flags.Usage = func() {}
 	intentPath := flags.String("intent", "", "path to an intent contract JSON file")
 	planPath := flags.String("plan", "", "path to a Terraform or OpenTofu plan JSON file")
 	format := flags.String("format", "json", "output format: json or markdown")

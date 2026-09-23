@@ -6,7 +6,7 @@ Load the structured Intent Contract and evaluate destructive actions, cloud mism
 
 ## Scope
 
-- YAML and JSON Intent Contract loader
+- JSON Intent Contract loader; YAML deferred, see `docs/INTENT-CONTRACT.md`
 - schema and semantic validation
 - destructive-change rule
 - allowed-cloud rule

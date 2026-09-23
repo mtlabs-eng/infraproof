@@ -516,3 +516,23 @@ func TestADataSourceNeitherBlocksNorBlocksAPass(t *testing.T) {
 		}
 	}
 }
+
+// TestAContradictoryReadCannotPass keeps the disagreement visible in the
+// bundle, not only in the model. A plan that says one thing in its mode and
+// another in its actions has not been read, and a run that could not read it
+// has not established that it is safe.
+func TestAContradictoryReadCannotPass(t *testing.T) {
+	contradictory := model.NormalizedResource{
+		Address: "data.aws_s3_bucket.existing", Provider: "p",
+		Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
+		Destructive: true, // its actions say delete
+		// ReadOnly deliberately false: the mode said read and was not believed.
+	}
+
+	bundle := bundleFor(t, contract(nil), private("aws_s3_bucket.a"), contradictory)
+
+	if bundle.Decision == evidence.DecisionPass {
+		t.Fatalf("a plan whose mode and actions disagree reported a pass:\nfindings=%v\nunknowns=%v",
+			bundle.Findings, bundle.Unknowns)
+	}
+}

@@ -178,14 +178,46 @@ func dividers(n int) []string {
 
 // escapeCell keeps a cell on one row: a literal pipe is escaped and any line
 // break collapses to a space, so free-text reasons cannot break the table.
+// escapeCell makes a value safe to place between two cell boundaries.
+//
+// A pipe must not open a cell, and the run of backslashes before it decides
+// whether it does: the table scanner reads a pipe as literal when that run is
+// odd and as a boundary when it is even. So a run immediately before a pipe is
+// doubled, and the pipe is then escaped, which leaves the run odd.
+//
+// A backslash anywhere else is left alone. Doubling every backslash also fixed
+// the boundary problem and cost the report its content: inside a code span a
+// Markdown renderer does no escape processing, so a doubled backslash is shown
+// doubled, and an address containing one stopped being the address the plan
+// held.
 func escapeCell(s string) string {
-	// The backslash goes first. Escaping the pipe alone turns a cell
-	// containing "\|" into "\\|", which a Markdown renderer reads as an
-	// escaped backslash followed by a live pipe — an extra cell, and the
-	// columns past the header count are silently dropped from the report. A
-	// for_each key may contain a backslash, so a plan can produce one.
-	s = strings.ReplaceAll(collapseBreaks(s), `\`, `\\`)
-	return strings.ReplaceAll(s, "|", `\|`)
+	s = collapseBreaks(s)
+
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			if s[i] == '|' {
+				out.WriteString(`\|`)
+				continue
+			}
+			out.WriteByte(s[i])
+			continue
+		}
+
+		run := 0
+		for i+run < len(s) && s[i+run] == '\\' {
+			run++
+		}
+		if i+run < len(s) && s[i+run] == '|' {
+			// The run would otherwise decide the pipe's parity for us.
+			out.WriteString(strings.Repeat(`\\`, run) + `\|`)
+			i += run
+			continue
+		}
+		out.WriteString(strings.Repeat(`\`, run))
+		i += run - 1
+	}
+	return out.String()
 }
 
 // prose renders a free-text field as a standalone paragraph. The bundle

@@ -602,8 +602,13 @@ func TestEveryResourceIsAskedWhereItBelongs(t *testing.T) {
 	if opaque.Interpreted {
 		t.Fatal("no mapper should have claimed this resource")
 	}
-	if opaque.Environment.State == "" {
-		t.Error("an opaque resource carries no answer at all, not even that none was reachable")
+	// The zero state is the answer here, and it is a different answer from
+	// Unknown: nobody looked, rather than somebody looked and could not tell.
+	// The rule turns the two into different sentences, and only one of them is
+	// true of a resource whose tags are plainly readable.
+	if opaque.Environment.State != "" {
+		t.Errorf("an opaque resource reported %q; nothing read it, which is not a determination",
+			opaque.Environment.State)
 	}
 	if opaque.Environment.IsKnown() {
 		t.Errorf("an opaque resource's tags were read by a vocabulary no mapper vouched for: %q",
@@ -642,5 +647,54 @@ func TestADataSourceIsNotAChange(t *testing.T) {
 	}
 	if resource.Destructive {
 		t.Error("a read was called destructive")
+	}
+}
+
+// TestAModeThatContradictsItsActionsIsNotBelieved keeps one unvalidated string
+// from erasing a resource from the report.
+//
+// Terraform's answer to "is this a change?" is the pair (mode, actions), and
+// this build restated it as mode == "data". A plan claiming to read while its
+// actions say delete was believed on the mode alone: four rules skipped it,
+// and the bundle did not mention that the plan contained anything.
+//
+// Two declarations that disagree are the project's own settled case. Neither
+// may be believed, and the disagreement is reported rather than resolved.
+func TestAModeThatContradictsItsActionsIsNotBelieved(t *testing.T) {
+	read := func(actions string) string {
+		return `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+		     "name": "existing", "provider_name": "p",
+		     "change": {"actions": ` + actions + `, "before": {"bucket": "b"}, "after": null}}
+		  ]
+		}`
+	}
+
+	t.Run("a read that says it deletes", func(t *testing.T) {
+		resource := normalizedAt(t, read(`["delete"]`), "data.aws_s3_bucket.existing")
+		if resource.ReadOnly {
+			t.Fatal("a change claiming to read while deleting was believed to be a read")
+		}
+	})
+
+	t.Run("a read that says it creates", func(t *testing.T) {
+		resource := normalizedAt(t, read(`["create"]`), "data.aws_s3_bucket.existing")
+		if resource.ReadOnly {
+			t.Fatal("a change claiming to read while creating was believed to be a read")
+		}
+	})
+
+	for name, actions := range map[string]string{
+		"a plain read": `["read"]`,
+		"a no-op read": `["no-op"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			resource := normalizedAt(t, read(actions), "data.aws_s3_bucket.existing")
+			if !resource.ReadOnly {
+				t.Fatalf("a data source whose actions agree was not read as one: %s", actions)
+			}
+		})
 	}
 }

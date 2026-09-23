@@ -603,46 +603,80 @@ func structureOf(document string) string {
 	return strings.Join(shape, " ")
 }
 
-// withoutCodeSpans removes the content of every code span, which a Markdown
-// renderer does not interpret.
+// withoutCodeSpans removes the content of every closed code span, which a
+// Markdown renderer does not interpret.
+//
+// An unmatched backtick run is not a span: CommonMark renders it literally and
+// the bytes after it are live. An earlier form treated one as opening a span to
+// the end of the line, which hid live HTML from the forgery test and made it
+// blind to the mutant it exists to catch — a code() that opens a span and
+// never closes it.
+//
+// So a run is a delimiter only once its partner has been found. The line is
+// scanned first to learn which runs pair up.
 func withoutCodeSpans(line string) string {
-	var out strings.Builder
-	var fence string
+	type run struct{ start, length int }
 
+	var runs []run
 	for i := 0; i < len(line); i++ {
 		if line[i] != '`' {
-			if fence == "" {
-				out.WriteByte(line[i])
-			}
 			continue
 		}
+		length := 0
+		for i+length < len(line) && line[i+length] == '`' {
+			length++
+		}
+		runs = append(runs, run{start: i, length: length})
+		i += length - 1
+	}
 
-		run := 0
-		for i+run < len(line) && line[i+run] == '`' {
-			run++
+	// Pair each opener with the next run of equal length, as CommonMark does.
+	removed := map[int]int{}
+	used := make([]bool, len(runs))
+	for a := range runs {
+		if used[a] {
+			continue
 		}
-		ticks := strings.Repeat("`", run)
-		switch {
-		case fence == "":
-			fence = ticks
-		case fence == ticks:
-			fence = ""
+		for b := a + 1; b < len(runs); b++ {
+			if used[b] || runs[b].length != runs[a].length {
+				continue
+			}
+			removed[runs[a].start] = runs[b].start + runs[b].length
+			used[a], used[b] = true, true
+			break
 		}
-		i += run - 1
+	}
+
+	var out strings.Builder
+	for i := 0; i < len(line); i++ {
+		if end, ok := removed[i]; ok {
+			i = end - 1
+			continue
+		}
+		out.WriteByte(line[i])
 	}
 	return out.String()
 }
 
-// countUnescaped counts occurrences of a character that are not preceded by a
-// backslash, which is how Markdown distinguishes a cell boundary from a pipe a
-// cell contains.
+// countUnescaped counts the cell boundaries in a table row.
+//
+// It models the table scanner rather than the escaper: a backslash escapes the
+// character after it, so a pipe is a boundary when the run of backslashes
+// before it is of even length and literal when the run is odd. An earlier form
+// looked back one character and answered "escaped" for both "\|" and "\\|",
+// which is the same mistake the escaper made — and a test whose oracle repeats
+// the code's model cannot see the code's mistake.
 func countUnescaped(line string, target byte) int {
 	var found int
 	for i := 0; i < len(line); i++ {
 		if line[i] != target {
 			continue
 		}
-		if i > 0 && line[i-1] == '\\' {
+		preceding := 0
+		for j := i - 1; j >= 0 && line[j] == '\\'; j-- {
+			preceding++
+		}
+		if preceding%2 == 1 {
 			continue
 		}
 		found++
@@ -723,5 +757,61 @@ func TestABackslashDoesNotAddATableCell(t *testing.T) {
 	}
 	if header == 0 {
 		t.Fatal("the unknowns table was not rendered")
+	}
+}
+
+// TestABackslashSurvivesTheReport keeps the fix for the cell boundary from
+// costing the report its content.
+//
+// Doubling every backslash also stops a pipe opening a cell, and inside a code
+// span a Markdown renderer does no escape processing — so a doubled backslash
+// is shown doubled, and an address containing one stops being the address the
+// plan held. Only a run that decides a pipe's parity needs doubling.
+func TestABackslashSurvivesTheReport(t *testing.T) {
+	address := `aws_s3_bucket.b["c:\drive"]`
+	bundle := contractBundle()
+	bundle.Findings[0].Resource = &evidence.Resource{
+		Address: address, Provider: "p", Cloud: evidence.CloudAWS}
+	bundle.Unknowns = []evidence.Unknown{{
+		CheckID:         "STORAGE_PUBLIC_DETERMINABLE",
+		Required:        false,
+		Reason:          "Public access could not be determined.",
+		ResourceAddress: &address,
+		Evidence:        []evidence.EvidenceRef{{Source: "terraform_plan", Path: "acl"}},
+	}}
+
+	out, err := render.Markdown(bundle)
+	if err != nil {
+		t.Fatalf("render.Markdown: %v", err)
+	}
+	if !strings.Contains(string(out), address) {
+		t.Fatalf("the report does not print the address the plan held:\n%s", out)
+	}
+}
+
+// TestAnUnterminatedCodeSpanIsNotASpan pins the oracle the umbrella forgery
+// test depends on.
+//
+// CommonMark renders an unmatched backtick run literally, so the bytes after
+// it are live. Treating one as opening a span to end of line made the umbrella
+// test blind to exactly the mutant it exists to catch: a code() that opens a
+// span and never closes it.
+func TestAnUnterminatedCodeSpanIsNotASpan(t *testing.T) {
+	for name, line := range map[string]string{
+		"one unmatched tick":    "a ` <h1>live</h1>",
+		"mismatched runs":       "a ``b` <h1>live</h1>",
+		"closed then unmatched": "a `b`` c <h1>live</h1>",
+		"trailing run":          "a `b` c <h1>live</h1> `",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if bare := withoutCodeSpans(line); !strings.Contains(bare, "<h1") {
+				t.Fatalf("live HTML was hidden behind an unmatched backtick: %q -> %q", line, bare)
+			}
+		})
+	}
+
+	// A properly closed span does protect its content.
+	if bare := withoutCodeSpans("a `<h1>inert</h1>` b"); strings.Contains(bare, "<h1") {
+		t.Errorf("a closed code span did not protect its content: %q", bare)
 	}
 }

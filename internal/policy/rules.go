@@ -62,6 +62,9 @@ func DestructiveChange(contract intent.Contract, graph model.Graph) Result {
 
 	for _, resource := range graph.Resources {
 		if resource.ReadOnly {
+			// A read destroys nothing. The guard is defensive: the normalizer
+			// never sets Destructive on a read, so removing it changes no
+			// output today and no test can see it.
 			continue
 		}
 		if resource.UnrecognizedAction {
@@ -83,7 +86,11 @@ func DestructiveChange(contract intent.Contract, graph model.Graph) Result {
 					Path:            "resource_changes[].change.actions",
 				}},
 			})
-			continue
+			// The doubt is raised alongside whatever the plan does state, not
+			// instead of it. A plan naming both "delete" and a verb nobody can
+			// read still names delete, and replacing the finding with the
+			// unknown turned a BLOCK into an UNKNOWN — which a pipeline that
+			// stops on one and warns on the other lets through.
 		}
 		if !resource.Destructive {
 			continue
@@ -210,7 +217,7 @@ func EnvironmentMatch(contract intent.Contract, graph model.Graph) Result {
 				// run could not evaluate it, which is what a required unknown
 				// is for.
 				Required:        declared.State != model.FactAbsent && declared.State != "",
-				Reason:          environmentReason(declared.State),
+				Reason:          environmentReason(resource),
 				ResourceAddress: &address,
 				Evidence:        environmentEvidence(declared),
 			})
@@ -252,8 +259,23 @@ func EnvironmentMatch(contract intent.Contract, graph model.Graph) Result {
 	return result
 }
 
-func environmentReason(state model.FactState) string {
-	switch state {
+// environmentReason says which of four things happened, because they have
+// different fixes and a reader acts on the sentence.
+//
+// The fact state alone cannot tell them apart: it answers what the resource
+// said, and the zero value has to answer whether the resource was asked. An
+// earlier form read the zero value as "declared but undeterminable" and printed
+// "not known until apply, or more than one declaration that disagree" about a
+// resource whose tags were plainly readable and which nothing had read.
+func environmentReason(resource model.NormalizedResource) string {
+	switch resource.Environment.State {
+	case "":
+		if !resource.Interpreted {
+			return "No mapper interpreted this resource, so there was no attribute to read an " +
+				"environment from and none was compared with the contract."
+		}
+		return "This resource was interpreted by a mapper that reads no environment, so none was " +
+			"compared with the contract."
 	case model.FactRedacted:
 		return "The environment declaration is marked sensitive, so it could not be compared with the contract."
 	case model.FactUnknown:

@@ -201,6 +201,31 @@ func (c ResourceChange) IsDestructive() bool {
 	return slices.Contains(c.Actions, ActionDelete)
 }
 
+// IsRead reports that the change observes an object rather than changing one.
+//
+// Terraform's answer is the pair: the mode says what kind of block this is, and
+// the actions say what is planned for it. Reading the mode alone let a change
+// claiming to read while deleting be treated as a read and skipped by every
+// rule. Two declarations that disagree are believed neither, and the caller is
+// told the change was not readable instead.
+func (c ResourceChange) IsRead() bool {
+	if c.Mode != ModeData {
+		return false
+	}
+	for _, action := range c.Actions {
+		if action != ActionRead && action != ActionNoOp {
+			return false
+		}
+	}
+	return true
+}
+
+// ModeContradictsActions reports that the mode and the actions disagree about
+// whether the change alters anything.
+func (c ResourceChange) ModeContradictsActions() bool {
+	return c.Mode == ModeData && !c.IsRead()
+}
+
 // HasUnrecognizedAction reports that the change names an operation this build
 // does not know.
 //

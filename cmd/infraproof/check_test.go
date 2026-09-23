@@ -412,3 +412,159 @@ func TestCheckHelpExitsSuccessfully(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckHelpSaysOneThing keeps the command from describing itself twice.
+//
+// The flag package prints its own generated usage on any parse failure, --help
+// included, so asking for help produced the hand-written text on stdout and a
+// differently worded one on stderr. The comment beside checkUsage said the two
+// places a reader can ask say the same thing; they did not.
+func TestCheckHelpSaysOneThing(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if code := run([]string{"check", "--help"}, &stdout, &stderr); code != evidence.ExitPass {
+		t.Fatalf("exit = %d, want %d", code, evidence.ExitPass)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("a second usage was written to stderr:\n%s", stderr.String())
+	}
+
+	// And what it prints describes the command, rather than being an empty
+	// constant nobody would notice.
+	for _, part := range []string{"--intent", "--plan", "--format", "Exit codes:"} {
+		if !strings.Contains(stdout.String(), part) {
+			t.Errorf("help does not mention %q:\n%s", part, stdout.String())
+		}
+	}
+}
+
+// TestADataSourceIsReportedAsReadThroughTheWholeFlow covers the skips through
+// the normalizer rather than around it.
+//
+// The skips were pinned by a test that built a NormalizedResource by hand and
+// set ReadOnly itself, so nothing exercised the code that decides a resource is
+// a read. Three of the four skips could be removed with the suite still green.
+func TestADataSourceIsReportedAsReadThroughTheWholeFlow(t *testing.T) {
+	plan := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "tags": {"environment": "staging"},
+	                          "block_public_acls": true}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "data.google_storage_bucket.existing", "mode": "data",
+	     "type": "google_storage_bucket", "name": "existing",
+	     "provider_name": "registry.terraform.io/hashicorp/google",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "prod", "labels": {"environment": "production"}}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.google_storage_bucket.existing", "mode": "data",
+	     "type": "google_storage_bucket", "name": "existing", "expressions": {}}
+	  ]}}
+	}`
+
+	// The contract allows AWS only, and the read is of a GCP bucket tagged
+	// production. Neither its cloud nor its environment is about the change.
+	code, stdout, stderr := check(t,
+		"--intent", write(t, "intent.json", privateIntent),
+		"--plan", write(t, "plan.json", plan))
+
+	if code != evidence.ExitPass {
+		t.Fatalf("exit = %d, want %d\nstdout: %s\nstderr: %s",
+			code, evidence.ExitPass, stdout, stderr)
+	}
+
+	var bundle evidence.Bundle
+	if err := json.Unmarshal([]byte(stdout), &bundle); err != nil {
+		t.Fatalf("the output is not an Evidence Bundle: %v", err)
+	}
+	for _, finding := range bundle.Findings {
+		if finding.Resource != nil &&
+			strings.Contains(finding.Resource.Address, "data.google_storage_bucket") {
+			t.Errorf("a read produced %s", finding.RuleID)
+		}
+	}
+	// A read produces no record of its own at all. Checking only that it
+	// raises nothing required would leave every skip but one removable with
+	// the suite still green: the rules would emit non-required rows about a
+	// resource that is not part of the change, and the decision would not
+	// move.
+	for _, unknown := range bundle.Unknowns {
+		if unknown.ResourceAddress != nil &&
+			strings.Contains(*unknown.ResourceAddress, "data.google_storage_bucket") {
+			t.Errorf("a read was reported as %s; a verdict is about a change", unknown.CheckID)
+		}
+	}
+}
+
+// TestAnUnreadableVerbDoesNotHideADestruction joins the parser and the policy,
+// which nothing did.
+//
+// The parser test proved an unrecognized verb is carried and flagged. The
+// policy test proved the flag raises a required unknown. Neither put a
+// destruction beside the unreadable verb, so the branch that replaced the
+// finding with the doubt — turning BLOCK into UNKNOWN on a plan that states
+// delete — was reachable only from the command, and the command had no test
+// for it.
+func TestAnUnreadableVerbDoesNotHideADestruction(t *testing.T) {
+	plan := func(actions string) string {
+		return `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.gone", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "gone", "provider_name": "registry.terraform.io/hashicorp/aws",
+		     "change": {"actions": ` + actions + `, "before": {"bucket": "b"}, "after": null}}
+		  ]
+		}`
+	}
+
+	intentPath := write(t, "intent.json", privateIntent)
+
+	plain, _, _ := check(t, "--intent", intentPath, "--plan", write(t, "a.json", plan(`["delete"]`)))
+	if plain != evidence.ExitBlock {
+		t.Fatalf("a plain delete exits %d, want %d", plain, evidence.ExitBlock)
+	}
+
+	withVerb, stdout, _ := check(t,
+		"--intent", intentPath, "--plan", write(t, "b.json", plan(`["delete", "quiesce"]`)))
+	if withVerb != evidence.ExitBlock {
+		t.Fatalf("a delete beside an unreadable verb exits %d, want %d\n%s",
+			withVerb, evidence.ExitBlock, stdout)
+	}
+
+	var bundle evidence.Bundle
+	if err := json.Unmarshal([]byte(stdout), &bundle); err != nil {
+		t.Fatalf("the output is not an Evidence Bundle: %v", err)
+	}
+
+	var destruction, doubt bool
+	for _, finding := range bundle.Findings {
+		if finding.RuleID == "DESTRUCTIVE_CHANGE" {
+			destruction = true
+		}
+	}
+	for _, unknown := range bundle.Unknowns {
+		if unknown.CheckID == "CHANGE_ACTION_RECOGNIZED" {
+			doubt = true
+		}
+	}
+	if !destruction {
+		t.Error("the plan states delete and the destruction was not reported")
+	}
+	if !doubt {
+		t.Error("the unreadable verb was not reported")
+	}
+}

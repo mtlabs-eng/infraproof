@@ -515,6 +515,16 @@ func TestKeysThatFoldTogetherAreRejected(t *testing.T) {
 			`"destructive_changes": "forbidden", "DESTRUCTIVE_CHANGES": "allowed_with_warning",`, 1),
 		"a folded schema version": strings.Replace(valid,
 			`"schema_version": "1.0",`, `"schema_version": "1.0", "Schema_Version": "9.0",`, 1),
+		// Not a matter of case. encoding/json folds with unicode.SimpleFold,
+		// under which the long s folds with s; strings.ToLower does not. A
+		// rule that restates the decoder's relation rather than calling it
+		// gets one that is almost the same, and the gap is permissive.
+		"a fold that is not a case change": strings.Replace(valid,
+			`"exposure": "private"`,
+			`"exposure": "private", "expo`+"\u017F"+`ure": "public"`, 1),
+		"a fold in an envelope field": strings.Replace(valid,
+			`"destructive_changes": "forbidden",`,
+			`"destructive_changes": "forbidden", "de`+"\u017F"+`tructive_changes": "allowed_with_warning",`, 1),
 	}
 
 	for name, raw := range cases {
