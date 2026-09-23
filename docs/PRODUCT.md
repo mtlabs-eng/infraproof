@@ -74,11 +74,12 @@ nothing has to change: the common module-per-bucket pattern stays answerable.
 A `PASS` also means every change in the plan was examined, not merely that
 nothing examined raised an objection. A data source is read rather than
 changed, so it is not part of that guarantee — and a resource whose mode says
-it is read while its actions say otherwise is not believed to be one. A resource this build normalized but has
-no rule for is reported, and prevents a `PASS`, because the alternative is a
-verdict that reads as "checked and fine" when it means "not checked". The same
-holds for a resource no mapper understood at all, and for a declaration in the
-contract that the plan gave nothing to apply to.
+it is read while its actions say otherwise is not believed to be one. A
+resource this build normalized but has no rule for is reported, and prevents a
+`PASS`, because the alternative is a verdict that reads as "checked and fine"
+when it means "not checked". The same holds for a resource no mapper
+understood at all, and for a declaration in the contract that the plan gave
+nothing to apply to.
 
 ## Explicit non-goals
 

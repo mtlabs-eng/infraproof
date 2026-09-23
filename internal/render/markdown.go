@@ -76,9 +76,13 @@ func findingBullets(f evidence.Finding) []string {
 	bullets := make([]string, 0, 5+len(f.Evidence))
 
 	if f.Resource != nil {
+		// The provider is a plan value, so it goes in a code span like every
+		// other one. inlineText neutralises a tag and leaves a link, an image
+		// and emphasis alone — enough for a plan to make a report the reader
+		// trusts carry a clickable host of its choosing.
 		bullets = append(bullets, fmt.Sprintf("- Resource: %s (%s, %s)",
 			code(f.Resource.Address), inlineText(string(f.Resource.Cloud)),
-			inlineText(f.Resource.Provider)))
+			code(f.Resource.Provider)))
 	}
 	if f.Expected != nil {
 		bullets = append(bullets, fmt.Sprintf("- Expected: %s = %s",
@@ -176,8 +180,6 @@ func dividers(n int) []string {
 	return out
 }
 
-// escapeCell keeps a cell on one row: a literal pipe is escaped and any line
-// break collapses to a space, so free-text reasons cannot break the table.
 // escapeCell makes a value safe to place between two cell boundaries.
 //
 // A pipe must not open a cell, and the run of backslashes before it decides

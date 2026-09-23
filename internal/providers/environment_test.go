@@ -698,3 +698,127 @@ func TestAModeThatContradictsItsActionsIsNotBelieved(t *testing.T) {
 		})
 	}
 }
+
+// TestAReadCannotDecideAVerdict draws the admissibility boundary where the
+// facts are made, rather than where they are read.
+//
+// ReadOnly was applied four times in the policy layer and nowhere in the
+// normalizer, so every rule could decline to judge a read and none could stop
+// a read from having already judged something else. An Azure container set to
+// blob access, beside a data source reporting that its account forbids
+// anonymous access, came back Known(false) — the plan proves prevention — on a
+// plan that manages the container and merely observes the account.
+//
+// Worse than the wrong verdict: the record naming the gap disappeared with it,
+// because the account looked present, and the data source appeared nowhere in
+// the bundle because a Known(false) emits nothing.
+func TestAReadCannotDecideAVerdict(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "data.azurerm_storage_account.existing", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "acct", "allow_nested_items_to_be_public": false}}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "data.azurerm_storage_account.existing", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "existing", "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {"storage_account_id": {"references": [
+	       "data.azurerm_storage_account.existing.id",
+	       "data.azurerm_storage_account.existing"]}}}
+	  ]}}
+	}`
+
+	container := normalizedAt(t, raw, "azurerm_storage_container.assets")
+	if container.ObjectStorage == nil {
+		t.Fatal("no normalized container")
+	}
+
+	exposure := container.ObjectStorage.PublicAccess
+	if exposure.IsKnown() && !exposure.Get() {
+		t.Fatal("a read of existing state was taken as proof that the change prevents exposure")
+	}
+	for _, source := range exposure.Sources {
+		if contains(source.ResourceAddress, "data.") {
+			t.Errorf("a read contributed to the verdict: %s", source.ResourceAddress)
+		}
+	}
+
+	// And the gap it hid is named again: the account gating this container is
+	// not part of this plan, whatever the plan reads about it.
+	var named bool
+	for _, control := range container.ObjectStorage.Unresolved {
+		if control.CheckID == "AZURE_STORAGE_ACCOUNT_NOT_IN_PLAN" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the missing account was not reported: %v", container.ObjectStorage.Unresolved)
+	}
+
+	// The read is still in the graph. Nothing in a plan is filtered away.
+	if _, ok := providers.Normalize(mustParse(t, raw), providers.Default()).
+		At("data.azurerm_storage_account.existing"); !ok {
+		t.Error("the data source was dropped from the graph rather than declared inadmissible")
+	}
+}
+
+// TestAReadCannotShutARouteForAManagedResource is the same boundary on the AWS
+// side, where a control is a separate resource rather than the subject's own
+// gate.
+func TestAReadCannotShutARouteForAManagedResource(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.existing", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.existing", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "existing",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	exposure := bucket.ObjectStorage.PublicAccess
+	if !exposure.IsKnown() || !exposure.Get() {
+		t.Fatalf("the bucket's own ACL grants public access: state=%q grants=%v",
+			exposure.State, exposure.Get())
+	}
+}
+
+func mustParse(t *testing.T, raw string) terraformplan.Plan {
+	t.Helper()
+	plan, err := terraformplan.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	return plan
+}

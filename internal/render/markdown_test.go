@@ -815,3 +815,71 @@ func TestAnUnterminatedCodeSpanIsNotASpan(t *testing.T) {
 		t.Errorf("a closed code span did not protect its content: %q", bare)
 	}
 }
+
+// TestATableCellPrintsWhatThePlanHeld holds the half of the escaping that
+// structure tests cannot see.
+//
+// countUnescaped counts boundaries and structureOf compares shapes; neither
+// looks at what a cell says. So the change that stopped escapeCell doubling
+// every backslash — made because a doubled backslash is shown doubled inside a
+// code span, and an address stopped being the address the plan held — could be
+// reverted wholesale with the suite still green.
+//
+// Structure and content are two guarantees and they need two oracles.
+func TestATableCellPrintsWhatThePlanHeld(t *testing.T) {
+	// Addresses that need no escaping to sit in a cell. A pipe is the one
+	// character the table format reserves, so it cannot appear as the plan
+	// held it; it is asserted separately below. Everything else must survive.
+	for name, address := range map[string]string{
+		"a windows path":       `aws_s3_bucket.b["c:\drive"]`,
+		"a doubled backslash":  `aws_s3_bucket.b["a\\b"]`,
+		"a trailing backslash": `aws_s3_bucket.b["a\"]`,
+		"an escaped quote":     `aws_s3_bucket.b["a\"b"]`,
+		"an ordinary key":      `aws_s3_bucket.b["assets"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle := contractBundle()
+			bundle.Unknowns = []evidence.Unknown{{
+				CheckID:         "STORAGE_PUBLIC_DETERMINABLE",
+				Required:        false,
+				Reason:          "Public access could not be determined.",
+				ResourceAddress: &address,
+				Evidence:        []evidence.EvidenceRef{{Source: "terraform_plan", Path: "acl"}},
+			}}
+
+			out, err := render.Markdown(bundle)
+			if err != nil {
+				t.Fatalf("render.Markdown: %v", err)
+			}
+
+			// The address appears as the plan held it, inside its code span.
+			// A cell whose content has been mangled is a cell that no longer
+			// identifies the resource a reader has to go and look at.
+			if !strings.Contains(string(out), address) {
+				t.Fatalf("the report does not print the address the plan held\nwant: %s\n\n%s",
+					address, out)
+			}
+		})
+	}
+}
+
+// TestAPipeIsEscapedExactlyOnce covers the one character a table cell reserves.
+// It cannot appear as the plan held it, and it must appear exactly once rather
+// than being doubled, dropped, or left to open a cell.
+func TestAPipeIsEscapedExactlyOnce(t *testing.T) {
+	address := `aws_s3_bucket.b["a|b"]`
+	bundle := contractBundle()
+	bundle.Unknowns = []evidence.Unknown{{
+		CheckID: "STORAGE_PUBLIC_DETERMINABLE", Required: false,
+		Reason: "Public access could not be determined.", ResourceAddress: &address,
+		Evidence: []evidence.EvidenceRef{{Source: "terraform_plan", Path: "acl"}},
+	}}
+
+	out, err := render.Markdown(bundle)
+	if err != nil {
+		t.Fatalf("render.Markdown: %v", err)
+	}
+	if !strings.Contains(string(out), `aws_s3_bucket.b["a\|b"]`) {
+		t.Fatalf("the pipe was not escaped exactly once:\n%s", out)
+	}
+}

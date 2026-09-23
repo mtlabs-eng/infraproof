@@ -436,13 +436,6 @@ func ResourceCoverage(graph model.Graph, evaluated []string) Result {
 	return result
 }
 
-// deferredToAJudgedSubject reports whether a control resource's meaning reached
-// something that answered for it.
-//
-// Naming a subject is not enough. The subject must be in the graph — a control
-// governing a bucket managed elsewhere names one that is not here — and it must
-// itself have been judged, or the deferral passes the question to something
-// that never answered it either.
 // coverageReason says which of the two gaps this is, because they have
 // different fixes: one needs a rule, the other needs the resource it governs.
 func coverageReason(resource model.NormalizedResource) string {
@@ -456,6 +449,13 @@ func coverageReason(resource model.NormalizedResource) string {
 			"this plan.", resource.Family)
 }
 
+// deferredToAJudgedSubject reports whether a control resource's meaning reached
+// something that answered for it.
+//
+// Naming a subject is not enough. The subject must be in the graph — a control
+// governing a bucket managed elsewhere names one that is not here — and it must
+// itself have been judged, or the deferral passes the question to something
+// that never answered it either.
 func deferredToAJudgedSubject(resource model.NormalizedResource, judged map[string]bool) bool {
 	for _, subject := range resource.DefersTo {
 		if judged[subject] {

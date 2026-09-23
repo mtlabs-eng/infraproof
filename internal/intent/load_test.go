@@ -642,18 +642,18 @@ func TestEveryJSONDocumentReachesTheDecoder(t *testing.T) {
 		})
 	}
 
-	// Anything that is not JSON is refused as a format problem, whatever it
-	// starts with.
+	// A document that does not begin as JSON is refused as a format problem.
+	// One that opens with "{" is indistinguishable from JSON at its first
+	// token — flow-style YAML and a single-quoted object both do — so those
+	// get the decoder's message and its byte offset, which is the only
+	// actionable thing to say about a typo. The filename is the other gate.
 	for name, raw := range map[string]string{
 		"a plain mapping":   "schema_version: \"1.0\"\n",
 		"a document marker": "---\nschema_version: \"1.0\"\n",
-		"flow style":        `{schema_version: "1.0", change_id: c}`,
 		"a top-level list":  "- schema_version: \"1.0\"\n",
 		"a directive":       "%YAML 1.2\n---\na: b\n",
 		"a comment":         "# a contract\na: b\n",
 		"an unquoted word":  "hello",
-		"a trailing comma":  `{"schema_version": "1.0",}`,
-		"a single quote":    `{'schema_version': '1.0'}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := intent.Parse([]byte(raw), "contract.txt")
@@ -662,6 +662,119 @@ func TestEveryJSONDocumentReachesTheDecoder(t *testing.T) {
 			}
 			if !strings.Contains(strings.ToLower(err.Error()), "json") {
 				t.Errorf("the error does not say the format is the problem: %v", err)
+			}
+		})
+	}
+}
+
+// TestAMergedFieldIsNamedTwiceToo covers the half of the decoder's relation the
+// reversal oracle cannot see.
+//
+// Reversal detects a field the decoder overwrites: the last spelling wins, so
+// swapping the order swaps the answer. It detects nothing where the decoder
+// merges — an array element, a pointer already followed, a map already made —
+// because two spellings writing to different leaves give the same result in
+// either order.
+//
+// A contract naming "resources" twice was therefore accepted as the union of
+// both, including one that was invalid written once: the exposure the first
+// spelling omitted arrived from the second, and a bucket with a public ACL
+// came back PASS.
+func TestAMergedFieldIsNamedTwiceToo(t *testing.T) {
+	cases := map[string]string{
+		"a slice merged by element": `{
+		  "schema_version": "1.0", "change_id": "c", "environment": "staging",
+		  "allowed_clouds": ["aws"], "destructive_changes": "forbidden",
+		  "resources": [{"family": "object_storage", "purpose": "assets"}],
+		  "Resources": [{"exposure": "public"}]}`,
+
+		"a pointer already followed": `{
+		  "schema_version": "1.0", "change_id": "c", "environment": "staging",
+		  "allowed_clouds": ["aws"], "destructive_changes": "forbidden",
+		  "resources": [{"family": "object_storage", "exposure": "private"}],
+		  "constraints": {"allowed_regions": ["eu-west-1"]},
+		  "Constraints": {"required_tags": {"owner": "checkout"}}}`,
+
+		"a map already made": `{
+		  "schema_version": "1.0", "change_id": "c", "environment": "staging",
+		  "allowed_clouds": ["aws"], "destructive_changes": "forbidden",
+		  "resources": [{"family": "object_storage", "exposure": "private"}],
+		  "constraints": {"required_tags": {"a": "1"}, "Required_Tags": {"b": "2"}}}`,
+
+		"a slice of clouds": `{
+		  "schema_version": "1.0", "change_id": "c", "environment": "staging",
+		  "allowed_clouds": ["aws"], "Allowed_Clouds": ["gcp"],
+		  "destructive_changes": "forbidden",
+		  "resources": [{"family": "object_storage", "exposure": "private"}]}`,
+
+		"a fold that is not a case change": `{
+		  "schema_version": "1.0", "change_id": "c", "environment": "staging",
+		  "allowed_clouds": ["aws"], "destructive_changes": "forbidden",
+		  "resources": [{"family": "object_storage", "purpose": "assets"}],
+		  "re` + "ſ" + `ources": [{"exposure": "public"}]}`,
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := intent.Parse([]byte(raw), "contract.json")
+			if err == nil {
+				t.Fatal("a contract naming one field twice was accepted")
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "more than once") {
+				t.Errorf("the error does not name the problem: %v", err)
+			}
+		})
+	}
+}
+
+// TestAMistypedContractKeepsTheDecodersMessage separates a format question
+// from a typo.
+//
+// A document that does not begin as JSON is a format problem, and saying so
+// beats a byte offset. A document that begins as JSON and then goes wrong is a
+// typo, and there the offset is the only actionable thing in the message. An
+// earlier form reported the four commonest ways to mistype JSON as "this is
+// not JSON; YAML is not supported", which sends the author to a question they
+// do not have.
+func TestAMistypedContractKeepsTheDecodersMessage(t *testing.T) {
+	for name, raw := range map[string]string{
+		"a trailing comma":     `{"schema_version": "1.0",}`,
+		"a truncated document": `{"schema_version": "1.0"`,
+		"a missing comma":      `{"schema_version": "1.0" "change_id": "c"}`,
+		"a stray character":    `{"schema_version": "1.0"} x`,
+		"flow-style YAML":      `{schema_version: "1.0", change_id: c}`,
+		"single quotes":        `{'schema_version': '1.0'}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := intent.Parse([]byte(raw), "contract.json")
+			if err == nil {
+				t.Fatal("a malformed document was accepted")
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "yaml") {
+				t.Errorf("a mistyped JSON contract was reported as a format problem: %v", err)
+			}
+		})
+	}
+}
+
+// TestADocumentNestedTooDeepSaysSo keeps the bound that protects the rewrite
+// from being one that tells nobody. Swallowing it left the reader with whatever
+// the decoder said next, which was an internal Go type name.
+func TestADocumentNestedTooDeepSaysSo(t *testing.T) {
+	for name, raw := range map[string]string{
+		"nested arrays":  strings.Repeat("[", 5000) + strings.Repeat("]", 5000),
+		"nested objects": `{"a":` + strings.Repeat(`{"a":`, 200) + "1" + strings.Repeat("}", 201),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := intent.Parse([]byte(raw), "contract.json")
+			if err == nil {
+				t.Fatal("a document deeper than any real one was accepted")
+			}
+			if !strings.Contains(err.Error(), "levels deep") {
+				t.Errorf("the error does not say what is wrong: %v", err)
+			}
+			if strings.Contains(err.Error(), "wireContract") {
+				t.Errorf("an internal type name reached the user: %v", err)
 			}
 		})
 	}

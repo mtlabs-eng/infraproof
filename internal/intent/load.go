@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Load reads and validates a contract from a file.
@@ -43,7 +44,12 @@ func Parse(raw []byte, source string) (Contract, error) {
 		return Contract{}, fmt.Errorf(
 			"reading intent contract %s: YAML is not supported in this build; supply the contract as JSON", source)
 	}
-	if notJSON(body) {
+	// A document that does not even begin as JSON is a format problem, and
+	// saying so beats a byte offset. A document that begins as JSON and then
+	// goes wrong is a typo, and there the offset is the only actionable thing
+	// in the message — reporting the four commonest ways to mistype JSON as
+	// "this is not JSON" sent the author to a question they did not have.
+	if notJSON(body) && !opensAsJSON(body) {
 		return Contract{}, fmt.Errorf(
 			"reading intent contract %s: this is not JSON; YAML is not supported in this build, "+
 				"so supply the contract as JSON", source)
@@ -90,6 +96,17 @@ func notJSON(raw []byte) bool {
 	return decoder.Decode(&document) != nil
 }
 
+// opensAsJSON reports that a document starts the way a JSON contract does.
+//
+// It is a question about the first token, not about the grammar, which is why
+// it may be answered here: a contract is an object, and anything beginning with
+// "{" was meant as one. Whether it goes on to be valid JSON is the decoder's to
+// say, and its message names the byte that went wrong.
+func opensAsJSON(raw []byte) bool {
+	trimmed := bytes.TrimLeft(raw, " \t\r\n")
+	return len(trimmed) > 0 && trimmed[0] == '{'
+}
+
 // maxDepth bounds how far the rewrite will descend.
 //
 // json.Decoder.Token does not apply the nesting limit that Decode does, so a
@@ -122,9 +139,9 @@ const maxDepth = 64
 // keys differing in case are two entries in it — which is why cloud tag names
 // need no exception.
 func rejectRepeatedFields(raw []byte) error {
-	reversed, err := reverseObjectMembers(raw)
+	reversed, folded, err := reverseObjectMembers(raw)
 	switch {
-	case errors.Is(err, errRepeatedKey):
+	case errors.Is(err, errRepeatedKey), errors.Is(err, errTooDeep):
 		return err
 	case err != nil:
 		// Malformed input. The decode that follows reports it, with the
@@ -142,10 +159,55 @@ func rejectRepeatedFields(raw []byte) error {
 		return nil //nolint:nilerr // see above
 	}
 
+	// The fold check below subsumes this today: any two keys the decoder
+	// merges also fold together, so removing the reversal changes no test.
+	// It stays because it is the only check here that asks the decoder rather
+	// than modelling it, and foldKey is a model — of a function this package
+	// cannot call, in a standard library that may widen the relation without
+	// telling anyone. It is not claimed as covered.
 	if !reflect.DeepEqual(asWritten, asReversed) {
 		return errors.New("names one field more than once, and the two spellings disagree")
 	}
+
+	// Reversal sees a field the decoder overwrites. It does not see one the
+	// decoder merges: an array element, a pointer already followed, a map
+	// already made. For those, two spellings writing to different leaves give
+	// the same result in either order, and a contract naming "resources" twice
+	// was accepted as the union of both — including one that was invalid
+	// written once.
+	//
+	// So the folded key sets are compared too, using the relation the decoder
+	// folds by rather than a guess at it.
+	for _, collision := range folded {
+		matters, err := namesAField(raw, collision)
+		if err != nil {
+			return nil //nolint:nilerr // the decode reports malformed input
+		}
+		if matters {
+			return fmt.Errorf("names %s more than once", collision.key)
+		}
+	}
 	return nil
+}
+
+// namesAField reports whether a key sits where the decoder matches fields, as
+// opposed to a map, whose keys are names a user chose and where two spellings
+// differing only in case are two entries.
+//
+// It asks rather than deciding: the key is renamed to one no field can match,
+// and the document decoded with unknown fields refused. A struct position
+// rejects the rename; a map accepts it.
+func namesAField(raw []byte, at collision) (bool, error) {
+	const impossible = "\u0000-infraproof-probe"
+
+	renamed, err := rewriteWithRename(raw, at, impossible)
+	if err != nil {
+		return false, err
+	}
+	if _, err := decodeContract(renamed); err != nil {
+		return true, nil
+	}
+	return false, nil
 }
 
 // decodeContract reads the wire shape, rejecting a field this build does not
@@ -164,27 +226,76 @@ func decodeContract(raw []byte) (wireContract, error) {
 	return wire, nil
 }
 
+// errRepeatedKey ends the rewrite when an object spells one key twice. It
+// carries no payload: the key is a contract value.
+var errRepeatedKey = errors.New("names one field more than once")
+
+// errTooDeep reports a document nested past what the rewrite will descend. It
+// is reported rather than swallowed: a bound that protects the walk and tells
+// nobody leaves a reader with whatever the decoder says next, which was an
+// internal Go type name.
+var errTooDeep = fmt.Errorf("is nested more than %d levels deep", maxDepth)
+
+// join builds the path of a member, which locates an object for the probe.
+func join(path, key string) string {
+	if path == "" {
+		return key
+	}
+	return path + "." + key
+}
+
+// collision names a key that folds onto an earlier one in the same object.
+type collision struct {
+	// path locates the object, so the probe can rename the key in place.
+	path string
+	// key is the later spelling, as written.
+	key string
+}
+
+// rewrite re-emits a document, optionally reversing each object's members and
+// optionally renaming one key, and reports the folded-key collisions it saw.
+type rewrite struct {
+	reverse    bool
+	rename     *collision
+	renameTo   string
+	collisions []collision
+}
+
 // reverseObjectMembers re-emits the document with the members of every object
-// in the opposite order, leaving arrays and values untouched.
-//
-// maxDepth bounds it for the same reason it bounded the walk before: Token
-// does not apply the nesting limit Decode does, and a document of nothing but
-// brackets would otherwise cost whatever it liked.
-func reverseObjectMembers(raw []byte) ([]byte, error) {
+// in the opposite order, leaving arrays and values untouched, and reports every
+// key that folds onto an earlier one in its object.
+func reverseObjectMembers(raw []byte) ([]byte, []collision, error) {
+	pass := rewrite{reverse: true}
+	out, err := pass.run(raw)
+	return out, pass.collisions, err
+}
+
+// rewriteWithRename re-emits the document with one key renamed, leaving the
+// order alone.
+func rewriteWithRename(raw []byte, at collision, to string) ([]byte, error) {
+	pass := rewrite{rename: &at, renameTo: to}
+	return pass.run(raw)
+}
+
+func (r *rewrite) run(raw []byte) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 
 	var out bytes.Buffer
-	if err := rewriteValue(decoder, &out, 0); err != nil {
+	if err := r.value(decoder, &out, "", 0); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
 }
 
-// rewriteValue consumes exactly one JSON value and writes it back.
-func rewriteValue(decoder *json.Decoder, out *bytes.Buffer, depth int) error {
+// value consumes exactly one JSON value and writes it back.
+//
+// maxDepth bounds it for the same reason it bounded the walk before: Token does
+// not apply the nesting limit Decode does, and a document of nothing but
+// brackets would otherwise cost whatever it liked.
+func (r *rewrite) value(decoder *json.Decoder, out *bytes.Buffer, path string, depth int) error {
 	if depth > maxDepth {
-		return fmt.Errorf("is nested more than %d levels deep", maxDepth)
+		return errTooDeep
 	}
 
 	token, err := decoder.Token()
@@ -200,11 +311,16 @@ func rewriteValue(decoder *json.Decoder, out *bytes.Buffer, depth int) error {
 	switch delimiter {
 	case '{':
 		var members []string
-		// Byte equality is not the decoder's relation; it is a strict subset
-		// of it, so checking it here only ever refuses and never admits. It is
-		// worth checking because two keys spelled identically produce the same
-		// result in either order, and the reversal below cannot see them.
+		// Byte equality is a strict subset of the decoder's relation, so
+		// checking it here only ever refuses and never admits. It is worth
+		// checking because two keys spelled identically produce the same
+		// result in either order, and reversal cannot see them.
 		seen := map[string]bool{}
+		// And the folded set, using the relation the decoder folds by. A
+		// collision here is a candidate: whether it matters depends on whether
+		// the position matches fields or holds names, which namesAField asks.
+		byFold := map[string]bool{}
+
 		for decoder.More() {
 			keyToken, err := decoder.Token()
 			if err != nil {
@@ -218,25 +334,37 @@ func rewriteValue(decoder *json.Decoder, out *bytes.Buffer, depth int) error {
 				return errRepeatedKey
 			}
 			seen[key] = true
+			if folded := foldKey(key); byFold[folded] {
+				r.collisions = append(r.collisions, collision{path: path, key: key})
+			} else {
+				byFold[folded] = true
+			}
 
 			var value bytes.Buffer
-			if err := rewriteValue(decoder, &value, depth+1); err != nil {
+			if err := r.value(decoder, &value, join(path, key), depth+1); err != nil {
 				return err
 			}
-			encoded, err := json.Marshal(key)
+
+			written := key
+			if r.rename != nil && r.rename.path == path && r.rename.key == key {
+				written = r.renameTo
+			}
+			encoded, err := json.Marshal(written)
 			if err != nil {
 				return err
 			}
 			members = append(members, string(encoded)+":"+value.String())
 		}
-		slices.Reverse(members)
+		if r.reverse {
+			slices.Reverse(members)
+		}
 		out.WriteString("{" + strings.Join(members, ",") + "}")
 
 	case '[':
 		var elements []string
-		for decoder.More() {
+		for i := 0; decoder.More(); i++ {
 			var element bytes.Buffer
-			if err := rewriteValue(decoder, &element, depth+1); err != nil {
+			if err := r.value(decoder, &element, fmt.Sprintf("%s[%d]", path, i), depth+1); err != nil {
 				return err
 			}
 			elements = append(elements, element.String())
@@ -251,9 +379,27 @@ func rewriteValue(decoder *json.Decoder, out *bytes.Buffer, depth int) error {
 	return nil
 }
 
-// errRepeatedKey ends the rewrite when an object spells one key twice. It
-// carries no payload: the key is a contract value.
-var errRepeatedKey = errors.New("names one field more than once")
+// foldKey maps a key to a canonical form under the relation encoding/json
+// folds by.
+//
+// It calls unicode.SimpleFold, which is the function the decoder uses, rather
+// than approximating it: strings.ToLower is a different relation, and the gap
+// between them — the long s folds with s for one and not the other — was a
+// contract naming one field twice and being read as saying the second thing.
+//
+// Taking the orbit's smallest rune gives every member of a fold class the same
+// answer without needing to know which member the decoder would pick.
+func foldKey(key string) string {
+	return strings.Map(func(r rune) rune {
+		smallest := r
+		for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
+			if folded < smallest {
+				smallest = folded
+			}
+		}
+		return smallest
+	}, key)
+}
 
 func writeScalar(out *bytes.Buffer, token json.Token) error {
 	encoded, err := json.Marshal(token)

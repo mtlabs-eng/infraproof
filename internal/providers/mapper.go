@@ -52,12 +52,27 @@ type Governor interface {
 // with its capabilities, a control resource marked as understood, and anything
 // no mapper claimed as an opaque entry.
 func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
-	scope := plan.ResourceChanges
-	edges, unresolved := relate(scope, mappers)
+	// Two lists, because a plan's contents and a verdict's inputs are
+	// different things. Everything appears in the graph; only what the change
+	// controls may answer for it.
+	//
+	// A read observes live state the change does not govern, so it is not
+	// admissible evidence about that change — and applying that at the rules,
+	// where it was, let every rule decline to judge a read while none could
+	// stop a read from having already judged something else. An Azure
+	// container set to blob access, beside a data source reporting its account
+	// forbids anonymous access, came back proven private.
+	//
+	// Drawing the boundary here is what makes it hold: a mapper cannot use
+	// what it is not given, and the control the change lacks goes back to
+	// being reported missing, which is the true and actionable answer.
+	present := plan.ResourceChanges
+	admissible := admissibleChanges(present)
+	edges, unresolved := relate(admissible, mappers)
 
-	graph := model.Graph{Resources: make([]model.NormalizedResource, 0, len(scope))}
-	for _, change := range scope {
-		resource := normalizeOne(change, edges, scope, mappers)
+	graph := model.Graph{Resources: make([]model.NormalizedResource, 0, len(present))}
+	for _, change := range present {
+		resource := normalizeOne(change, edges, admissible, mappers)
 		if unresolved[change.Address] && resource.ObjectStorage != nil {
 			// Saying only "undetermined" would leave a reader with nowhere to
 			// go. Naming the reason lets them fix it: an argument that names
@@ -73,6 +88,22 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 		graph.Resources = append(graph.Resources, resource)
 	}
 	return graph
+}
+
+// admissibleChanges returns the changes that may contribute to a verdict.
+//
+// A read is excluded: it observes state the change does not control, so it can
+// explain nothing about what the change does. It stays in the graph as itself —
+// nothing in a plan is filtered away — and simply answers for nobody.
+func admissibleChanges(changes []terraformplan.ResourceChange) []terraformplan.ResourceChange {
+	admissible := make([]terraformplan.ResourceChange, 0, len(changes))
+	for _, change := range changes {
+		if change.IsRead() {
+			continue
+		}
+		admissible = append(admissible, change)
+	}
+	return admissible
 }
 
 func normalizeOne(change terraformplan.ResourceChange, edges map[string][]terraformplan.ResourceChange,

@@ -25,17 +25,21 @@ func TestEveryFoldTheDecoderMakesIsRefused(t *testing.T) {
 	// The fields a contract carries, and a second value for each that a reader
 	// would notice being preferred.
 	type field struct{ name, first, second string }
+	// One field of each kind the decoder treats differently, because the
+	// relation it folds by is the same for all of them and the behaviour on a
+	// collision is not: a pointer is overwritten, a slice and a map are
+	// merged, and only the first is visible to a reversal.
 	fields := []field{
 		{"exposure", `"private"`, `"public"`},
 		{"destructive_changes", `"forbidden"`, `"allowed_with_warning"`},
 		{"environment", `"staging"`, `"production"`},
+		{"allowed_clouds", `["aws"]`, `["gcp"]`},
+		{"resources", `[{"family": "object_storage", "exposure": "private"}]`,
+			`[{"family": "object_storage", "exposure": "public"}]`},
 	}
 
 	var swept int
 	for r := rune(0); r <= unicode.MaxRune; r++ {
-		if r < utf8Max && r >= 0x80 {
-			// Fine.
-		}
 		for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
 			if folded > unicode.MaxASCII || !isLetter(byte(folded)) {
 				continue
@@ -69,8 +73,6 @@ func TestEveryFoldTheDecoderMakesIsRefused(t *testing.T) {
 	t.Logf("swept %d non-ASCII folds onto contract field names", swept)
 }
 
-const utf8Max = 0x10FFFF
-
 func isLetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
@@ -86,6 +88,11 @@ func contractNaming(name, first, variant, second string) string {
 	  "resources": [{"family": "object_storage", "exposure": "private"}]
 	}`
 
+	if name == "resources" {
+		return strings.Replace(shell,
+			`"resources": [{"family": "object_storage", "exposure": "private"}]`,
+			fmt.Sprintf("%q: %s, %q: %s", name, first, variant, second), 1)
+	}
 	if name == "exposure" {
 		return strings.Replace(shell, `"exposure": "private"`,
 			fmt.Sprintf(`%q: %s, %q: %s`, name, first, variant, second), 1)

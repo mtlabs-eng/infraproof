@@ -3,7 +3,7 @@ package render_test
 import "github.com/mtlabs-eng/infraproof/internal/evidence"
 
 // contractBundle is the bundle equivalent of the reviewed contract example in
-// examples/expected-output.json. The parity test in json_test.go anchors the
+// docs/examples/evidence-bundle.json. The parity test in json_test.go anchors the
 // renderer to that reviewed document.
 func contractBundle() evidence.Bundle {
 	return evidence.Bundle{
