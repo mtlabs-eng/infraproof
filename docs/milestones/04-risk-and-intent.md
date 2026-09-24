@@ -42,10 +42,36 @@ plans that provably set `acl = "public-read"`, which is absence read as
 permission at the level of a decision. That is the cost this scope buys out,
 and it is why the rule stays in this milestone rather than waiting for its own.
 
-Carried forward rather than solved here: admissibility is decided per source
-and per capability, and a predicate about what may contribute to a verdict has
-no general home in the model. A second such predicate — an unrecognized action,
-a forbidden cloud — would need the same treatment written again.
+How it is decided went through five mechanisms in five review rounds, four of
+which inferred the role a source plays from its resource type. Type is a proxy
+and it fails in both directions: two types can answer one question — ownership
+controls decide whether an ACL applies at all — and one type answers for one
+subject and not another, because an account-wide block governs the buckets in
+its own account and no others. Both failures were demonstrated on constructed
+plans before the mechanism was replaced. The mapper is now asked directly,
+through an optional `Roles` interface, and a mapper that declines to answer has
+every source it may not use treated as contesting.
+
+Carried forward rather than solved here:
+
+- Admissibility is decided per source and per capability, and a predicate about
+  what may contribute to a verdict has no general home in the model. A second
+  such predicate — an unrecognized action, a forbidden cloud — would need the
+  same treatment written again.
+- Normalization is quadratic in subjects times scope-governed changes, because
+  the mapper is handed the scope and scans it per subject. Measured at two
+  thousand of each it is 0.8 seconds, against 307 seconds before this
+  milestone's last three commits, and the report is bounded by a stated source
+  limit — but the growth is unchanged, and the test bounds a size rather than a
+  rate.
+- A report escapes what would open Markdown structure and what a terminal acts
+  on. It does not strip bidirectional or zero-width characters, which change
+  what a reader sees without changing what the bytes say. Stripping them is a
+  judgement about legitimate text in scripts this build has no opinion about.
+- `evidence.Validate` reports violations in canonical order, so an index names
+  the record a reader will count to. It does not check that a bundle it is
+  given is in that order, so the ordering is a property of what this build
+  emits rather than one it verifies on input.
 
 ## Safety semantics
 

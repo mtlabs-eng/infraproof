@@ -549,3 +549,32 @@ func TestADigestMustBeADigest(t *testing.T) {
 		})
 	}
 }
+
+// TestAnErrorNamesThePositionAReaderWillSee closes a gap between the two
+// halves of rendering.
+//
+// A bundle is validated and then canonically ordered, so an error naming
+// findings[1] named the position a producer happened to write, and the reader
+// looking for it counted to a different record. The order is part of the
+// contract; the diagnostics have to speak it.
+func TestAnErrorNamesThePositionAReaderWillSee(t *testing.T) {
+	b := blockBundle()
+	high := b.Findings[0]
+
+	low := high
+	low.RuleID = "AAA_LOW_SEVERITY"
+	low.Severity = SeverityLow
+	low.Claim = "" // the violation
+
+	// Written low first; canonical order puts the critical finding first, so
+	// the offending record is findings[1] to a reader and findings[0] here.
+	b.Findings = []Finding{low, high}
+
+	err := b.Validate()
+	if err == nil {
+		t.Fatal("a finding with no claim was accepted")
+	}
+	if !strings.Contains(err.Error(), "findings[1]") {
+		t.Errorf("the error names a position the reader never sees: %v", err)
+	}
+}

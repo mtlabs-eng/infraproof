@@ -39,12 +39,19 @@ func violation(path, format string, args ...any) error {
 func (b Bundle) Validate() error {
 	var errs []error
 
+	// Indices are reported in canonical order, which is the order a reader
+	// sees: a bundle is validated and then ordered, so an error naming
+	// findings[1] named the position a producer happened to write it in and
+	// sent the reader counting to a different record. Canonical reorders and
+	// clones and decides nothing, so which violations are found is unchanged.
+	ordered := Canonical(b)
+
 	errs = append(errs, b.validateEnvelope()...)
 	errs = append(errs, b.validateVerification()...)
-	for i, f := range b.Findings {
+	for i, f := range ordered.Findings {
 		errs = append(errs, validateFinding(fmt.Sprintf("findings[%d]", i), f)...)
 	}
-	for i, u := range b.Unknowns {
+	for i, u := range ordered.Unknowns {
 		errs = append(errs, validateUnknown(fmt.Sprintf("unknowns[%d]", i), u)...)
 	}
 	errs = append(errs, b.validateDecisionConsistency()...)

@@ -1934,3 +1934,60 @@ func reasonFor(t *testing.T, resource model.NormalizedResource, check string) st
 	t.Fatalf("%s did not report %s: %v", resource.Address, check, resource.ObjectStorage.Unresolved)
 	return ""
 }
+
+// TestAControlTheVerdictUsedIsCited covers evidence a reader cannot find.
+//
+// Ownership controls set to BucketOwnerEnforced make an ACL impossible to
+// apply, so they decide the ACL route outright — and the mapper consulted them
+// while citing nothing, which left a verdict resting on a resource no evidence
+// reference names. docs/PRODUCT.md requires every finding to locate the source
+// data it came from, and a source consulted and not cited is the one kind of
+// evidence a reader cannot check.
+func TestAControlTheVerdictUsedIsCited(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "acl": "public-read"}}},
+	    {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "rule": [{"object_ownership": "BucketOwnerEnforced"}]}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if bucket.ObjectStorage.PublicAccess.IsKnown() && bucket.ObjectStorage.PublicAccess.Get() {
+		t.Fatal("an ACL that cannot be applied was read as a grant")
+	}
+
+	var cited bool
+	for _, source := range bucket.ObjectStorage.PublicAccess.Sources {
+		if source.ResourceAddress == "aws_s3_bucket_ownership_controls.assets" {
+			cited = true
+		}
+	}
+	if !cited {
+		t.Errorf("the control that decided the ACL route is cited nowhere: %v",
+			bucket.ObjectStorage.PublicAccess.Sources)
+	}
+}

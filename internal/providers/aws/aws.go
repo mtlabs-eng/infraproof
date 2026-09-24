@@ -192,13 +192,21 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 // effect: the bucket block, the account block, and ownership controls, which
 // can disable ACLs for the bucket outright.
 func aclChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
+	ownership := findType(related, typeOwnershipControls)
 	c := channel{blocked: strongest(
 		blockedBy(block, "block_public_acls", "ignore_public_acls"),
 		blockedBy(account, "block_public_acls", "ignore_public_acls"),
-		aclsDisabled(findType(related, typeOwnershipControls)),
+		aclsDisabled(ownership),
 	)}
 	if block != nil {
 		c.sources = blockProvenance(block)
+	}
+	if ownership != nil {
+		// Consulted, so cited. BucketOwnerEnforced decides this route outright,
+		// and a verdict resting on a resource no reference names is one a
+		// reader cannot check.
+		c.sources = append(c.sources, declared.Source(model.CloudAWS, ownership.Address,
+			"rule.object_ownership", ownership.After.Field("rule")))
 	}
 
 	acl := findType(related, typeBucketACL)
