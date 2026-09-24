@@ -40,6 +40,24 @@ func (Mapper) IsSubject(resourceType string) bool {
 	return resourceType == typeContainer || resourceType == typeAccount
 }
 
+// The questions this mapper answers. A container asks which account gates it;
+// an account with no container in the plan asks whether one is here at all.
+const (
+	roleAccountGate = "account_gate"
+	roleContainer   = "container"
+)
+
+// RoleOf names the question a resource would answer about a subject.
+func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
+	switch {
+	case subject.Type == typeContainer && candidate.Type == typeAccount:
+		return roleAccountGate
+	case subject.Type == typeAccount && candidate.Type == typeContainer:
+		return roleContainer
+	}
+	return ""
+}
+
 // attrTags is where Azure carries user-supplied labels.
 const attrTags = "tags"
 
@@ -76,8 +94,10 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 	case account == nil:
 		capabilities.Unresolved = []model.MissingControl{{
 			CheckID: "AZURE_STORAGE_ACCOUNT_NOT_IN_PLAN",
-			Reason:  "The storage account gating anonymous access is not part of this plan.",
-			Cloud:   model.CloudAzure,
+			// Not an absence: a mapper sees the admissible changes, so an
+			// account present only as a read is invisible to it.
+			Reason: "This change does not set the storage account that gates anonymous access.",
+			Cloud:  model.CloudAzure,
 		}}
 	}
 	resource.ObjectStorage = &capabilities
@@ -107,7 +127,7 @@ func accountCapabilities(account terraformplan.ResourceChange, related []terrafo
 	capabilities := &model.ObjectStorageCapabilities{
 		Unresolved: []model.MissingControl{{
 			CheckID: "AZURE_CONTAINER_NOT_IN_PLAN",
-			Reason:  "This storage account permits anonymous access and no container of it is part of this plan.",
+			Reason:  "This storage account permits anonymous access and this change creates no container of it.",
 			Cloud:   model.CloudAzure,
 		}},
 	}
@@ -165,7 +185,7 @@ func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model
 	}
 
 	value := account.After.Field(attrAllowPublic)
-	sources := []model.Provenance{provenanceOf(account.Address, attrAllowPublic, value)}
+	sources := []model.Provenance{declared.Source(model.CloudAzure, account.Address, attrAllowPublic, value)}
 	switch {
 	case value.Kind() == terraformplan.KindBool:
 		if value.Bool() {
@@ -186,7 +206,7 @@ func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model
 // container additionally exposes the listing.
 func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance) {
 	value := container.After.Field(attrAccessType)
-	sources := []model.Provenance{provenanceOf(container.Address, attrAccessType, value)}
+	sources := []model.Provenance{declared.Source(model.CloudAzure, container.Address, attrAccessType, value)}
 
 	switch {
 	case value.Kind() == terraformplan.KindString:
@@ -228,30 +248,6 @@ func findType(changes []terraformplan.ResourceChange, resourceType string) (*ter
 		found = &changes[i]
 	}
 	return found, false
-}
-
-// provenance locates a value this mapper read, and records whether it could be
-// read at all. The bundle reports that per reference, so it has to be true of
-// the reference rather than of the fact it ends up in.
-func provenance(address, attribute string) model.Provenance {
-	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAzure}
-}
-
-// withheldProvenance locates a value the plan did not let this mapper read.
-func withheldProvenance(address, attribute string) model.Provenance {
-	source := provenance(address, attribute)
-	source.Withheld = true
-	return source
-}
-
-// provenanceOf picks between them by asking the value.
-func provenanceOf(address, attribute string, value terraformplan.Value) model.Provenance {
-	switch value.State() {
-	case terraformplan.StateRedacted, terraformplan.StateUnknown:
-		return withheldProvenance(address, attribute)
-	default:
-		return provenance(address, attribute)
-	}
 }
 
 // Bindings declares that a container is placed in an account, and how.

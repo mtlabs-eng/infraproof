@@ -49,6 +49,23 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
+// roleIAMGrant is the one question a resource other than the bucket answers
+// here. Prevention is read from the bucket itself, so nothing else can answer
+// it.
+const roleIAMGrant = "iam_grant"
+
+// RoleOf names the question a resource would answer about a bucket.
+func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
+	if subject.Type != typeBucket {
+		return ""
+	}
+	switch candidate.Type {
+	case typeIAMMember, typeIAMBinding, typeIAMPolicy:
+		return roleIAMGrant
+	}
+	return ""
+}
+
 // attrLabels is where GCP carries user-supplied labels; the other two clouds
 // call the same thing tags.
 const attrLabels = "labels"
@@ -122,7 +139,7 @@ func publicAccess(prevention answer, preventionSources []model.Provenance,
 // preventionState reads public_access_prevention. Only "enforced" proves
 // anything: "inherited" defers to an organization policy this plan cannot see.
 func preventionState(bucket terraformplan.ResourceChange) (answer, []model.Provenance) {
-	sources := []model.Provenance{provenanceOf(bucket.Address, attrPrevention, bucket.After.Field(attrPrevention))}
+	sources := []model.Provenance{declared.Source(model.CloudGCP, bucket.Address, attrPrevention, bucket.After.Field(attrPrevention))}
 
 	value := bucket.After.Field(attrPrevention)
 	switch value.State() {
@@ -153,13 +170,13 @@ func publicBinding(related []terraformplan.ResourceChange) (answer, []model.Prov
 	for _, change := range related {
 		switch change.Type {
 		case typeIAMMember:
-			sources = append(sources, provenanceOf(change.Address, "member", change.After.Field("member")))
+			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "member", change.After.Field("member")))
 			escalate(memberIsEveryone(change.After.Field("member")))
 		case typeIAMBinding:
-			sources = append(sources, provenanceOf(change.Address, "members", change.After.Field("members")))
+			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "members", change.After.Field("members")))
 			escalate(membersIncludeEveryone(change.After.Field("members")))
 		case typeIAMPolicy:
-			sources = append(sources, provenanceOf(change.Address, "policy_data", change.After.Field("policy_data")))
+			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "policy_data", change.After.Field("policy_data")))
 			escalate(policyDataGrantsPublic(change.After.Field("policy_data")))
 		}
 	}
@@ -233,30 +250,6 @@ func unreadable(value terraformplan.Value) answer {
 		return answerRedacted
 	}
 	return answerUnknown
-}
-
-// provenance locates a value this mapper read, and records whether it could be
-// read at all. The bundle reports that per reference, so it has to be true of
-// the reference rather than of the fact it ends up in.
-func provenance(address, attribute string) model.Provenance {
-	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudGCP}
-}
-
-// withheldProvenance locates a value the plan did not let this mapper read.
-func withheldProvenance(address, attribute string) model.Provenance {
-	source := provenance(address, attribute)
-	source.Withheld = true
-	return source
-}
-
-// provenanceOf picks between them by asking the value.
-func provenanceOf(address, attribute string, value terraformplan.Value) model.Provenance {
-	switch value.State() {
-	case terraformplan.StateRedacted, terraformplan.StateUnknown:
-		return withheldProvenance(address, attribute)
-	default:
-		return provenance(address, attribute)
-	}
 }
 
 // Bindings declares which IAM resources grant on which buckets, and through

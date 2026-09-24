@@ -470,9 +470,12 @@ type wireResource struct {
 	Purpose  string  `json:"purpose"`
 }
 
+// Pointers, like every other optional field in the wire contract: a field the
+// document omitted and a field it set to empty are different statements, and
+// only a pointer keeps them apart.
 type wireConstraints struct {
-	AllowedRegions []string          `json:"allowed_regions"`
-	RequiredTags   map[string]string `json:"required_tags"`
+	AllowedRegions *[]string          `json:"allowed_regions"`
+	RequiredTags   *map[string]string `json:"required_tags"`
 }
 
 func (w wireContract) contract() Contract {

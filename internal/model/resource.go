@@ -115,7 +115,17 @@ type MissingControl struct {
 	// CheckID is a stable identifier, suitable for an Evidence Bundle unknown.
 	CheckID string
 	// Reason explains the gap in one safe line, carrying no plan value.
+	//
+	// No plan value means no resource address either. An address holds a
+	// for_each key, an author writes that key, and a free-text field is
+	// rendered as prose — which turned a key into a live image reference in a
+	// report this build exists to keep offline. What a reader needs is the
+	// location, and Sources is the field that carries one.
 	Reason string
+	// Sources locates the resources this control concerns, when there are any
+	// to point at. A gap that is an absence has none: nothing is there to
+	// locate.
+	Sources []Provenance
 	// Cloud is the cloud whose control is missing.
 	Cloud Cloud
 }

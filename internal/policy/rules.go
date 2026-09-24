@@ -246,8 +246,13 @@ func EnvironmentMatch(contract intent.Contract, graph model.Graph) Result {
 			Claim:       "The resource declares an environment the intent contract was not written for.",
 			Resource:    resourceRef(resource),
 			Expected: &evidence.ExpectedFact{
-				Path:  "resource.environment",
-				Value: evidence.String(contract.Environment),
+				Path: "resource.environment",
+				// Inlined like the observed side two lines down. A contract is a
+				// file a person writes, an environment holding a line break is
+				// loadable, and a bundle that fails its own single-line rule
+				// replaces a verdict this build could give with an internal
+				// error.
+				Value: evidence.String(inline(contract.Environment)),
 			},
 			Observed: evidence.KnownFact("resource.environment", evidence.String(inline(declared.Get()))),
 			Evidence: environmentEvidence(declared),
@@ -295,7 +300,10 @@ func environmentEvidence(fact model.Fact[string]) []evidence.EvidenceRef {
 			Source:          "terraform_plan",
 			ResourceAddress: inline(source.ResourceAddress),
 			Path:            inline(source.AttributePath),
-			Redacted:        fact.State == model.FactRedacted,
+			// Per source, like every other reference. A fact is redacted if
+			// any one of its sources was, so asking the fact marks values the
+			// mapper plainly read.
+			Redacted: source.Withheld,
 		})
 	}
 	return refs

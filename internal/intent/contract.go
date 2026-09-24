@@ -111,11 +111,18 @@ const FamilyObjectStorage = "object_storage"
 // malformed constraint is still rejected, and reported through Unevaluated so
 // that a reader is never left believing a restriction was checked when it was
 // not.
+// Both fields are pointers, like every optional field in the document they are
+// loaded from. Presence is not length: an empty allow-list is the most
+// restrictive thing the field can say — no region is permitted — and reading
+// presence off the length reported a stated restriction as absent, which is the
+// one case this type exists to prevent. Carrying the distinction in the type
+// rather than beside it is what keeps a contract from stating a constraint that
+// Unevaluated does not report.
 type Constraints struct {
 	// AllowedRegions restricts the regions the change may affect.
-	AllowedRegions []string
+	AllowedRegions *[]string
 	// RequiredTags are tags every affected resource must carry.
-	RequiredTags map[string]string
+	RequiredTags *map[string]string
 }
 
 // Unevaluated names the contract fields this build loaded but did not evaluate,
@@ -131,10 +138,10 @@ func (c Contract) Unevaluated() []string {
 	}
 
 	var out []string
-	if len(c.Constraints.AllowedRegions) > 0 {
+	if c.Constraints.AllowedRegions != nil {
 		out = append(out, "constraints.allowed_regions")
 	}
-	if len(c.Constraints.RequiredTags) > 0 {
+	if c.Constraints.RequiredTags != nil {
 		out = append(out, "constraints.required_tags")
 	}
 	return out
@@ -159,4 +166,20 @@ func (c Contract) AllowsCloud(cloud string) bool {
 		}
 	}
 	return false
+}
+
+// derefSlice and derefMap read an optional collection. A nil pointer is a field
+// the document omitted; an empty collection is one it stated as empty.
+func derefSlice(values *[]string) []string {
+	if values == nil {
+		return nil
+	}
+	return *values
+}
+
+func derefMap(values *map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	return *values
 }

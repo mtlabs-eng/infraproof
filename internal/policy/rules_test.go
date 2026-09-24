@@ -929,3 +929,38 @@ func TestAnUndeterminedExposureStaysBoundedByTheContract(t *testing.T) {
 		}
 	}
 }
+
+// TestAContractValueCannotBreakTheBundleItIsCompared with keeps the inlining
+// rule on both sides of a comparison.
+//
+// Every plan-derived string passes through inline, including the observed side
+// of this very finding. The expected side is contract-derived and did not, and
+// the intent contract is a file a person writes: an environment holding a
+// newline is loadable, and the bundle it produced failed its own single-line
+// rule. A loadable contract and a loadable plan must not produce an internal
+// error instead of a verdict.
+func TestAContractValueCannotBreakTheBundleItIsComparedWith(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Provider: "p", Cloud: model.CloudAWS,
+			Family:      model.FamilyObjectStorage,
+			Interpreted: true, Environment: model.Known("production",
+				model.Provenance{ResourceAddress: "aws_s3_bucket.b", AttributePath: "tags.environment"})},
+	}}
+
+	hostile := contract(func(c *intent.Contract) {
+		c.Environment = "staging\n## Forged heading"
+		c.Source = "/tmp/a\nb.json"
+	})
+
+	if len(policy.EnvironmentMatch(hostile, graph).Findings) != 1 {
+		t.Fatal("the mismatch was not reported, so nothing here is being tested")
+	}
+
+	bundle := policy.Evaluate(hostile, graph, policy.Subject{
+		PlanFormatVersion: "1.2",
+		PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	if err := bundle.Validate(); err != nil {
+		t.Errorf("a loadable contract produced a bundle the renderer refuses: %v", err)
+	}
+}

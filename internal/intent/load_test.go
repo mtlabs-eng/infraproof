@@ -557,7 +557,7 @@ func TestTagsDifferingOnlyInCaseAreTwoTags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("two tags differing in case were rejected: %v", err)
 	}
-	if len(contract.Constraints.RequiredTags) != 2 {
+	if contract.Constraints.RequiredTags == nil || len(*contract.Constraints.RequiredTags) != 2 {
 		t.Fatalf("required tags = %v, want both", contract.Constraints.RequiredTags)
 	}
 }
@@ -843,6 +843,55 @@ func TestAnInternalTypeNameNeverReachesTheUser(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "wireContract") {
 				t.Errorf("an internal type name reached the user: %v", err)
+			}
+		})
+	}
+}
+
+// TestAnEmptyConstraintIsStillAConstraint holds the sentence in
+// docs/INTENT-CONTRACT.md: a restriction the contract states and nothing
+// enforces cannot sit silently beside a PASS.
+//
+// An empty allow-list is the most restrictive thing the field can say — no
+// region is permitted — and reading presence off the length reported it as
+// absent. Every other field in the contract distinguishes omitted from empty
+// through a pointer; these two lost the distinction exactly where the document
+// depends on it.
+func TestAnEmptyConstraintIsStillAConstraint(t *testing.T) {
+	cases := map[string]struct {
+		document string
+		want     string
+	}{
+		"an empty allow-list":  {`{"allowed_regions": []}`, "constraints.allowed_regions"},
+		"an empty tag map":     {`{"required_tags": {}}`, "constraints.required_tags"},
+		"a stated allow-list":  {`{"allowed_regions": ["eu-west-1"]}`, "constraints.allowed_regions"},
+		"a stated tag map":     {`{"required_tags": {"owner": "checkout"}}`, "constraints.required_tags"},
+		"no constraints block": {``, ""},
+		"an empty block":       {`{}`, ""},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := `{"schema_version": "1.0", "change_id": "c", "environment": "staging",
+			          "allowed_clouds": ["aws"], "destructive_changes": "forbidden",
+			          "resources": [{"family": "object_storage", "exposure": "private"}]`
+			if tc.document != "" {
+				body += `, "constraints": ` + tc.document
+			}
+			body += "}"
+
+			contract, err := intent.Parse([]byte(body), "c.json")
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+
+			stated := contract.Unevaluated()
+			switch {
+			case tc.want == "" && len(stated) != 0:
+				t.Fatalf("unevaluated = %v; the contract stated no constraint", stated)
+			case tc.want == "":
+			case len(stated) != 1 || stated[0] != tc.want:
+				t.Fatalf("unevaluated = %v, want [%s]", stated, tc.want)
 			}
 		})
 	}

@@ -193,7 +193,7 @@ func unresolvedUnknowns(resource model.NormalizedResource, capabilities model.Ob
 			// could give with an internal error.
 			Reason:          inline(control.Reason),
 			ResourceAddress: &address,
-			Evidence:        []evidence.EvidenceRef{},
+			Evidence:        locate(control.Sources),
 		})
 	}
 	return out
@@ -213,6 +213,22 @@ func bundleCloud(cloud model.Cloud) evidence.Cloud {
 		return evidence.CloudUnknown
 	}
 	return converted
+}
+
+// locate turns a control's sources into evidence references. A control that is
+// an absence has none, and the bundle contract requires the list rather than a
+// null.
+func locate(sources []model.Provenance) []evidence.EvidenceRef {
+	refs := make([]evidence.EvidenceRef, 0, len(sources))
+	for _, source := range sources {
+		refs = append(refs, evidence.EvidenceRef{
+			Source:          "terraform_plan",
+			ResourceAddress: inline(source.ResourceAddress),
+			Path:            inline(source.AttributePath),
+			Redacted:        source.Withheld,
+		})
+	}
+	return refs
 }
 
 // referencesOf turns a fact's provenance into evidence. A reference locates the

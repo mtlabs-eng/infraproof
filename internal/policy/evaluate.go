@@ -50,7 +50,9 @@ func Evaluate(contract intent.Contract, graph model.Graph, subject Subject) evid
 		Decision:      decision,
 		Summary:       summarize(decision, result),
 		Subject: evidence.Subject{
-			IntentSource:      contract.Source,
+			// The path is supplied by whoever ran this build, and a file name
+			// may hold a line break on every platform this runs on.
+			IntentSource:      inline(contract.Source),
 			PlanFormatVersion: subject.PlanFormatVersion,
 			PlanDigest:        subject.PlanDigest,
 		},

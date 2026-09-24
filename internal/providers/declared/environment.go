@@ -34,24 +34,27 @@ const environmentKey = "environment"
 // An unstated environment agrees with nothing, least of all with whatever the
 // contract happens to say, so the caller can never mistake silence for assent.
 func Environment(change terraformplan.ResourceChange, attribute string, cloud model.Cloud) model.Fact[string] {
-	source := model.Provenance{
-		ResourceAddress: change.Address,
-		AttributePath:   attribute + "." + environmentKey,
-		Cloud:           cloud,
-	}
+	path := attribute + "." + environmentKey
 
 	// The object the attribute is read out of, before the attribute itself.
 	// Field on a non-object receiver returns the zero value, so a whole "after"
 	// this run could not see collapsed to "the attribute is absent" one level
 	// down — and absent is the answer that passes.
 	if state := unreadable(change.After); state != "" {
-		return unreadableFact(state, source)
+		return unreadableFact(state, Source(cloud, change.Address, path, change.After))
 	}
 
 	labels := change.After.Field(attribute)
 	if state := unreadable(labels); state != "" {
-		return unreadableFact(state, source)
+		return unreadableFact(state, Source(cloud, change.Address, path, labels))
 	}
+
+	// The reference locates the declaration, not the block holding it. Asking
+	// the whole block would mark this reference for a secret in some unrelated
+	// tag, which is the error of reporting a value the mapper read as one it
+	// was not permitted to.
+	source := Source(cloud, change.Address, path, declaredEnvironment(labels))
+
 	if labels.Kind() != terraformplan.KindObject {
 		// Absent, or present as something that is not a map of labels. Either
 		// way the resource did not declare an environment here.
@@ -105,6 +108,20 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 	}
 
 	return model.Absent[string](source)
+}
+
+// declaredEnvironment returns the value of the key that could be the
+// declaration, matched the way the scan below matches it. Absent when the
+// resource names no such key, which is not a secret.
+func declaredEnvironment(labels terraformplan.Value) terraformplan.Value {
+	for _, key := range labels.Keys() {
+		if strings.EqualFold(key, environmentKey) {
+			if value := labels.Field(key); value.HoldsSensitive() {
+				return value
+			}
+		}
+	}
+	return terraformplan.Value{}
 }
 
 // unreadable reports the fact state for a value the plan withheld, and the

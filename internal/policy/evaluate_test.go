@@ -160,8 +160,8 @@ func TestTheSubjectIdentifiesBothInputs(t *testing.T) {
 func TestUnevaluatedConstraintsAreReported(t *testing.T) {
 	withConstraints := contract(func(c *intent.Contract) {
 		c.Constraints = &intent.Constraints{
-			AllowedRegions: []string{"eu-west-1"},
-			RequiredTags:   map[string]string{"owner": "checkout"},
+			AllowedRegions: &[]string{"eu-west-1"},
+			RequiredTags:   &map[string]string{"owner": "checkout"},
 		}
 	})
 

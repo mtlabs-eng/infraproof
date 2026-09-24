@@ -180,6 +180,30 @@ func (v Value) withheld() *Value {
 	}
 }
 
+// HoldsSensitive reports whether this value or anything inside it was marked
+// sensitive.
+//
+// State answers for the node alone, which is the right answer for reading a
+// value and the wrong one for locating it. A list whose elements are marked
+// individually is itself readable, so a reference to the list reported that
+// nothing was withheld while one of the things at that location was a secret.
+func (v Value) HoldsSensitive() bool {
+	if v.sensitive {
+		return true
+	}
+	for _, element := range v.array {
+		if element.HoldsSensitive() {
+			return true
+		}
+	}
+	for _, field := range v.object {
+		if field.HoldsSensitive() {
+			return true
+		}
+	}
+	return false
+}
+
 // Keys returns the field names of a readable object in sorted order, so that
 // iteration is deterministic, and nil for anything else.
 func (v Value) Keys() []string {

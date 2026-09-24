@@ -44,6 +44,43 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
+// The questions this mapper answers about a bucket. Two resource types answer
+// the ACL question, because ownership controls decide whether an ACL applies at
+// all, and two answer the block question, because an account-wide block shuts
+// the same routes a bucket-level one does.
+const (
+	roleACLRoute    = "acl"
+	rolePolicyRoute = "policy"
+	roleBlock       = "public_access_block"
+)
+
+// RoleOf names the question a resource would answer about a bucket.
+//
+// The account-wide block is the case the resource type cannot express: it
+// governs the buckets in its own account and says nothing whatever about any
+// other, which is the filter publicAccess already applies before letting one
+// decide anything. Stating it here is what keeps a block read in one account
+// from unsettling a verdict about a bucket in another.
+func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
+	if subject.Type != typeBucket {
+		return ""
+	}
+	switch candidate.Type {
+	case typeBucketACL, typeOwnershipControls:
+		return roleACLRoute
+	case typeBucketPolicy:
+		return rolePolicyRoute
+	case typePublicAccessBlock:
+		return roleBlock
+	case typeAccountBlock:
+		if !sameProviderInstance(subject, candidate) {
+			return ""
+		}
+		return roleBlock
+	}
+	return ""
+}
+
 // attrTags is where AWS carries user-supplied labels. It is the only part of
 // reading a declared environment that differs between clouds.
 const attrTags = "tags"
@@ -107,7 +144,7 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	}
 
 	sources := append(acl.sources, policy.sources...)
-	sources = append(sources, provenanceOf(subject.Address, "bucket", subject.After.Field("bucket")))
+	sources = append(sources, declared.Source(model.CloudAWS, subject.Address, "bucket", subject.After.Field("bucket")))
 
 	// A grant nothing blocks settles it.
 	for _, c := range []channel{acl, policy} {
@@ -169,7 +206,7 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 		return c
 	}
 	value := acl.After.Field("acl")
-	c.sources = append(c.sources, provenanceOf(acl.Address, "acl", value))
+	c.sources = append(c.sources, declared.Source(model.CloudAWS, acl.Address, "acl", value))
 
 	switch value.State() {
 	case terraformplan.StateKnown:
@@ -200,7 +237,7 @@ func policyChannel(related []terraformplan.ResourceChange, block, account *terra
 		return c
 	}
 	document := policy.After.Field("policy")
-	c.sources = append(c.sources, provenanceOf(policy.Address, "policy", document))
+	c.sources = append(c.sources, declared.Source(model.CloudAWS, policy.Address, "policy", document))
 
 	switch document.State() {
 	case terraformplan.StateKnown:
@@ -358,8 +395,13 @@ func unresolvedControls(subject terraformplan.ResourceChange, scope []terraformp
 	}
 	return []model.MissingControl{{
 		CheckID: "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK",
-		Reason:  "The account-level S3 public access block is not part of this plan and overrides bucket-level settings.",
-		Cloud:   model.CloudAWS,
+		// Not "is not part of this plan": a mapper sees the admissible changes,
+		// so a block present only as a read is invisible to it and the sentence
+		// would tell a reader to add what they have already added. What is true
+		// either way is that this change does not set it.
+		Reason: "This change does not set the account-level S3 public access block, " +
+			"which overrides bucket-level settings.",
+		Cloud: model.CloudAWS,
 	}}
 }
 
@@ -397,7 +439,7 @@ func blockProvenance(block *terraformplan.ResourceChange) []model.Provenance {
 	}
 	out := make([]model.Provenance, 0, 4)
 	for _, flag := range []string{"block_public_acls", "block_public_policy", "ignore_public_acls", "restrict_public_buckets"} {
-		out = append(out, provenanceOf(block.Address, flag, block.After.Field(flag)))
+		out = append(out, declared.Source(model.CloudAWS, block.Address, flag, block.After.Field(flag)))
 	}
 	return out
 }
@@ -426,30 +468,6 @@ func sameProviderInstance(subject, control terraformplan.ResourceChange) bool {
 // reporting. A replacement is not a removal: the object is there afterwards.
 func beingRemoved(change terraformplan.ResourceChange) bool {
 	return change.IsDestructive() && !change.IsReplace()
-}
-
-// provenance locates a value this mapper read, and records whether it could be
-// read at all. The bundle reports that per reference, so it has to be true of
-// the reference rather than of the fact it ends up in.
-func provenance(address, attribute string) model.Provenance {
-	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAWS}
-}
-
-// withheldProvenance locates a value the plan did not let this mapper read.
-func withheldProvenance(address, attribute string) model.Provenance {
-	source := provenance(address, attribute)
-	source.Withheld = true
-	return source
-}
-
-// provenanceOf picks between them by asking the value.
-func provenanceOf(address, attribute string, value terraformplan.Value) model.Provenance {
-	switch value.State() {
-	case terraformplan.StateRedacted, terraformplan.StateUnknown:
-		return withheldProvenance(address, attribute)
-	default:
-		return provenance(address, attribute)
-	}
 }
 
 // policyGrantsPublic reports whether a bucket policy grants access to everyone,

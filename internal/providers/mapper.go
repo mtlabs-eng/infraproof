@@ -49,6 +49,30 @@ type Governor interface {
 	Governs(resource terraformplan.ResourceChange, scope []terraformplan.ResourceChange) []string
 }
 
+// Roles is implemented by a mapper that reaches an answer by choosing between
+// candidates.
+//
+// Whether a resource this build may not use was a candidate for the same
+// question as one it did use is the whole of admissibility, and only the mapper
+// knows. Everything else is a proxy. The resource type is the proxy this took
+// four attempts to stop using, and it fails in both directions: two types can
+// answer one question -- ownership controls decide whether an ACL applies at
+// all -- and one type answers for one subject and not another, because an
+// account-wide block governs the buckets in its own account and no others.
+//
+// A mapper that does not implement this cannot have its choices checked, so
+// every source it may not use is treated as contesting. That is the safe
+// reading of silence, and the alternative is a verdict nothing can second-guess.
+type Roles interface {
+	// RoleOf names the question the candidate would answer for the subject, or
+	// the empty string if it would answer none.
+	//
+	// The name is the mapper's own. It is compared with other names from the
+	// same mapper, and it reaches a reader only as the path of an evidence
+	// reference, so it should read as the thing being asked about.
+	RoleOf(subject, candidate terraformplan.ResourceChange) string
+}
+
 // Normalize builds the graph. Every change in the plan appears in it: a subject
 // with its capabilities, a control resource marked as understood, and anything
 // no mapper claimed as an opaque entry.
@@ -84,13 +108,15 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 	// is a property of the plan, not of the resource being normalized, and
 	// scanning every change per change is the quadratic this fixed once
 	// already, one loop further in.
-	reads, scoped := interpretedReads(present, mappers)
-	typeOf := typesByAddress(present)
+	reads, scopedReads, scopedChanges := interpretedByScope(present, mappers)
 
 	graph := model.Graph{Resources: make([]model.NormalizedResource, 0, len(present))}
 	for _, change := range present {
 		resource := normalizeOne(change, visible, edges, admissible, mappers)
-		withhold(&resource, withheldCandidates(change, edges, reads, scoped), typeOf)
+		withhold(&resource, change,
+			withheldCandidates(change, edges, reads, scopedReads),
+			usedCandidates(change, visible, scopedChanges),
+			mapperFor(change, mappers))
 		if unresolved[change.Address] && resource.ObjectStorage != nil {
 			// Saying only "undetermined" would leave a reader with nowhere to
 			// go. Naming the reason lets them fix it: an argument that names
@@ -163,85 +189,142 @@ func governsOnlyReads(change terraformplan.ResourceChange,
 	return subjects > 0 && subjects == reads
 }
 
-// withhold reports the reads a verdict may have rested on, and refuses a
-// verdict that rested on choosing between one of them and something else.
+// withhold refuses a verdict that was reached by choosing between a source this
+// build may use and one it may not, and records every source it declined.
 //
-// Which reads those are is a question about how the verdict was reached, and it
-// has been answered three ways in three rounds. By type alone: wrong in both
-// directions, because it cannot tell a candidate for a role from a resource
-// that merely shares a cloud. By direction: wrong, because what matters is not
-// whether a withheld source could have loosened the answer but whether the
-// answer was reached by choosing. And by re-mapping the subject with each
-// candidate added back: right, and paid for with a cubic runtime, a test that
-// could not see it, and a classifier nobody could falsify.
+// Which reads bear on a verdict has been answered four ways in four rounds: by
+// type, by direction, by re-mapping the subject with each candidate restored,
+// and by the type of the resources the verdict cites. Every one of them was a
+// proxy for the same thing, and every one was wrong in at least one direction,
+// because the fact records where its value came from and not which question
+// that source answered.
 //
-// The answer was already in the fact. Provenance says which resources the
-// verdict cites; a read of the same type as one of them was a candidate for the
-// same role, and its removal is what let the cited one answer alone. A read of
-// some other type was never in that choice, whatever else it touches.
+// So the mapper is asked. A withheld source that answers a question some
+// admissible source also answers is one the verdict chose against: the
+// determination is withdrawn rather than reported, because an answer reached by
+// choosing is not reached. A withheld source answering a question nothing
+// admissible answered chose against nothing; it is recorded, because a reader
+// looking at an open question deserves to know the plan holds something bearing
+// on it.
 //
-// Nothing is simulated, so nothing a read says can reach a bundle by
-// construction rather than by care.
-func withhold(resource *model.NormalizedResource, related []terraformplan.ResourceChange,
-	typeOf map[string]string) {
+// Nothing a read says is consulted here, so no value of one can reach a bundle
+// by construction rather than by care.
+func withhold(resource *model.NormalizedResource, subject terraformplan.ResourceChange,
+	withheld, used []terraformplan.ResourceChange, mapper Mapper) {
 
-	if resource.ObjectStorage == nil || resource.ReadOnly {
+	if resource.ObjectStorage == nil || resource.ReadOnly || len(withheld) == 0 {
 		return
 	}
 
-	exposure := resource.ObjectStorage.PublicAccess
-	cited := map[string]bool{}
-	for _, source := range exposure.Canonical().Sources {
-		if kind, ok := typeOf[source.ResourceAddress]; ok {
-			cited[kind] = true
+	roles, declares := mapper.(Roles)
+
+	answered := map[string]bool{}
+	if declares {
+		for _, candidate := range used {
+			if candidate.Address == subject.Address {
+				continue
+			}
+			if role := roles.RoleOf(subject, candidate); role != "" {
+				answered[role] = true
+			}
 		}
 	}
 
-	var contested, alongside []string
-	for _, candidate := range related {
-		switch {
-		case cited[candidate.Type]:
-			// A candidate for a role this verdict rests on. Removing it is
-			// what let the resource that is cited answer alone.
-			contested = append(contested, candidate.Address)
-		case !exposure.IsKnown():
-			// Nothing was attributed, because nothing was settled. The read is
-			// still worth naming: a reader looking at an open answer deserves
-			// to know the plan holds something that bears on it.
-			alongside = append(alongside, candidate.Address)
+	var contested, alongside []model.Provenance
+	for _, candidate := range withheld {
+		role := roleUnstated
+		if declares {
+			role = roles.RoleOf(subject, candidate)
+			if role == "" {
+				// The mapper says this resource answers nothing for this
+				// subject. A block governing another account and a control
+				// belonging to another cloud both land here, and neither is a
+				// relation the configuration declares.
+				continue
+			}
+		}
+		// Withheld is not set: the bundle defines it as the located value being
+		// sensitive, and a source this build declined to consult is not a
+		// secret. What happened to it is what the record says.
+		source := model.Provenance{
+			ResourceAddress: candidate.Address,
+			AttributePath:   role,
+			Cloud:           resource.Cloud,
+		}
+		if answered[role] || !declares {
+			contested = append(contested, source)
+			continue
+		}
+		if !resource.ObjectStorage.PublicAccess.IsKnown() {
+			// Nothing admissible answered this question, so nothing was chosen
+			// against. The read is worth naming only while the answer is open:
+			// a verdict the read could not have touched -- prevention enforced
+			// on the bucket itself, which settles the question before a binding
+			// is consulted -- has no question for it to bear on.
+			alongside = append(alongside, source)
 		}
 	}
 
 	if len(contested) > 0 {
-		slices.Sort(contested)
+		exposure := resource.ObjectStorage.PublicAccess
 		if exposure.IsKnown() {
 			resource.ObjectStorage.PublicAccess = model.Unknown[bool](exposure.Canonical().Sources...)
 			resource.ObjectStorage.Withdrawn = true
 		}
 		resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved,
-			model.MissingControl{
-				CheckID: "SOURCE_WITHHELD",
-				Reason: fmt.Sprintf(
-					"This plan reads %s rather than changing it, and it is the same kind of resource "+
-						"as one this answer rests on, so which of them governs here is not settled.",
-					strings.Join(slices.Compact(contested), ", ")),
-				Cloud: resource.Cloud,
-			})
+			withheldControl(resource.Cloud, contested,
+				"A source this verdict may not rest on answers the same question as one it does rest on, "+
+					"so which of them governs here is not settled."))
 		return
 	}
 
 	if len(alongside) > 0 {
-		slices.Sort(alongside)
 		resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved,
-			model.MissingControl{
-				CheckID: "SOURCE_WITHHELD",
-				Reason: fmt.Sprintf(
-					"This plan reads %s rather than changing it, so what it says was not used as "+
-						"evidence, and it would have borne on a question this change leaves open.",
-					strings.Join(slices.Compact(alongside), ", ")),
-				Cloud: resource.Cloud,
-			})
+			withheldControl(resource.Cloud, alongside,
+				"A source this verdict may not rest on would have borne on a question this change "+
+					"leaves open, so what it says was not used as evidence."))
 	}
+}
+
+// roleUnstated is the question a mapper that declares no roles is treated as
+// having been asked. It is not a question: it records that nobody said.
+const roleUnstated = "unstated"
+
+// withheldSourceLimit bounds how many sources one record locates.
+//
+// A plan may hold a control per subject, and the record is per subject, so the
+// pairing is quadratic in the plan and so is the report. Truncating silently
+// would read as "these are the sources", so the count is stated instead.
+const withheldSourceLimit = 10
+
+// withheldControl builds the record, with the sources located rather than
+// narrated. A resource address carries a for_each key, an author writes that
+// key, and a free-text field is rendered as prose.
+func withheldControl(cloud model.Cloud, sources []model.Provenance, reason string) model.MissingControl {
+	slices.SortStableFunc(sources, compareSources)
+	sources = slices.CompactFunc(sources, func(a, b model.Provenance) bool {
+		return compareSources(a, b) == 0
+	})
+
+	if len(sources) > withheldSourceLimit {
+		reason += fmt.Sprintf(" %d sources were withheld and the first %d are located here.",
+			len(sources), withheldSourceLimit)
+		sources = sources[:withheldSourceLimit]
+	}
+
+	return model.MissingControl{
+		CheckID: "SOURCE_WITHHELD",
+		Reason:  reason,
+		Sources: sources,
+		Cloud:   cloud,
+	}
+}
+
+func compareSources(a, b model.Provenance) int {
+	if c := strings.Compare(a.ResourceAddress, b.ResourceAddress); c != 0 {
+		return c
+	}
+	return strings.Compare(a.AttributePath, b.AttributePath)
 }
 
 // withheldCandidates returns the reads a subject could have been judged with:
@@ -269,6 +352,36 @@ func withheldCandidates(change terraformplan.ResourceChange,
 	return append(candidates, scoped...)
 }
 
+// usedCandidates returns what a mapper could have reasoned from: the admissible
+// resources the configuration relates to the subject, and the admissible
+// controls that reach it through the scope.
+//
+// It is the other half of the comparison. Which questions were answered is not
+// read off the verdict's provenance, because a mapper may consult a resource
+// without citing it — ownership controls decide whether an ACL applies and
+// appear in no evidence reference — and a question that looks unanswered is one
+// no candidate can contest.
+func usedCandidates(change terraformplan.ResourceChange,
+	visible map[string][]terraformplan.ResourceChange,
+	scoped []terraformplan.ResourceChange) []terraformplan.ResourceChange {
+
+	related := visible[change.Address]
+	if len(scoped) == 0 {
+		return related
+	}
+	return append(slices.Clone(related), scoped...)
+}
+
+// mapperFor returns the mapper that claims a resource type, or nil.
+func mapperFor(change terraformplan.ResourceChange, mappers []Mapper) Mapper {
+	for _, mapper := range mappers {
+		if mapper.Interprets(change.Type) {
+			return mapper
+		}
+	}
+	return nil
+}
+
 // governsByScope reports a control that reaches its subjects through the scope
 // rather than through a reference — an account-wide block names no bucket at
 // all — and which is therefore invisible to the edge map.
@@ -289,22 +402,22 @@ func governsByScope(change terraformplan.ResourceChange, mappers []Mapper) bool 
 	return spoken && len(declared) == 0
 }
 
-// interpretedReads returns the reads some mapper understands, indexed by
-// address, and separately those that govern by scope rather than by reference.
+// interpretedByScope returns the reads some mapper understands, indexed by
+// address, and separately the scope-governed changes: those a mapper
+// understands that reach their subjects through the scope rather than through a
+// reference, split by whether a verdict may rest on them.
 //
-// The index is what keeps the walk above linear; the scope-governed list is
+// The index is what keeps the walk above linear; both scope-governed lists are
 // short by construction, because only a control that names no subject at all
-// belongs to it.
-func interpretedReads(changes []terraformplan.ResourceChange, mappers []Mapper) (
-	map[string]terraformplan.ResourceChange, []terraformplan.ResourceChange) {
+// belongs to them.
+func interpretedByScope(changes []terraformplan.ResourceChange, mappers []Mapper) (
+	map[string]terraformplan.ResourceChange, []terraformplan.ResourceChange,
+	[]terraformplan.ResourceChange) {
 
 	reads := map[string]terraformplan.ResourceChange{}
-	var scoped []terraformplan.ResourceChange
+	var scopedReads, scopedChanges []terraformplan.ResourceChange
 
 	for _, change := range changes {
-		if !change.IsRead() {
-			continue
-		}
 		var interpreted bool
 		for _, mapper := range mappers {
 			if mapper.Interprets(change.Type) {
@@ -315,21 +428,18 @@ func interpretedReads(changes []terraformplan.ResourceChange, mappers []Mapper) 
 		if !interpreted {
 			continue
 		}
+		if !change.IsRead() {
+			if governsByScope(change, mappers) {
+				scopedChanges = append(scopedChanges, change)
+			}
+			continue
+		}
 		reads[change.Address] = change
 		if governsByScope(change, mappers) {
-			scoped = append(scoped, change)
+			scopedReads = append(scopedReads, change)
 		}
 	}
-	return reads, scoped
-}
-
-// typesByAddress lets provenance be read back as a kind of resource.
-func typesByAddress(changes []terraformplan.ResourceChange) map[string]string {
-	types := make(map[string]string, len(changes))
-	for _, change := range changes {
-		types[change.Address] = change.Type
-	}
-	return types
+	return reads, scopedReads, scopedChanges
 }
 
 // normalizeOne builds one entry. edges is the admissible view a mapper may

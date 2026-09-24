@@ -200,15 +200,16 @@ func (c Contract) validateConstraints() []error {
 	}
 
 	var errs []error
-	for i, region := range c.Constraints.AllowedRegions {
+	for i, region := range derefSlice(c.Constraints.AllowedRegions) {
 		if strings.TrimSpace(region) == "" {
 			errs = append(errs, fmt.Errorf("constraints.allowed_regions[%d] must not be blank", i))
 		}
 	}
 	// Sorted, because Go iterates a map in a random order and a tool whose
 	// selling point is determinism must not report one contract two ways.
-	keys := make([]string, 0, len(c.Constraints.RequiredTags))
-	for key := range c.Constraints.RequiredTags {
+	tags := derefMap(c.Constraints.RequiredTags)
+	keys := make([]string, 0, len(tags))
+	for key := range tags {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
@@ -217,7 +218,7 @@ func (c Contract) validateConstraints() []error {
 		if strings.TrimSpace(key) == "" {
 			errs = append(errs, fmt.Errorf("constraints.required_tags has a blank key"))
 		}
-		if strings.TrimSpace(c.Constraints.RequiredTags[key]) == "" {
+		if strings.TrimSpace(tags[key]) == "" {
 			errs = append(errs, fmt.Errorf("constraints.required_tags[%q] must not be blank", key))
 		}
 	}

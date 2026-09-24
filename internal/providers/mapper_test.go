@@ -1827,3 +1827,58 @@ type muteMapper struct{ openMapper }
 func (muteMapper) Bindings() []declared.Binding {
 	return []declared.Binding{{From: "stub_thing", Attribute: "x", To: "stub_thing"}}
 }
+
+// silentMapper reaches a verdict and says nothing about how. It declares a
+// relation for its subject type only, so a control of another type reaches a
+// subject through the scope, the way an account-wide block does.
+type silentMapper struct{ muteMapper }
+
+func (silentMapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
+	return model.NormalizedResource{Address: subject.Address, Cloud: model.Cloud("stub"),
+		Family: model.FamilyObjectStorage, ObjectStorage: &model.ObjectStorageCapabilities{
+			PublicAccess: model.Known(false, model.Provenance{
+				ResourceAddress: subject.Address, AttributePath: "x"})}}
+}
+
+// TestAMapperThatWillNotSayCannotBeTakenAtItsWord covers the default for a
+// mapper that declares no roles.
+//
+// Whether a source this build may not use was a candidate for the same question
+// as one it did use is a question only the mapper can answer. A mapper that
+// does not answer it has a verdict nothing can second-guess, and reading that
+// silence as "nothing contested" would make declining to implement the
+// interface the permissive choice. It is read as "nobody said" instead.
+func TestAMapperThatWillNotSayCannotBeTakenAtItsWord(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "stub_thing.a", "mode": "managed", "type": "stub_thing", "name": "a",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"name": "a"}}},
+	    {"address": "data.stub_control.c", "mode": "data", "type": "stub_control", "name": "c",
+	     "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null, "after": {"name": "c"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "stub_thing.a", "mode": "managed", "type": "stub_thing", "name": "a",
+	     "expressions": {}},
+	    {"address": "data.stub_control.c", "mode": "data", "type": "stub_control", "name": "c",
+	     "expressions": {}}
+	  ]}}
+	}`)
+
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	subject, ok := providers.Normalize(plan, []providers.Mapper{silentMapper{}}).At("stub_thing.a")
+	if !ok {
+		t.Fatal("no normalized subject")
+	}
+	if subject.ObjectStorage.PublicAccess.IsKnown() {
+		t.Error("a verdict nothing can check was reported as settled")
+	}
+	if !subject.ObjectStorage.Withdrawn {
+		t.Error("the determination was unset and nothing records that it existed")
+	}
+}
