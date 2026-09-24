@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -111,11 +112,55 @@ func (b Bundle) validateEnvelope() []error {
 	if err := validateDigest("subject.plan_digest", b.Subject.PlanDigest); err != nil {
 		errs = append(errs, err)
 	}
-	if err := validateDigest("subject.intent_digest", b.Subject.IntentDigest); err != nil {
-		errs = append(errs, err)
+	// Required of the versions that have the field, and well-formed whenever it
+	// is present at all: a bundle predating it is still readable, and one
+	// carrying a malformed digest is refused whatever version it claims.
+	if b.Subject.IntentDigest != "" || carriesIntentDigest(b.SchemaVersion) {
+		if err := validateDigest("subject.intent_digest", b.Subject.IntentDigest); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	return errs
+}
+
+// carriesIntentDigest reports whether a declared version is one that has
+// subject.intent_digest. An unreadable version is not treated as an old one:
+// validateSchemaVersion refuses it separately, and reading it as "before the
+// field existed" would let anything skip the check by mangling one string.
+func carriesIntentDigest(version string) bool {
+	_, minor, found := strings.Cut(version, ".")
+	if !found || !isPlainNumber(minor) {
+		return true
+	}
+	value, err := strconv.Atoi(minor)
+	return err != nil || value >= intentDigestMinor
+}
+
+// Inline makes a value usable in a field this contract requires to be a single
+// line, by replacing every control character with a space.
+//
+// A line break ends a paragraph and lets a value forge a heading. The rest of
+// the C0 range does the same job in a different reader: a report is read in a
+// terminal as often as in a browser, and an escape sequence there moves the
+// cursor, clears the line or colours what follows, so a value carrying one can
+// hide the record under it.
+//
+// It lives here because this package defines what those fields may hold, and
+// because a producer and a renderer each keeping their own version of the rule
+// is how two answers to one question come about.
+func Inline(value string) string {
+	return strings.Map(func(char rune) rune {
+		if isControlChar(char) {
+			return ' '
+		}
+		return char
+	}, value)
+}
+
+// isControlChar reports the characters no single-line field may carry.
+func isControlChar(char rune) bool {
+	return char < 0x20 || char == 0x7f || (char >= 0x80 && char <= 0x9f)
 }
 
 // validateDigest holds a digest field to what the contract says it is: sha256

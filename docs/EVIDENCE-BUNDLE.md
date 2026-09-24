@@ -8,7 +8,7 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "decision": "BLOCK",
   "summary": "The requested private storage change enables public access.",
   "subject": {
@@ -152,7 +152,7 @@ Exact codes are part of the public interface and require tests before release.
 
 ## Compatibility
 
-- Minor `1.x` additions must be backward-compatible.
+- Minor `1.x` additions must be backward-compatible. `intent_digest` arrived in `1.1`: a bundle declaring an earlier minor version predates the field and is valid without it, and one carrying the field must carry a well-formed one whatever version it declares.
 - Consumers must ignore unknown fields within the same major version.
 - Breaking field or semantic changes require a new major version.
 

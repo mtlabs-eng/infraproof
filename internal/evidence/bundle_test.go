@@ -578,3 +578,49 @@ func TestAnErrorNamesThePositionAReaderWillSee(t *testing.T) {
 		t.Errorf("the error names a position the reader never sees: %v", err)
 	}
 }
+
+// TestABundleFromAnEarlierMinorVersionStillValidates holds the compatibility
+// rule this package states about itself.
+//
+// intent_digest arrived after 1.0. Requiring it of every bundle made this build
+// refuse output it produced last week, under a version string that had not
+// changed — which is a breaking change inside a minor version, and the document
+// says those need a new major version. The field is required of the versions
+// that have it, and a malformed one is refused whatever the version says.
+func TestABundleFromAnEarlierMinorVersionStillValidates(t *testing.T) {
+	const wellFormed = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+	t.Run("an earlier minor version without the field", func(t *testing.T) {
+		b := blockBundle()
+		b.SchemaVersion = "1.0"
+		b.Subject.IntentDigest = ""
+		if err := b.Validate(); err != nil {
+			t.Errorf("a bundle predating the field was refused: %v", err)
+		}
+	})
+
+	t.Run("an earlier minor version with a malformed field", func(t *testing.T) {
+		b := blockBundle()
+		b.SchemaVersion = "1.0"
+		b.Subject.IntentDigest = "sha256:the same contract as yesterday"
+		if err := b.Validate(); err == nil {
+			t.Error("a malformed digest was accepted because the version was old")
+		}
+	})
+
+	t.Run("this version without the field", func(t *testing.T) {
+		b := blockBundle()
+		b.Subject.IntentDigest = ""
+		if err := b.Validate(); err == nil {
+			t.Error("a bundle of the current version omitted the field and was accepted")
+		}
+	})
+
+	t.Run("this version with the field", func(t *testing.T) {
+		b := blockBundle()
+		b.Subject.IntentDigest = wellFormed
+		if err := b.Validate(); err != nil {
+			t.Errorf("a well-formed bundle was refused: %v", err)
+		}
+	})
+}

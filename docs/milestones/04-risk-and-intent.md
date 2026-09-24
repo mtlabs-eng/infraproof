@@ -42,15 +42,27 @@ plans that provably set `acl = "public-read"`, which is absence read as
 permission at the level of a decision. That is the cost this scope buys out,
 and it is why the rule stays in this milestone rather than waiting for its own.
 
-How it is decided went through five mechanisms in five review rounds, four of
-which inferred the role a source plays from its resource type. Type is a proxy
-and it fails in both directions: two types can answer one question — ownership
-controls decide whether an ACL applies at all — and one type answers for one
-subject and not another, because an account-wide block governs the buckets in
-its own account and no others. Both failures were demonstrated on constructed
-plans before the mechanism was replaced. The mapper is now asked directly,
-through an optional `Roles` interface, and a mapper that declines to answer has
-every source it may not use treated as contesting.
+How it is decided went through six mechanisms in six review rounds. Four of
+them inferred the role a source plays from its resource type, which fails in
+both directions: two types can answer one question — ownership controls decide
+whether an ACL applies at all — and one type answers for one subject and not
+another, because an account-wide block governs the buckets in its own account
+and no others. The mapper is now asked directly, through an optional `Roles`
+interface, and a mapper that declines to answer has every source it may not use
+treated as contesting.
+
+The fifth mechanism compared a withheld source against the questions some
+admissible resource *could* have answered. That is what was available to the
+mapper rather than what the answer rested on, and it refused plans it had
+settled: a bucket blocking every route is proved private by its own control,
+and a read of the account baseline beside it answers a question the proof never
+consulted. The comparison is against what the verdict **cited**.
+
+A withheld source answering a question nothing cited is still named, unless the
+verdict proved prevention. A proof from a control the change itself sets is not
+weakened by what exists alongside it, so there is no open question left for the
+read to bear on; a grant is another matter, because what else is in force is
+exactly what a reader will ask about.
 
 Carried forward rather than solved here:
 
@@ -60,10 +72,14 @@ Carried forward rather than solved here:
   same treatment written again.
 - Normalization is quadratic in subjects times scope-governed changes, because
   the mapper is handed the scope and scans it per subject. Measured at two
-  thousand of each it is 0.8 seconds, against 307 seconds before this
-  milestone's last three commits, and the report is bounded by a stated source
-  limit — but the growth is unchanged, and the test bounds a size rather than a
-  rate.
+  thousand of each it is 0.86 seconds, against 307 seconds before this
+  milestone's last commits, and the report is bounded by a stated source limit
+  — but the growth is unchanged, and the test bounds a size rather than a rate.
+- Which name a mapper gives a question is unobservable wherever a subject's
+  candidates are homogeneous, which is every Azure subject: a container's
+  candidates are accounts and an account's are containers. Renaming both
+  consistently changes nothing, so the tests pin that distinct questions carry
+  distinct names and not which names they are.
 - A report escapes what would open Markdown structure and what a terminal acts
   on. It does not strip bidirectional or zero-width characters, which change
   what a reader sees without changing what the bytes say. Stripping them is a

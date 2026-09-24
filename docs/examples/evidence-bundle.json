@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "decision": "BLOCK",
   "summary": "The requested private storage change enables public access.",
   "subject": {

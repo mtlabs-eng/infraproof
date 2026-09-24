@@ -463,8 +463,10 @@ func hostileBundle() evidence.Bundle {
 		SchemaVersion: evidence.SchemaVersion,
 		Decision:      evidence.DecisionBlock,
 		Summary:       "The change violates the intent contract in 1 way.",
-		Subject: evidence.Subject{IntentSource: "intent.json", PlanFormatVersion: "1.2",
-			PlanDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+		Subject: evidence.Subject{IntentSource: "intent.json",
+			IntentDigest:      "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			PlanFormatVersion: "1.2",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"}},
 		Findings: []evidence.Finding{{

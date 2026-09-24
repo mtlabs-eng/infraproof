@@ -49,10 +49,12 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
-// roleIAMGrant is the one question a resource other than the bucket answers
-// here. Prevention is read from the bucket itself, so nothing else can answer
-// it.
-const roleIAMGrant = "iam_grant"
+// The questions this mapper answers about a bucket. Prevention is read from the
+// bucket itself, so the subject answers for it and nothing else can.
+const (
+	roleIAMGrant   = "iam_grant"
+	rolePrevention = attrPrevention
+)
 
 // RoleOf names the question a resource would answer about a bucket.
 func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
@@ -60,6 +62,8 @@ func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
 		return ""
 	}
 	switch candidate.Type {
+	case typeBucket:
+		return rolePrevention
 	case typeIAMMember, typeIAMBinding, typeIAMPolicy:
 		return roleIAMGrant
 	}

@@ -237,7 +237,11 @@ func escapeCell(s string) string {
 // Markdown renderer that permits HTML — GitHub's does — would otherwise let a
 // mid-sentence tag produce real structure.
 func prose(s string) string {
-	s = inlineText(strings.TrimSpace(s))
+	// Trimmed after the escaping, not only before it. Collapsing a control
+	// character leaves a space where the character was, and up to three spaces
+	// before a "#" is still a heading — so a summary beginning with one hid the
+	// opener from the check below and forged a heading with it.
+	s = strings.TrimSpace(inlineText(strings.TrimSpace(s)))
 	if at := blockOpenerAt(s); at >= 0 {
 		return s[:at] + `\` + s[at:]
 	}
@@ -325,6 +329,11 @@ func inlineText(s string) string {
 	s = collapseBreaks(s)
 	s = strings.ReplaceAll(s, "&", "&amp;")
 	s = strings.ReplaceAll(s, "<", "&lt;")
+	// The backslash first, and for the sake of the one after it. A value ending
+	// in a backslash met the escape added below and produced "\\[", which
+	// CommonMark reads as an escaped backslash followed by a live bracket --
+	// the escape defeated by the thing it was escaping.
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(s, "[", `\[`)
 }
 
@@ -354,25 +363,15 @@ func code(s string) string {
 
 // collapseBreaks turns every line ending into a space, so a value cannot open a
 // block wherever it is rendered.
-func collapseBreaks(s string) string {
-	return strings.Map(func(char rune) rune {
-		if isControl(char) {
-			return ' '
-		}
-		return char
-	}, s)
-}
-
-// isControl reports the characters a report must not carry through.
+// collapseBreaks turns every control character into a space.
 //
-// A break ends a code span and, if it is blank, the paragraph too. The rest of
-// the range is the same problem in a different renderer: a report is read in a
-// terminal as often as in a browser, and an escape sequence there moves the
-// cursor, clears the line or colours what follows, so a value carrying one can
-// hide the finding under it. None of them is text, and a plan author chooses
-// every one that reaches here.
-func isControl(char rune) bool {
-	return char < 0x20 || char == 0x7f || (char >= 0x80 && char <= 0x9f)
+// A break ends a code span and, if it is blank, the paragraph too; an escape
+// sequence moves a terminal's cursor or clears the line. The contract package
+// says which characters those are, because it is the one that says what a
+// single-line field may hold — and a renderer keeping its own copy of that rule
+// is how the two come to disagree.
+func collapseBreaks(s string) string {
+	return evidence.Inline(s)
 }
 
 // optionalCode renders a pointer as code, or "-" when it is nil.

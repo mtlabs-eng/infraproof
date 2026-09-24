@@ -40,11 +40,14 @@ func (Mapper) IsSubject(resourceType string) bool {
 	return resourceType == typeContainer || resourceType == typeAccount
 }
 
-// The questions this mapper answers. A container asks which account gates it;
-// an account with no container in the plan asks whether one is here at all.
+// The questions this mapper answers. A container asks which account gates it
+// and what it is itself set to; an account with no container in the plan asks
+// whether one is here at all.
 const (
-	roleAccountGate = "account_gate"
-	roleContainer   = "container"
+	roleAccountGate   = "account_gate"
+	roleAccessLevel   = attrAccessType
+	roleContainer     = "container"
+	roleAccountItself = attrAllowPublic
 )
 
 // RoleOf names the question a resource would answer about a subject.
@@ -52,8 +55,12 @@ func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
 	switch {
 	case subject.Type == typeContainer && candidate.Type == typeAccount:
 		return roleAccountGate
+	case subject.Type == typeContainer && candidate.Address == subject.Address:
+		return roleAccessLevel
 	case subject.Type == typeAccount && candidate.Type == typeContainer:
 		return roleContainer
+	case subject.Type == typeAccount && candidate.Address == subject.Address:
+		return roleAccountItself
 	}
 	return ""
 }

@@ -90,10 +90,18 @@ func (c Contract) validateEnvelope() []error {
 // is one nobody reads to the end. The truncation is stated rather than silent.
 func quotable(value string) string {
 	const limit = 80
-	if len(value) <= limit {
-		return value
+
+	count := 0
+	for at := range value {
+		count++
+		if count > limit {
+			// Cut on a character boundary. Slicing at a byte offset split a
+			// multi-byte character and put an invalid sequence in the message,
+			// which is a different way of failing to say which value is wrong.
+			return value[:at] + "… (truncated)"
+		}
 	}
-	return value[:limit] + "… (truncated)"
+	return value
 }
 
 // validateSchemaVersion holds the compatibility boundary at the major version.
@@ -110,7 +118,7 @@ func validateSchemaVersion(version string) error {
 	major, minor, found := strings.Cut(version, ".")
 	if !found {
 		return fmt.Errorf("schema_version is %q, want a major.minor version such as %q",
-			version, SchemaVersion)
+			quotable(version), SchemaVersion)
 	}
 
 	// Both components, and both by the Evidence Bundle's own rule: strconv.Atoi
@@ -118,17 +126,17 @@ func validateSchemaVersion(version string) error {
 	// as a version this build understands.
 	if !isPlainNumber(major) || !isPlainNumber(minor) {
 		return fmt.Errorf("schema_version is %q, want a major.minor version such as %q",
-			version, SchemaVersion)
+			quotable(version), SchemaVersion)
 	}
 	number, err := strconv.Atoi(major)
 	if err != nil {
-		return fmt.Errorf("schema_version is %q, want a numeric major version", version)
+		return fmt.Errorf("schema_version is %q, want a numeric major version", quotable(version))
 	}
 
 	supported, _, _ := strings.Cut(SchemaVersion, ".")
 	want, _ := strconv.Atoi(supported)
 	if number != want {
-		return fmt.Errorf("schema_version is %q; this build understands major version %d", version, want)
+		return fmt.Errorf("schema_version is %q; this build understands major version %d", quotable(version), want)
 	}
 	return nil
 }

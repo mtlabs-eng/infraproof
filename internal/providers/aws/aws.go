@@ -44,14 +44,21 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
-// The questions this mapper answers about a bucket. Two resource types answer
-// the ACL question, because ownership controls decide whether an ACL applies at
-// all, and two answer the block question, because an account-wide block shuts
-// the same routes a bucket-level one does.
+// The questions this mapper answers about a bucket, one per thing that can be
+// asked rather than one per thing that can answer.
+//
+// The two block levels were one question and are two. They shut the same routes
+// and they are not rivals: a bucket-level block set by this change proves
+// prevention whatever an account-wide one says, so a read of the account
+// baseline beside a hardened bucket contested a proof it could not have
+// touched, and the most ordinary hardening idiom in S3 came back undetermined.
 const (
+	roleBucketName  = "bucket"
 	roleACLRoute    = "acl"
+	roleOwnership   = "object_ownership"
 	rolePolicyRoute = "policy"
-	roleBlock       = "public_access_block"
+	roleBucketBlock = "public_access_block"
+	roleAccountWide = "account_public_access_block"
 )
 
 // RoleOf names the question a resource would answer about a bucket.
@@ -66,17 +73,22 @@ func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
 		return ""
 	}
 	switch candidate.Type {
-	case typeBucketACL, typeOwnershipControls:
+	case typeBucket:
+		// The subject answers for its own name, which every verdict cites.
+		return roleBucketName
+	case typeBucketACL:
 		return roleACLRoute
+	case typeOwnershipControls:
+		return roleOwnership
 	case typeBucketPolicy:
 		return rolePolicyRoute
 	case typePublicAccessBlock:
-		return roleBlock
+		return roleBucketBlock
 	case typeAccountBlock:
 		if !sameProviderInstance(subject, candidate) {
 			return ""
 		}
-		return roleBlock
+		return roleAccountWide
 	}
 	return ""
 }

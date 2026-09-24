@@ -1307,6 +1307,11 @@ func TestNormalizingAPlanFullOfReadsStaysCheap(t *testing.T) {
 // names it and a policy read beside it, together with a few account-wide blocks
 // read rather than changed.
 //
+// The blocks shut nothing. A bucket that blocks every route is proved private
+// by its own control, and a proof nothing could rival records no withheld
+// source at all — which would make this plan measure the path returning early,
+// the way the plan it replaced did.
+//
 // Both kinds of candidate are here on purpose. A read the configuration relates
 // to a subject reaches it through an edge; an account-wide block names no
 // bucket at all and reaches every subject in its own account through the scope.
@@ -1333,8 +1338,8 @@ func bucketPlan(t *testing.T, buckets, scoped int) []byte {
 			  "type": "aws_s3_bucket_public_access_block", "name": "p%d", "provider_name": "p",
 			  "provider_config_key": "aws",
 			  "change": {"actions": ["create"], "before": null,
-			             "after": {"block_public_acls": true, "block_public_policy": true,
-			                       "ignore_public_acls": true, "restrict_public_buckets": true}}}`,
+			             "after": {"block_public_acls": false, "block_public_policy": false,
+			                       "ignore_public_acls": false, "restrict_public_buckets": false}}}`,
 				block, i))
 		resources = append(resources,
 			fmt.Sprintf(`{"address": %q, "mode": "data", "type": "aws_s3_bucket_policy",
@@ -1989,5 +1994,343 @@ func TestAControlTheVerdictUsedIsCited(t *testing.T) {
 	if !cited {
 		t.Errorf("the control that decided the ACL route is cited nowhere: %v",
 			bucket.ObjectStorage.PublicAccess.Sources)
+	}
+}
+
+// TestAProofNothingCouldRivalStands is the over-refusal the role mechanism
+// introduced.
+//
+// Contesting was decided by whether some admissible resource shared the read's
+// question. That is what was available to the mapper, not what the answer
+// rested on: a bucket's own public access block proves prevention on its own,
+// and a read of the account-wide block answers a question the proof never
+// consulted. The ordinary way to write an account baseline beside a hardened
+// bucket therefore went from PASS to UNKNOWN.
+//
+// What a withheld source has to rival is a question the verdict actually cited.
+func TestAProofNothingCouldRivalStands(t *testing.T) {
+	cases := map[string]struct {
+		raw     string
+		subject string
+	}{
+		"an account baseline read beside a bucket that blocks everything": {
+			subject: "aws_s3_bucket.assets",
+			raw: `{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "assets", "provider_name": "p", "provider_config_key": "aws",
+			     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+			    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+			     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+			     "provider_name": "p", "provider_config_key": "aws",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"block_public_acls": true, "block_public_policy": true,
+			                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+			    {"address": "data.aws_s3_account_public_access_block.org", "mode": "data",
+			     "type": "aws_s3_account_public_access_block", "name": "org",
+			     "provider_name": "p", "provider_config_key": "aws",
+			     "change": {"actions": ["read"], "before": null,
+			                "after": {"block_public_acls": true, "block_public_policy": true,
+			                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+			  ],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "assets", "provider_config_key": "aws", "expressions": {}},
+			    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+			     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+			     "provider_config_key": "aws", "expressions": {"bucket": {"references": [
+			       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+			    {"address": "data.aws_s3_account_public_access_block.org", "mode": "data",
+			     "type": "aws_s3_account_public_access_block", "name": "org",
+			     "provider_config_key": "aws", "expressions": {}}
+			  ]}}
+			}`,
+		},
+		"an ACL read beside a bucket that blocks everything": {
+			subject: "aws_s3_bucket.assets",
+			raw: `{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "assets", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+			    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+			     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"block_public_acls": true, "block_public_policy": true,
+			                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+			    {"address": "data.aws_s3_bucket_acl.current", "mode": "data",
+			     "type": "aws_s3_bucket_acl", "name": "current", "provider_name": "p",
+			     "change": {"actions": ["read"], "before": null,
+			                "after": {"bucket": "a", "acl": "public-read"}}}
+			  ],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "assets", "expressions": {}},
+			    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+			     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+			     "expressions": {"bucket": {"references": [
+			       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+			    {"address": "data.aws_s3_bucket_acl.current", "mode": "data",
+			     "type": "aws_s3_bucket_acl", "name": "current",
+			     "expressions": {"bucket": {"references": [
+			       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+			  ]}}
+			}`,
+		},
+		"an IAM read beside a bucket that enforces prevention": {
+			subject: "google_storage_bucket.assets",
+			raw: `{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "google_storage_bucket.assets", "mode": "managed",
+			     "type": "google_storage_bucket", "name": "assets", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"name": "a", "public_access_prevention": "enforced"}}},
+			    {"address": "google_storage_bucket_iam_member.team", "mode": "managed",
+			     "type": "google_storage_bucket_iam_member", "name": "team", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"bucket": "a", "member": "user:a@example.com"}}},
+			    {"address": "data.google_storage_bucket_iam_member.current", "mode": "data",
+			     "type": "google_storage_bucket_iam_member", "name": "current", "provider_name": "p",
+			     "change": {"actions": ["read"], "before": null,
+			                "after": {"bucket": "a", "member": "allUsers"}}}
+			  ],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "google_storage_bucket.assets", "mode": "managed",
+			     "type": "google_storage_bucket", "name": "assets", "expressions": {}},
+			    {"address": "google_storage_bucket_iam_member.team", "mode": "managed",
+			     "type": "google_storage_bucket_iam_member", "name": "team",
+			     "expressions": {"bucket": {"references": [
+			       "google_storage_bucket.assets.name", "google_storage_bucket.assets"]}}},
+			    {"address": "data.google_storage_bucket_iam_member.current", "mode": "data",
+			     "type": "google_storage_bucket_iam_member", "name": "current",
+			     "expressions": {"bucket": {"references": [
+			       "google_storage_bucket.assets.name", "google_storage_bucket.assets"]}}}
+			  ]}}
+			}`,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			subject := normalizedAt(t, tc.raw, tc.subject)
+			if subject.ObjectStorage == nil {
+				t.Fatal("no normalized subject")
+			}
+			exposure := subject.ObjectStorage.PublicAccess
+			if !exposure.IsKnown() || exposure.Get() {
+				t.Errorf("prevention is proved by the change itself and a read unsettled it: %v/%v",
+					exposure.State, exposure.Get())
+			}
+			if subject.ObjectStorage.Withdrawn {
+				t.Error("a proof the read could not have rivalled was withdrawn")
+			}
+		})
+	}
+}
+
+// TestAGrantNamesTheControlThatWouldHavePreventedIt is the other half of the
+// same gate.
+//
+// docs/PRODUCT.md promises that where a read would have answered a question,
+// the report names what was withheld. A plan granting public access beside a
+// read of the block that would stop it said nothing about the read at all,
+// because the record was suppressed whenever the answer was settled -- and a
+// grant does not settle what else is in force.
+//
+// The grant itself stands. What a data source describes is what is already
+// there, and the change still asks for public access, which is what
+// STORAGE_PUBLIC asserts.
+func TestAGrantNamesTheControlThatWouldHavePreventedIt(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "acl": "public-read"}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.existing", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.existing", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "existing",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	exposure := bucket.ObjectStorage.PublicAccess
+	if !exposure.IsKnown() || !exposure.Get() {
+		t.Fatalf("the change grants public access and a read unsaid it: %v/%v",
+			exposure.State, exposure.Get())
+	}
+	if !withheldRecorded(bucket) {
+		t.Errorf("the control that would have prevented the grant is named nowhere: %v",
+			bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestOnlyTheEnvironmentDeclarationMarksItsOwnReference covers the location the
+// environment fact points at.
+//
+// The reference names the declaration, not the block holding it. Asking the
+// whole block would mark the reference because some unrelated tag is a secret,
+// which is the error of reporting a value the mapper plainly read; asking
+// nothing would leave a secret unmarked. The key is matched without regard to
+// case, so the lookup has to match the scan.
+func TestOnlyTheEnvironmentDeclarationMarksItsOwnReference(t *testing.T) {
+	plan := func(tags, sensitive string) string {
+		return fmt.Sprintf(`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"bucket": "a", "tags": %s},
+		                "after_sensitive": {"tags": %s}}}
+		  ]
+		}`, tags, sensitive)
+	}
+
+	cases := map[string]struct {
+		tags, sensitive string
+		want            bool
+	}{
+		"a sensitive declaration": {
+			`{"environment": "staging"}`, `{"environment": true}`, true},
+		"a sensitive declaration spelled differently": {
+			`{"Environment": "staging"}`, `{"Environment": true}`, true},
+		"a sensitive tag that is not the declaration": {
+			`{"environment": "staging", "owner": "x"}`, `{"owner": true}`, false},
+		"nothing sensitive": {
+			`{"environment": "staging"}`, `{}`, false},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			bucket := normalizedAt(t, plan(tc.tags, tc.sensitive), "aws_s3_bucket.assets")
+			if len(bucket.Environment.Sources) != 1 {
+				t.Fatalf("sources = %v, want the declaration located once", bucket.Environment.Sources)
+			}
+			if got := bucket.Environment.Sources[0].Withheld; got != tc.want {
+				t.Errorf("the reference reports the value as secret = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheWithheldRecordSaysWhatItLeftOut covers the bound on how many sources
+// one record locates.
+//
+// A plan may hold a control per subject and the record is per subject, so the
+// pairing is quadratic and so is the report. Truncating silently would read as
+// "these are the sources", which is the same sentence-level lie as reporting an
+// unchecked thing as checked.
+func TestTheWithheldRecordSaysWhatItLeftOut(t *testing.T) {
+	const reads = 25
+
+	var changes, resources []string
+	changes = append(changes, `{"address": "aws_s3_bucket.assets", "mode": "managed",
+	  "type": "aws_s3_bucket", "name": "assets", "provider_name": "p", "provider_config_key": "aws",
+	  "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}}`)
+	resources = append(resources, `{"address": "aws_s3_bucket.assets", "mode": "managed",
+	  "type": "aws_s3_bucket", "name": "assets", "provider_config_key": "aws", "expressions": {}}`)
+	for i := range reads {
+		address := fmt.Sprintf("data.aws_s3_account_public_access_block.a%d", i)
+		changes = append(changes, fmt.Sprintf(`{"address": %q, "mode": "data",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d", "provider_name": "p",
+		  "provider_config_key": "aws",
+		  "change": {"actions": ["read"], "before": null,
+		             "after": {"block_public_acls": false, "block_public_policy": false,
+		                       "ignore_public_acls": false, "restrict_public_buckets": false}}}`,
+			address, i))
+		resources = append(resources, fmt.Sprintf(`{"address": %q, "mode": "data",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d",
+		  "provider_config_key": "aws", "expressions": {}}`, address, i))
+	}
+	raw := `{"format_version": "1.2", "resource_changes": [` + strings.Join(changes, ",") +
+		`], "configuration": {"root_module": {"resources": [` + strings.Join(resources, ",") + `]}}}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+
+	var found bool
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID != "SOURCE_WITHHELD" {
+			continue
+		}
+		found = true
+		if len(control.Sources) >= reads {
+			t.Errorf("the record locates %d sources; a per-subject record of every control "+
+				"in the plan is quadratic in the plan", len(control.Sources))
+		}
+		if !contains(control.Reason, fmt.Sprintf("%d sources were withheld", reads)) {
+			t.Errorf("the record truncates without saying so: %q", control.Reason)
+		}
+	}
+	if !found {
+		t.Fatalf("nothing was recorded: %v", bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestAControlOverReadsAloneSaysSoWhateverItGovernsThrough covers a control
+// that reaches its subjects through the scope rather than through a reference.
+//
+// An account-wide public access block names no bucket, which is what its
+// Governs declaration exists for. The check for "every subject of this control
+// is one the verdict may not read" was given the edge set, which is empty for
+// exactly that control, so it answered no — and coverage then told the reader
+// the control applies to a resource that is not part of this plan, with the
+// resource sitting in the plan as a data source.
+func TestAControlOverReadsAloneSaysSoWhateverItGovernsThrough(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_account_public_access_block.main", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "main",
+	     "provider_name": "p", "provider_config_key": "aws",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+	     "name": "existing", "provider_name": "p", "provider_config_key": "aws",
+	     "change": {"actions": ["read"], "before": null, "after": {"bucket": "e"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_account_public_access_block.main", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "main",
+	     "provider_config_key": "aws", "expressions": {}},
+	    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+	     "name": "existing", "provider_config_key": "aws", "expressions": {}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_account_public_access_block.main")
+	if len(control.DefersTo) != 0 {
+		t.Fatalf("the control defers to %v; this plan changes no bucket", control.DefersTo)
+	}
+	if !control.GovernsWithheld {
+		t.Error("every bucket this control governs is one the verdict may not read, and the " +
+			"report will say the bucket is not part of the plan")
 	}
 }

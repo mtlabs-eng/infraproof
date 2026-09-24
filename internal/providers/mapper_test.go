@@ -1882,3 +1882,127 @@ func TestAMapperThatWillNotSayCannotBeTakenAtItsWord(t *testing.T) {
 		t.Error("the determination was unset and nothing records that it existed")
 	}
 }
+
+// TestEachMapperAnswersOneQuestionPerQuestion pins the declarations the whole
+// withholding mechanism rests on.
+//
+// A role is compared with other roles from the same mapper and never rendered,
+// so what matters is which candidates share a name and which do not. Two
+// questions sharing one name is how a read of the account-wide S3 block came to
+// contest a proof from a bucket's own block; every candidate sharing one name
+// is the same failure everywhere at once.
+//
+// Only distinctness is asserted, not the names. Renaming a role consistently
+// changes nothing, and a test that pinned the strings would fail for a change
+// that means nothing — which is how a test comes to be edited rather than read.
+func TestEachMapperAnswersOneQuestionPerQuestion(t *testing.T) {
+	// Each group is the types that answer one question. Two types in a group
+	// are rivals for each other by construction -- the three GCP IAM resources
+	// are read together, so a grant through any of them is the same grant --
+	// and two groups must never share a name.
+	cases := map[string]struct {
+		subject string
+		groups  [][]string
+		silent  []string
+	}{
+		"aws": {
+			subject: "aws_s3_bucket",
+			groups: [][]string{
+				{"aws_s3_bucket"},
+				{"aws_s3_bucket_acl"},
+				{"aws_s3_bucket_policy"},
+				{"aws_s3_bucket_ownership_controls"},
+				{"aws_s3_bucket_public_access_block"},
+				{"aws_s3_account_public_access_block"},
+			},
+			silent: []string{"azurerm_storage_account", "google_storage_bucket", "aws_instance"},
+		},
+		"azure, from a container": {
+			subject: "azurerm_storage_container",
+			groups:  [][]string{{"azurerm_storage_container"}, {"azurerm_storage_account"}},
+			silent:  []string{"aws_s3_bucket", "google_storage_bucket"},
+		},
+		"azure, from an account": {
+			subject: "azurerm_storage_account",
+			groups:  [][]string{{"azurerm_storage_account"}, {"azurerm_storage_container"}},
+			silent:  []string{"aws_s3_bucket_policy", "google_storage_bucket_iam_member"},
+		},
+		"gcp": {
+			subject: "google_storage_bucket",
+			groups: [][]string{
+				{"google_storage_bucket"},
+				{"google_storage_bucket_iam_member", "google_storage_bucket_iam_binding",
+					"google_storage_bucket_iam_policy"},
+			},
+			silent: []string{"aws_s3_bucket", "azurerm_storage_container"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var roles providers.Roles
+			for _, mapper := range providers.Default() {
+				if mapper.Interprets(tc.subject) {
+					declared, ok := mapper.(providers.Roles)
+					if !ok {
+						t.Fatalf("the mapper claiming %s declares no roles", tc.subject)
+					}
+					roles = declared
+					break
+				}
+			}
+			if roles == nil {
+				t.Fatalf("no mapper claims %s", tc.subject)
+			}
+
+			subject := change(tc.subject, "subject")
+			seen := map[string]string{}
+			for _, group := range tc.groups {
+				var shared string
+				for _, candidateType := range group {
+					candidate := change(candidateType, "candidate")
+					if candidateType == tc.subject {
+						candidate = subject
+					}
+					role := roles.RoleOf(subject, candidate)
+					if role == "" {
+						t.Errorf("%s answers nothing about %s", candidateType, tc.subject)
+						continue
+					}
+					if shared == "" {
+						shared = role
+					} else if role != shared {
+						t.Errorf("%s and %s answer one question and were given two",
+							group[0], candidateType)
+					}
+					if other, repeated := seen[role]; repeated && other != group[0] {
+						t.Errorf("%s and %s are one question; a rival for either contests the other",
+							other, candidateType)
+					}
+					seen[role] = group[0]
+				}
+			}
+
+			for _, candidateType := range tc.silent {
+				if role := roles.RoleOf(subject, change(candidateType, "other")); role != "" {
+					t.Errorf("%s was given the question %q about %s", candidateType, role, tc.subject)
+				}
+			}
+
+			if got := roles.RoleOf(subject, subject); got != roles.RoleOf(subject, subject) {
+				t.Error("the same pair was given two answers")
+			}
+		})
+	}
+}
+
+// change builds the smallest resource change a role declaration can be asked
+// about: its type, its address and its provider instance.
+func change(resourceType, name string) terraformplan.ResourceChange {
+	return terraformplan.ResourceChange{
+		Address:           resourceType + "." + name,
+		Type:              resourceType,
+		Name:              name,
+		ProviderConfigKey: "p",
+	}
+}

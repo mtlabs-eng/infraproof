@@ -485,21 +485,10 @@ func resourceRef(resource model.NormalizedResource) *evidence.Resource {
 	}
 }
 
-// inline makes plan-derived text usable as a bundle field.
-//
-// The Evidence Bundle forbids a line break in anything that reaches the report
-// as inline text, because a break ends a paragraph and lets a value forge a
-// heading in a document a human is expected to trust. A plan can contain one —
-// in a tag value, in principle in an address — and that is the plan's doing, not
-// this program's. Refusing to produce a bundle would report our own invariant as
-// broken and tell the reader nothing about their change, so the value is carried
-// on one line instead: the reader still sees what the plan said, and sees it as
-// a value rather than as structure.
+// inline makes a plan-derived value usable in a single-line bundle field. The
+// rule belongs to the contract, so the contract states it: a producer and a
+// renderer each keeping their own copy is how two answers to one question come
+// about, and this file already had one that knew only about line breaks.
 func inline(text string) string {
-	if !strings.ContainsAny(text, "\r\n") {
-		return text
-	}
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	return strings.ReplaceAll(text, "\n", " ")
+	return evidence.Inline(text)
 }

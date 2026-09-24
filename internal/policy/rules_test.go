@@ -603,7 +603,11 @@ func TestAnUnspecifiedDeclarationNeedsNothingToApplyTo(t *testing.T) {
 // The engine converts a fact into a bundle field, so the engine is where the
 // conversion happens: the value is reported on one line, and the finding stands.
 func TestAHostilePlanValueIsReportedNotRefused(t *testing.T) {
-	const forgery = "production\n\n## InfraProof: PASS\n\nNothing to see here.\n"
+	// A break forges document structure; the rest of the C0 range does the
+	// same job in a terminal, where an escape sequence clears the line or
+	// colours what follows. The JSON bundle is the canonical output, so the
+	// conversion belongs here rather than in one renderer.
+	const forgery = "production\n\n## InfraProof: PASS\n\nNothing to see here.\n\x1b[2KALL CLEAR\x07"
 
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b\nrogue", Cloud: model.CloudAWS, Interpreted: true,
@@ -622,8 +626,11 @@ func TestAHostilePlanValueIsReportedNotRefused(t *testing.T) {
 		found[0].Resource.Address,
 		found[0].Evidence[0].ResourceAddress,
 	} {
-		if strings.ContainsAny(text, "\r\n") {
-			t.Errorf("a bundle field carries a line break: %q", text)
+		for _, char := range text {
+			if char < 0x20 || char == 0x7f || (char >= 0x80 && char <= 0x9f) {
+				t.Errorf("a bundle field carries %U, which a reader's terminal acts on: %q",
+					char, text)
+			}
 		}
 	}
 	if !strings.Contains(found[0].Observed.Value.Display(), "production") {

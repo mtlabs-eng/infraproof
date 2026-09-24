@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mtlabs-eng/infraproof/internal/intent"
 )
@@ -943,5 +944,58 @@ func TestAnErrorQuotesAValueWithoutReprintingTheFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "aaa") {
 		t.Errorf("the message does not say which value is wrong: %q", err.Error())
+	}
+}
+
+// TestEveryQuotedValueIsBoundedAndWellFormed covers the two ways a quoted value
+// escapes its bound.
+//
+// Every validator but one wraps the value it quotes; schema_version did not, so
+// a contract could put a megabyte on a terminal through the one field read
+// before any other check runs. And the bound counted bytes, so it could cut a
+// character in half and put an invalid sequence in an error message.
+func TestEveryQuotedValueIsBoundedAndWellFormed(t *testing.T) {
+	huge := strings.Repeat("€", 5000)
+
+	cases := map[string]func(map[string]any){
+		"schema_version":      func(c map[string]any) { c["schema_version"] = strings.Repeat("9", 5000) },
+		"destructive_changes": func(c map[string]any) { c["destructive_changes"] = huge },
+		"a cloud":             func(c map[string]any) { c["allowed_clouds"] = []string{huge} },
+		"a family": func(c map[string]any) {
+			c["resources"] = []map[string]string{{"family": huge, "exposure": "private"}}
+		},
+		"an exposure": func(c map[string]any) {
+			c["resources"] = []map[string]string{{"family": "object_storage", "exposure": huge}}
+		},
+	}
+
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			contract := map[string]any{
+				"schema_version":      "1.0",
+				"change_id":           "c",
+				"environment":         "staging",
+				"allowed_clouds":      []string{"aws"},
+				"destructive_changes": "forbidden",
+				"resources":           []map[string]string{{"family": "object_storage", "exposure": "private"}},
+			}
+			mutate(contract)
+			body, err := json.Marshal(contract)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+
+			if _, err := intent.Parse(body, "c.json"); err == nil {
+				t.Fatal("the contract was accepted")
+			} else {
+				if len(err.Error()) > 1000 {
+					t.Errorf("the message is %d bytes; it reprints the contract rather than quoting it",
+						len(err.Error()))
+				}
+				if !utf8.ValidString(err.Error()) {
+					t.Errorf("the message is not valid UTF-8: %q", err.Error())
+				}
+			}
+		})
 	}
 }
