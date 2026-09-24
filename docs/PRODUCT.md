@@ -77,7 +77,8 @@ changed, so it is not part of that guarantee — and a resource whose mode says
 it is read while its actions say otherwise is not believed to be one.
 
 What a data source says is never evidence about another resource, in either
-direction. It describes state as it already is, which is not what the change
+direction. (This entered the product during review of milestone 04, for the
+reason recorded in `docs/milestones/04-risk-and-intent.md`.) It describes state as it already is, which is not what the change
 will do, so it can neither prove that exposure is prevented nor prove that it
 is granted. This is the single largest determinant of what this tool will
 conclude about a plan that contains one, so it is not silent about it: where a
