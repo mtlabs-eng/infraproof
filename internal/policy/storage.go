@@ -167,9 +167,14 @@ func unresolvedUnknowns(resource model.NormalizedResource, capabilities model.Ob
 	out := make([]evidence.Unknown, 0, len(capabilities.Unresolved))
 	for _, control := range capabilities.Unresolved {
 		out = append(out, evidence.Unknown{
-			CheckID:         control.CheckID,
-			Required:        false,
-			Reason:          control.Reason,
+			CheckID:  control.CheckID,
+			Required: false,
+			// Inlined like every other plan-derived string. A MissingControl
+			// reason may interpolate a resource address, and a for_each key
+			// holding a newline is legal Terraform — which made the bundle
+			// fail its own single-line rule and replaced a verdict the tool
+			// could give with an internal error.
+			Reason:          inline(control.Reason),
 			ResourceAddress: &address,
 			Evidence:        []evidence.EvidenceRef{},
 		})
@@ -196,9 +201,11 @@ func bundleCloud(cloud model.Cloud) evidence.Cloud {
 // referencesOf turns a fact's provenance into evidence. A reference locates the
 // provider attribute a conclusion came from and can carry nothing else.
 //
-// It carries whether that attribute was readable, because the bundle contract
-// defines the field as saying so and every storage reference said "read" —
-// including the references of a capability whose own state was REDACTED.
+// It carries whether that particular attribute was readable, because the
+// bundle contract defines the field as a property of the located value. Taking
+// it from the fact's own state marked every source of a redacted fact, which
+// told a reader that values the mapper had read in order to conclude were
+// secret.
 func referencesOf(fact model.Fact[bool]) []evidence.EvidenceRef {
 	canonical := fact.Canonical()
 
@@ -208,7 +215,7 @@ func referencesOf(fact model.Fact[bool]) []evidence.EvidenceRef {
 			Source:          "terraform_plan",
 			ResourceAddress: inline(source.ResourceAddress),
 			Path:            inline(source.AttributePath),
-			Redacted:        fact.State == model.FactRedacted,
+			Redacted:        source.Withheld,
 		})
 	}
 	return refs

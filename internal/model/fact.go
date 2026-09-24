@@ -46,6 +46,15 @@ type Provenance struct {
 	AttributePath string
 	// Cloud is the cloud whose semantics were interpreted.
 	Cloud Cloud
+	// Withheld reports that this particular value could not be read — the plan
+	// marked it sensitive, or had not determined it yet.
+	//
+	// It belongs to the source rather than to the fact. A fact is redacted if
+	// any one of its sources was, and reporting every source of such a fact as
+	// withheld told a reader that values the mapper had plainly read were
+	// secret — which is the same lie as the one it replaced, told the other
+	// way round.
+	Withheld bool
 }
 
 // Fact is a normalized value together with what is known about it and where it

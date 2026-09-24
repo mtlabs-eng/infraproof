@@ -164,8 +164,8 @@ func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model
 		return answerUnknown, nil
 	}
 
-	sources := []model.Provenance{provenance(account.Address, attrAllowPublic)}
 	value := account.After.Field(attrAllowPublic)
+	sources := []model.Provenance{provenanceOf(account.Address, attrAllowPublic, value)}
 	switch {
 	case value.Kind() == terraformplan.KindBool:
 		if value.Bool() {
@@ -185,9 +185,9 @@ func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model
 // containerIsPublic reads the container's access level. blob exposes the blobs;
 // container additionally exposes the listing.
 func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance) {
-	sources := []model.Provenance{provenance(container.Address, attrAccessType)}
-
 	value := container.After.Field(attrAccessType)
+	sources := []model.Provenance{provenanceOf(container.Address, attrAccessType, value)}
+
 	switch {
 	case value.Kind() == terraformplan.KindString:
 		if value.Text() == accessTypePublic || value.Text() == accessTypeList {
@@ -230,8 +230,28 @@ func findType(changes []terraformplan.ResourceChange, resourceType string) (*ter
 	return found, false
 }
 
+// provenance locates a value this mapper read, and records whether it could be
+// read at all. The bundle reports that per reference, so it has to be true of
+// the reference rather than of the fact it ends up in.
 func provenance(address, attribute string) model.Provenance {
 	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAzure}
+}
+
+// withheldProvenance locates a value the plan did not let this mapper read.
+func withheldProvenance(address, attribute string) model.Provenance {
+	source := provenance(address, attribute)
+	source.Withheld = true
+	return source
+}
+
+// provenanceOf picks between them by asking the value.
+func provenanceOf(address, attribute string, value terraformplan.Value) model.Provenance {
+	switch value.State() {
+	case terraformplan.StateRedacted, terraformplan.StateUnknown:
+		return withheldProvenance(address, attribute)
+	default:
+		return provenance(address, attribute)
+	}
 }
 
 // Bindings declares that a container is placed in an account, and how.

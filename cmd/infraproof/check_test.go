@@ -639,3 +639,83 @@ func TestAWithheldSourceReachesTheReport(t *testing.T) {
 		t.Errorf("no record names the withheld source: %v", bundle.Unknowns)
 	}
 }
+
+// TestAPlanValueInARecordDoesNotCostAVerdict keeps an operational failure from
+// replacing an answer the tool could give.
+//
+// Every plan-derived string in the bundle is carried on one line, because the
+// contract forbids a break in anything rendered as inline text. A record about
+// a withheld source interpolates a resource address, and a for_each key holding
+// a newline is legal Terraform — so a plan the tool could judge produced exit
+// 11 and no verdict instead.
+func TestAPlanValueInARecordDoesNotCostAVerdict(t *testing.T) {
+	plan := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.gate", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "gate",
+	     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "g", "allow_nested_items_to_be_public": false}}},
+	    {"address": "data.azurerm_storage_account.legacy[\"x\ny\"]", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "legacy", "index": "x\ny",
+	     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "l", "allow_nested_items_to_be_public": true}}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.gate", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "gate", "expressions": {}},
+	    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "legacy",
+	     "for_each_expression": {"constant_value": ["x\ny"]}, "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {"storage_account_id": {"references": [
+	       "data.azurerm_storage_account.legacy[\"x\ny\"].id",
+	       "data.azurerm_storage_account.legacy[\"x\ny\"]",
+	       "azurerm_storage_account.gate.id", "azurerm_storage_account.gate"]}}}
+	  ]}}
+	}`
+
+	everyCloud := strings.Replace(privateIntent, `["aws"]`, `["aws", "azure", "gcp"]`, 1)
+	code, stdout, stderr := check(t,
+		"--intent", write(t, "intent.json", everyCloud),
+		"--plan", write(t, "plan.json", plan))
+
+	if code == evidence.ExitInternal {
+		t.Fatalf("a plan the tool could judge produced an internal error:\n%s", stderr)
+	}
+	if stdout == "" {
+		t.Fatalf("no report was produced (exit %d):\n%s", code, stderr)
+	}
+
+	var bundle evidence.Bundle
+	if err := json.Unmarshal([]byte(stdout), &bundle); err != nil {
+		t.Fatalf("the output is not an Evidence Bundle: %v", err)
+	}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("the bundle does not satisfy its own contract: %v", err)
+	}
+
+	// And the record that carries the address is actually there, or the test
+	// would pass without reaching the path it exists for.
+	var named bool
+	for _, unknown := range bundle.Unknowns {
+		if unknown.CheckID == "SOURCE_WITHHELD" {
+			named = true
+			if strings.ContainsAny(unknown.Reason, "\r\n") {
+				t.Errorf("the record carries a line break: %q", unknown.Reason)
+			}
+		}
+	}
+	if !named {
+		t.Fatalf("the withheld read was not recorded, so this test did not reach its path:\n%s",
+			stdout)
+	}
+}

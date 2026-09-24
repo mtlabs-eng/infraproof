@@ -1231,48 +1231,46 @@ func TestAScopeGovernedControlIsWithheldToo(t *testing.T) {
 	}
 }
 
-// TestNormalizingIsLinearInThePlan keeps a loop-invariant from being computed
-// per change.
+// TestNormalizingAPlanFullOfReadsStaysCheap keeps the withholding path from
+// costing more than the plan is worth.
 //
-// Rebuilding the admissible view of the graph once per resource made an
-// ordinary plan quadratic: eight seconds on four megabytes. A budget in seconds
-// would only say something about the machine it ran on, so this measures how
-// the cost grows — doubling the plan roughly doubles linear work and roughly
-// quadruples quadratic work, and the two are far enough apart to tell apart.
-func TestNormalizingIsLinearInThePlan(t *testing.T) {
-	const small, large = 600, 1200
+// It has been quadratic twice and cubic once: a loop-invariant rebuilt per
+// change, a scan of every read per change, and every read of a subject type
+// treated as a candidate for every subject. The last of those took four
+// seconds on eight hundred changes.
+//
+// A ratio between two sizes turned out to measure the machine more than the
+// code once the code was fast — at a few milliseconds, scheduler noise and
+// garbage collection dominate. A generous absolute bound does not: the work
+// here is tens of milliseconds, the bound is two seconds, and every shape this
+// has taken before exceeded it by an order of magnitude.
+func TestNormalizingAPlanFullOfReadsStaysCheap(t *testing.T) {
+	const buckets = 4000
 
-	measure := func(buckets int) time.Duration {
-		plan, err := terraformplan.Parse(bucketPlan(t, buckets))
-		if err != nil {
-			t.Fatalf("Parse: %v", err)
-		}
-		// Warm, then measure, so the first run's allocation does not count as
-		// growth.
-		providers.Normalize(plan, providers.Default())
-
-		start := time.Now()
-		if got := len(providers.Normalize(plan, providers.Default()).Resources); got != 2*buckets {
-			t.Fatalf("normalized %d resources, want %d", got, 2*buckets)
-		}
-		return time.Since(start)
+	plan, err := terraformplan.Parse(bucketPlan(t, buckets))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
 
-	first, second := measure(small), measure(large)
-	if first <= 0 {
-		t.Skip("the smaller plan was too fast to time on this machine")
-	}
+	done := make(chan int, 1)
+	go func() { done <- len(providers.Normalize(plan, providers.Default()).Resources) }()
 
-	// Linear is about 2. Quadratic is about 4. Three separates them and leaves
-	// room for a noisy machine.
-	if ratio := float64(second) / float64(first); ratio > 3 {
-		t.Fatalf("doubling the plan multiplied the work by %.1f; the cost is not linear "+
-			"(%v for %d changes, %v for %d)", ratio, first, 2*small, second, 2*large)
+	select {
+	case got := <-done:
+		if got != 3*buckets {
+			t.Fatalf("normalized %d resources, want %d", got, 3*buckets)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("normalizing %d changes did not finish in two seconds", 3*buckets)
 	}
 }
 
 // bucketPlan builds a plan of n buckets, each with a public access block that
-// names it.
+// names it, and a data source beside each.
+//
+// The reads are the point. Without one in the plan, the whole withholding path
+// returns before it does anything, so the test written to protect the cost of
+// that path could not see it — and the cost it could not see was cubic.
 func bucketPlan(t *testing.T, buckets int) []byte {
 	t.Helper()
 
@@ -1280,7 +1278,12 @@ func bucketPlan(t *testing.T, buckets int) []byte {
 	for i := range buckets {
 		bucket := fmt.Sprintf("aws_s3_bucket.b%d", i)
 		block := fmt.Sprintf("aws_s3_bucket_public_access_block.p%d", i)
+		read := fmt.Sprintf("data.aws_s3_bucket.d%d", i)
 		changes = append(changes,
+			fmt.Sprintf(`{"address": %q, "mode": "data", "type": "aws_s3_bucket", "name": "d%d",
+			  "provider_name": "p",
+			  "change": {"actions": ["read"], "before": null, "after": {"bucket": "d%d"}}}`,
+				read, i, i),
 			fmt.Sprintf(`{"address": %q, "mode": "managed", "type": "aws_s3_bucket", "name": "b%d",
 			  "provider_name": "p",
 			  "change": {"actions": ["create"], "before": null, "after": {"bucket": "b%d"}}}`,
@@ -1292,6 +1295,8 @@ func bucketPlan(t *testing.T, buckets int) []byte {
 			                       "ignore_public_acls": true, "restrict_public_buckets": true}}}`,
 				block, i))
 		resources = append(resources,
+			fmt.Sprintf(`{"address": %q, "mode": "data", "type": "aws_s3_bucket",
+			  "name": "d%d", "expressions": {}}`, read, i),
 			fmt.Sprintf(`{"address": %q, "mode": "managed", "type": "aws_s3_bucket",
 			  "name": "b%d", "expressions": {}}`, bucket, i),
 			fmt.Sprintf(`{"address": %q, "mode": "managed",
@@ -1302,4 +1307,121 @@ func bucketPlan(t *testing.T, buckets int) []byte {
 
 	return []byte(`{"format_version": "1.2", "resource_changes": [` + strings.Join(changes, ",") +
 		`], "configuration": {"root_module": {"resources": [` + strings.Join(resources, ",") + `]}}}`)
+}
+
+// TestOnlyTheUnreadableSourceIsMarkedWithheld covers the mapper side of a flag
+// the bundle reports per reference.
+//
+// The policy test builds provenance by hand, so nothing exercised the mappers
+// that produce it: marking every source of a redacted fact and marking none at
+// all both passed. A fact is redacted when any one of its sources was, and the
+// others were read — that is how the mapper concluded at all.
+func TestOnlyTheUnreadableSourceIsMarkedWithheld(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": false, "block_public_policy": false,
+	                          "ignore_public_acls": false, "restrict_public_buckets": false}}},
+	    {"address": "aws_s3_bucket_policy.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"policy": "{}"}, "after_sensitive": {"policy": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "aws_s3_bucket_policy.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	exposure := bucket.ObjectStorage.PublicAccess
+	if exposure.State != model.FactRedacted {
+		t.Fatalf("the policy is sensitive, so exposure is %q, want %q",
+			exposure.State, model.FactRedacted)
+	}
+
+	var withheld, read int
+	for _, source := range exposure.Sources {
+		if source.Withheld {
+			withheld++
+			if source.AttributePath != "policy" {
+				t.Errorf("a value the mapper read is marked withheld: %s %s",
+					source.ResourceAddress, source.AttributePath)
+			}
+			continue
+		}
+		read++
+	}
+	if withheld != 1 {
+		t.Errorf("sources marked withheld = %d, want exactly the policy", withheld)
+	}
+	if read == 0 {
+		t.Error("the block flags were read in order to conclude, and none says so")
+	}
+}
+
+// TestAnUnrelatedReadContestsNothing keeps a read from being a candidate for
+// every subject in the plan.
+//
+// A control that governs by scope names no subject, so it has to be offered to
+// all of them. A subject names no subject either — it declares no relation
+// from itself — and treating one as scope-governed made every data source of a
+// subject type a candidate for every managed resource of that type. Where a
+// verdict is read from the subject's own attribute, as GCP's prevention is,
+// that is a collision by construction: the verdict cites a bucket and the read
+// is a bucket.
+//
+// Reading some buckets and managing others is an ordinary plan.
+func TestAnUnrelatedReadContestsNothing(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "a", "public_access_prevention": "enforced"}}},
+	    {"address": "data.google_storage_bucket.somewhere_else", "mode": "data",
+	     "type": "google_storage_bucket", "name": "somewhere_else", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "other", "public_access_prevention": "inherited"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "assets", "expressions": {}},
+	    {"address": "data.google_storage_bucket.somewhere_else", "mode": "data",
+	     "type": "google_storage_bucket", "name": "somewhere_else", "expressions": {}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "google_storage_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+
+	exposure := bucket.ObjectStorage.PublicAccess
+	if !exposure.IsKnown() || exposure.Get() {
+		t.Fatalf("prevention is enforced on this bucket and nothing here contests it: %v/%v",
+			exposure.State, exposure.Get())
+	}
+	if withheldRecorded(bucket) {
+		t.Errorf("a read of another bucket was reported as contesting this one: %v",
+			bucket.ObjectStorage.Unresolved)
+	}
 }

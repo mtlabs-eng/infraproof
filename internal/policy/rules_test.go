@@ -784,7 +784,12 @@ func TestAControlOverAReadSaysWhatIsActuallyWrong(t *testing.T) {
 //
 // The environment rule already marks them; the storage rule did not.
 func TestRedactedEvidenceSaysSo(t *testing.T) {
-	source := model.Provenance{ResourceAddress: "aws_s3_bucket_policy.p", AttributePath: "policy"}
+	// The source says it was withheld. An earlier form of this fixture left
+	// that off and the assertion passed anyway, because the flag was being
+	// taken from the fact rather than from the source — which is how the test
+	// written for one reading of the field passed on the other.
+	source := model.Provenance{
+		ResourceAddress: "aws_s3_bucket_policy.p", AttributePath: "policy", Withheld: true}
 
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
@@ -803,11 +808,12 @@ func TestRedactedEvidenceSaysSo(t *testing.T) {
 		}
 	}
 
-	// And an ordinary fact is not marked.
+	// And a value that was read is not marked, whatever the fact says.
+	read := model.Provenance{ResourceAddress: "aws_s3_bucket_acl.a", AttributePath: "acl"}
 	plain := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
 			Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
-				PublicAccess: model.Known(true, source)}},
+				PublicAccess: model.Known(true, read)}},
 	}}
 	for _, finding := range policy.StorageExposure(contract(nil), plain).Findings {
 		for _, ref := range finding.Evidence {
@@ -815,5 +821,47 @@ func TestRedactedEvidenceSaysSo(t *testing.T) {
 				t.Errorf("a reference to a value that was read claims it was not: %+v", ref)
 			}
 		}
+	}
+}
+
+// TestOnlyTheWithheldReferenceIsMarked keeps a contract field from lying in the
+// other direction.
+//
+// EvidenceRef.Redacted says the located value is sensitive and was not read —
+// a property of that value. It was set from the fact's aggregate state, so
+// every source of a redacted fact was marked, including the four block flags a
+// mapper had plainly read in order to conclude that no route is blocked. The
+// bundle told a reviewer the flags were secret when what they said was that
+// the block is wide open.
+//
+// A single-source fixture cannot tell the two readings apart, which is how the
+// test written for the first defect passed on the second.
+func TestOnlyTheWithheldReferenceIsMarked(t *testing.T) {
+	readable := model.Provenance{
+		ResourceAddress: "aws_s3_bucket_public_access_block.b", AttributePath: "block_public_acls"}
+	withheld := model.Provenance{
+		ResourceAddress: "aws_s3_bucket_policy.p", AttributePath: "policy", Withheld: true}
+
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+			Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
+				PublicAccess: model.Redacted[bool](readable, withheld)}},
+	}}
+
+	result := policy.StorageExposure(contract(nil), graph)
+	unknowns := unknownsFor(result, policy.CheckStoragePublicDeterminable)
+	if len(unknowns) != 1 {
+		t.Fatalf("unknowns = %v, want one", result.Unknowns)
+	}
+
+	marked := map[string]bool{}
+	for _, ref := range unknowns[0].Evidence {
+		marked[ref.Path] = ref.Redacted
+	}
+	if !marked["policy"] {
+		t.Error("the reference to the sensitive value does not say it was withheld")
+	}
+	if marked["block_public_acls"] {
+		t.Error("a reference to a value the mapper read says it was withheld")
 	}
 }

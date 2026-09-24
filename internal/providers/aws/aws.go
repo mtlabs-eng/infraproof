@@ -107,7 +107,7 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	}
 
 	sources := append(acl.sources, policy.sources...)
-	sources = append(sources, provenance(subject.Address, "bucket"))
+	sources = append(sources, provenanceOf(subject.Address, "bucket", subject.After.Field("bucket")))
 
 	// A grant nothing blocks settles it.
 	for _, c := range []channel{acl, policy} {
@@ -169,7 +169,7 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 		return c
 	}
 	value := acl.After.Field("acl")
-	c.sources = append(c.sources, provenance(acl.Address, "acl"))
+	c.sources = append(c.sources, provenanceOf(acl.Address, "acl", value))
 
 	switch value.State() {
 	case terraformplan.StateKnown:
@@ -200,7 +200,7 @@ func policyChannel(related []terraformplan.ResourceChange, block, account *terra
 		return c
 	}
 	document := policy.After.Field("policy")
-	c.sources = append(c.sources, provenance(policy.Address, "policy"))
+	c.sources = append(c.sources, provenanceOf(policy.Address, "policy", document))
 
 	switch document.State() {
 	case terraformplan.StateKnown:
@@ -397,7 +397,7 @@ func blockProvenance(block *terraformplan.ResourceChange) []model.Provenance {
 	}
 	out := make([]model.Provenance, 0, 4)
 	for _, flag := range []string{"block_public_acls", "block_public_policy", "ignore_public_acls", "restrict_public_buckets"} {
-		out = append(out, provenance(block.Address, flag))
+		out = append(out, provenanceOf(block.Address, flag, block.After.Field(flag)))
 	}
 	return out
 }
@@ -428,8 +428,28 @@ func beingRemoved(change terraformplan.ResourceChange) bool {
 	return change.IsDestructive() && !change.IsReplace()
 }
 
+// provenance locates a value this mapper read, and records whether it could be
+// read at all. The bundle reports that per reference, so it has to be true of
+// the reference rather than of the fact it ends up in.
 func provenance(address, attribute string) model.Provenance {
 	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAWS}
+}
+
+// withheldProvenance locates a value the plan did not let this mapper read.
+func withheldProvenance(address, attribute string) model.Provenance {
+	source := provenance(address, attribute)
+	source.Withheld = true
+	return source
+}
+
+// provenanceOf picks between them by asking the value.
+func provenanceOf(address, attribute string, value terraformplan.Value) model.Provenance {
+	switch value.State() {
+	case terraformplan.StateRedacted, terraformplan.StateUnknown:
+		return withheldProvenance(address, attribute)
+	default:
+		return provenance(address, attribute)
+	}
 }
 
 // policyGrantsPublic reports whether a bucket policy grants access to everyone,
