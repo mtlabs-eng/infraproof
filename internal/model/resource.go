@@ -91,6 +91,18 @@ type ObjectStorageCapabilities struct {
 	// not in the plan — which, for AWS and GCP, is the common case rather than
 	// an edge one.
 	PublicAccess Fact[bool]
+	// Withdrawn reports that PublicAccess was determined and then unset,
+	// because the answer was reached by choosing between a source this build
+	// may use and one it may not.
+	//
+	// The state alone cannot carry this. "The plan never determined it" is
+	// bounded by what the contract asked to be proved, and rightly so: an
+	// author who declared nothing is not waiting on evidence of privacy.
+	// "Something was determined and this build declined to use it" is a
+	// different fact, and collapsing the two let a plan that provably grants
+	// public access report that it is consistent with the contract in every
+	// supported check.
+	Withdrawn bool
 	// Unresolved names controls that could change the answer but are not in the
 	// plan: an account-level block, an organization policy. They are recorded
 	// even when PublicAccess is known, because they bound how far the evidence

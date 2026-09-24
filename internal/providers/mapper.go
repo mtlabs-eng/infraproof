@@ -216,6 +216,7 @@ func withhold(resource *model.NormalizedResource, related []terraformplan.Resour
 		slices.Sort(contested)
 		if exposure.IsKnown() {
 			resource.ObjectStorage.PublicAccess = model.Unknown[bool](exposure.Canonical().Sources...)
+			resource.ObjectStorage.Withdrawn = true
 		}
 		resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved,
 			model.MissingControl{

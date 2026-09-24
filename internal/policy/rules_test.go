@@ -865,3 +865,67 @@ func TestOnlyTheWithheldReferenceIsMarked(t *testing.T) {
 		t.Error("a reference to a value the mapper read says it was withheld")
 	}
 }
+
+// TestAWithdrawnDeterminationIsNotAnOpenQuestion separates two facts a single
+// Unknown had been conflating.
+//
+// "The plan never determined this" is bounded by what the contract asked for:
+// an author who declared nothing is not waiting on proof of privacy, so the
+// unknown is not required. "The plan determined this and the determination was
+// withdrawn as inadmissible" is a different fact entirely — something was
+// proved and this build declined to use it — and it is required whatever the
+// contract declared.
+//
+// Without the distinction, a plan setting acl = "public-read" beside a data
+// source of the same kind reported PASS, with the summary that the change is
+// consistent with the contract in every supported check. That is absence read
+// as permission at the level of a decision, which is what the rule exists to
+// refuse.
+func TestAWithdrawnDeterminationIsNotAnOpenQuestion(t *testing.T) {
+	for _, declared := range []intent.Exposure{
+		intent.ExposureUnspecified, intent.ExposurePublic, intent.ExposurePrivate,
+	} {
+		t.Run(string(declared), func(t *testing.T) {
+			graph := model.Graph{Resources: []model.NormalizedResource{
+				{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+					Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
+						PublicAccess: model.Unknown[bool](),
+						Withdrawn:    true,
+					}},
+			}}
+
+			result := policy.StorageExposure(contract(func(c *intent.Contract) {
+				c.Resources = []intent.ResourceIntent{{Family: "object_storage", Exposure: declared}}
+			}), graph)
+
+			unknowns := unknownsFor(result, policy.CheckStoragePublicDeterminable)
+			if len(unknowns) != 1 {
+				t.Fatalf("unknowns = %v, want one", result.Unknowns)
+			}
+			if !unknowns[0].Required {
+				t.Error("a determination this build withdrew must not be reported as a question the plan left open")
+			}
+		})
+	}
+}
+
+// TestAnUndeterminedExposureStaysBoundedByTheContract is the other half of the
+// test above: the distinction must not make every undetermined plan required,
+// which is the behaviour undeterminedUnknown was written to avoid.
+func TestAnUndeterminedExposureStaysBoundedByTheContract(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
+			Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
+				PublicAccess: model.Unknown[bool]()}},
+	}}
+
+	result := policy.StorageExposure(contract(func(c *intent.Contract) {
+		c.Resources = []intent.ResourceIntent{{Family: "object_storage", Exposure: intent.ExposureUnspecified}}
+	}), graph)
+
+	for _, unknown := range result.Unknowns {
+		if unknown.Required {
+			t.Fatalf("a required unknown was raised for exposure nobody asked to be proved: %v", unknown)
+		}
+	}
+}

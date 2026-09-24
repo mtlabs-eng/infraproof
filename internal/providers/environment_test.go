@@ -1425,3 +1425,88 @@ func TestAnUnrelatedReadContestsNothing(t *testing.T) {
 			bucket.ObjectStorage.Unresolved)
 	}
 }
+
+// TestAWithdrawnDeterminationIsMarkedAsOne records which of two facts an
+// undetermined exposure is.
+//
+// Downgrading Known to Unknown makes the two indistinguishable downstream, and
+// the rule bounds one of them by what the contract asked for. A plan setting
+// acl = "public-read" beside a data source of the same kind was therefore
+// reported as consistent with the contract in every supported check: the
+// determination was withdrawn, the withdrawal looked like a question nobody
+// asked, and no unknown was required.
+func TestAWithdrawnDeterminationIsMarkedAsOne(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "acl": "public-read"}}},
+	    {"address": "data.aws_s3_bucket_acl.current", "mode": "data", "type": "aws_s3_bucket_acl",
+	     "name": "current", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a", "acl": "private"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_acl.current", "mode": "data", "type": "aws_s3_bucket_acl",
+	     "name": "current", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if bucket.ObjectStorage.PublicAccess.IsKnown() {
+		t.Fatalf("the answer was settled by choosing between a change and a read: %v",
+			bucket.ObjectStorage.PublicAccess.Get())
+	}
+	if !bucket.ObjectStorage.Withdrawn {
+		t.Error("a determination was withdrawn and nothing records that it ever existed")
+	}
+}
+
+// TestAnAnswerNobodyReachedIsNotAWithdrawnOne is the other direction. A read
+// recorded beside a question the plan never settled has withdrawn nothing, and
+// marking it as a withdrawal would make every undetermined plan a required
+// unknown regardless of what the contract asked.
+func TestAnAnswerNobodyReachedIsNotAWithdrawnOne(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if bucket.ObjectStorage.Withdrawn {
+		t.Error("nothing was determined here, so nothing could have been withdrawn")
+	}
+}

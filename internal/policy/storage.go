@@ -83,6 +83,12 @@ func StorageExposure(contract intent.Contract, graph model.Graph) Result {
 			}
 		case capabilities.PublicAccess.IsKnown():
 			// The plan proves prevention. Nothing to report.
+		case capabilities.Withdrawn:
+			// Something was determined here and this build declined to use it.
+			// That is not a question the plan left open, so the contract's
+			// silence does not bound it: a reader must be told, whatever
+			// exposure was declared.
+			result.Unknowns = append(result.Unknowns, undeterminedUnknown(resource, capabilities, true))
 		case declared == intent.ExposurePrivate:
 			// The contract requires private storage and the plan cannot show
 			// it. This is the case that separates this tool from one that
@@ -135,20 +141,31 @@ func publicFinding(resource model.NormalizedResource, capabilities model.ObjectS
 	}
 }
 
-// undeterminedUnknown reports exposure the plan could not settle. It is
-// required only when the contract asked for private storage: an author who
-// declared public exposure, or none, is not waiting on evidence that it is
+// undeterminedUnknown reports exposure the rule could not settle.
+//
+// It is required only when the contract asked for private storage: an author
+// who declared public exposure, or none, is not waiting on evidence that it is
 // private, and raising a required unknown for them would make every
 // undetermined plan an UNKNOWN regardless of what was asked.
+//
+// A withdrawn determination is the exception, and the reason says which case
+// this is. The two are not interchangeable: one is a plan that answered
+// nothing, the other is an answer this build refused to use.
 func undeterminedUnknown(resource model.NormalizedResource, capabilities model.ObjectStorageCapabilities,
 	required bool) evidence.Unknown {
 
+	reason := "Public exposure could not be determined from the plan; the state of the deciding " +
+		"value is " + string(capabilities.PublicAccess.State) + "."
+	if capabilities.Withdrawn {
+		reason = "Public exposure was determined from a source this verdict may not rest on, " +
+			"so the determination was withdrawn and the exposure is not settled."
+	}
+
 	address := inline(resource.Address)
 	return evidence.Unknown{
-		CheckID:  CheckStoragePublicDeterminable,
-		Required: required,
-		Reason: "Public exposure could not be determined from the plan; the state of the deciding " +
-			"value is " + string(capabilities.PublicAccess.State) + ".",
+		CheckID:         CheckStoragePublicDeterminable,
+		Required:        required,
+		Reason:          reason,
 		ResourceAddress: &address,
 		Evidence:        referencesOf(capabilities.PublicAccess),
 	}
