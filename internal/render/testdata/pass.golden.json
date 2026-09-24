@@ -4,8 +4,9 @@
   "summary": "The change matches the declared intent.",
   "subject": {
     "intent_source": "intent.yaml",
+    "intent_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "plan_format_version": "1.x",
-    "plan_digest": "sha256:example"
+    "plan_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "verification": [
     {

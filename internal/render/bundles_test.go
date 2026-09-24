@@ -13,7 +13,8 @@ func contractBundle() evidence.Bundle {
 		Subject: evidence.Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.x",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},
@@ -61,7 +62,8 @@ func passBundle() evidence.Bundle {
 		Subject: evidence.Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.x",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},
@@ -82,7 +84,8 @@ func redactedBundle() evidence.Bundle {
 		Subject: evidence.Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.x",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationPartial, Method: "terraform-plan-json"},

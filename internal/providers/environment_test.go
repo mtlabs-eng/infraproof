@@ -1051,7 +1051,10 @@ func TestWithholdingDependsOnWhetherItWouldHaveMattered(t *testing.T) {
 
 	t.Run("a proof the read could not have touched", func(t *testing.T) {
 		// Prevention is enforced on the bucket itself, which settles the
-		// question before any binding is consulted.
+		// question before any binding is consulted. The read answers the
+		// binding question, which nothing admissible answered, so it contests
+		// nothing -- and it is not recorded either, because a settled answer
+		// leaves no open question for it to bear on.
 		raw := `{
 		  "format_version": "1.2",
 		  "resource_changes": [

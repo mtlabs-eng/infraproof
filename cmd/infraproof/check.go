@@ -127,8 +127,12 @@ var renderers = map[string]func(evidence.Bundle) ([]byte, error){
 	"markdown": render.Markdown,
 }
 
-// inputError reports unusable input. The message comes from the loader, which
-// names the file the user supplied and never a value inside it.
+// inputError reports unusable input.
+//
+// The message comes from the loader. It names the file the user supplied, and
+// it may quote a value from inside that file -- their own contract, bounded in
+// length, never a plan value and never anything marked sensitive. A validation
+// message that will not say which value is wrong sends a reader looking.
 func inputError(stderr io.Writer, err error) int {
 	fmt.Fprintf(stderr, "infraproof: %v\n", err)
 	return evidence.ExitInvalidInput

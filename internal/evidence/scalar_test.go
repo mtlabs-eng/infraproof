@@ -71,6 +71,7 @@ func TestABundleSurvivesARoundTrip(t *testing.T) {
 		Summary:       "The change violates the intent contract in 1 way.",
 		Subject: Subject{
 			IntentSource:      "intent.json",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 			PlanFormatVersion: "1.2",
 			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
@@ -200,8 +201,8 @@ func TestAStringScalarCannotCarryALineBreak(t *testing.T) {
 				SchemaVersion: SchemaVersion,
 				Decision:      DecisionBlock,
 				Summary:       "The change violates the intent contract in 1 way.",
-				Subject: Subject{IntentSource: "i", PlanFormatVersion: "1.2",
-					PlanDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+				Subject: Subject{IntentSource: "i", IntentDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+					PlanFormatVersion: "1.2", PlanDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
 				Verification: []Verification{
 					{Name: "terraform_plan", Status: VerificationVerified, Method: "terraform-plan-json"}},
 				Findings: []Finding{{

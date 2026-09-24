@@ -483,7 +483,7 @@ func (w wireContract) contract() Contract {
 		SchemaVersion:      derefString(w.SchemaVersion),
 		ChangeID:           derefString(w.ChangeID),
 		Environment:        derefString(w.Environment),
-		AllowedClouds:      w.AllowedClouds,
+		AllowedClouds:      trimmedEach(w.AllowedClouds),
 		DestructiveChanges: DestructivePolicy(derefString(w.DestructiveChanges)),
 	}
 	for _, resource := range w.Resources {
@@ -517,6 +517,21 @@ func (w wireContract) contract() Contract {
 		})
 	}
 	return contract
+}
+
+// trimmedEach applies the rule derefString applies to every other string the
+// contract carries. A list is not a reason for a different rule: a cloud named
+// with a space around it is the cloud, and refusing it told a reader their name
+// was unrecognized when it was not.
+func trimmedEach(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, strings.TrimSpace(value))
+	}
+	return out
 }
 
 func derefString(s *string) string {

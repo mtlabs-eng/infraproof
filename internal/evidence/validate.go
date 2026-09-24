@@ -64,9 +64,10 @@ func (b Bundle) inlineFields() [][2]string {
 	fields := [][2]string{
 		{"subject.intent_source", b.Subject.IntentSource},
 		{"subject.plan_format_version", b.Subject.PlanFormatVersion},
-		// The digest is computed rather than plan-derived, but the rule is
+		// The digests are computed rather than plan-derived, but the rule is
 		// about what a field can carry, not about who happens to fill it.
 		{"subject.plan_digest", b.Subject.PlanDigest},
+		{"subject.intent_digest", b.Subject.IntentDigest},
 	}
 	for i, check := range b.Verification {
 		fields = append(fields,
@@ -100,13 +101,40 @@ func (b Bundle) validateEnvelope() []error {
 	if strings.TrimSpace(b.Subject.PlanFormatVersion) == "" {
 		errs = append(errs, violation("subject.plan_format_version", "must not be empty"))
 	}
-	if !strings.HasPrefix(b.Subject.PlanDigest, digestPrefix) ||
-		strings.TrimSpace(strings.TrimPrefix(b.Subject.PlanDigest, digestPrefix)) == "" {
-		errs = append(errs, violation("subject.plan_digest", "must be a non-empty digest prefixed with %q", digestPrefix))
+	if err := validateDigest("subject.plan_digest", b.Subject.PlanDigest); err != nil {
+		errs = append(errs, err)
+	}
+	if err := validateDigest("subject.intent_digest", b.Subject.IntentDigest); err != nil {
+		errs = append(errs, err)
 	}
 
 	return errs
 }
+
+// validateDigest holds a digest field to what the contract says it is: sha256
+// over the exact input bytes.
+//
+// The check was the prefix and a non-blank remainder, so "sha256:the same plan
+// as yesterday" passed. A digest is the only thing a reader has to correlate a
+// report with the input it came from, and a field that accepts prose is one a
+// later producer fills with prose.
+func validateDigest(path, value string) error {
+	body, ok := strings.CutPrefix(value, digestPrefix)
+	if !ok || len(body) != sha256HexLength {
+		return violation(path, "must be %q followed by %d hexadecimal characters",
+			digestPrefix, sha256HexLength)
+	}
+	for _, char := range body {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return violation(path, "must be %q followed by %d hexadecimal characters",
+				digestPrefix, sha256HexLength)
+		}
+	}
+	return nil
+}
+
+// sha256HexLength is how many characters a sha256 digest takes in hexadecimal.
+const sha256HexLength = 64
 
 // validateSchemaVersion accepts any "1.<minor>" version. Minor additions are
 // backward-compatible within the major version; a different major version is a

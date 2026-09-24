@@ -719,3 +719,45 @@ func TestAPlanValueInARecordDoesNotCostAVerdict(t *testing.T) {
 			stdout)
 	}
 }
+
+// TestTwoContractsAtOnePathAreTellableApart makes the sentence in
+// docs/INTENT-CONTRACT.md true: InfraProof records the contract's digest.
+//
+// The digest was computed at load and reached no output, so a bundle recorded
+// only the path a contract was read from. Two different contracts at one path
+// — a file edited between runs, a path that is a symlink, a checkout on another
+// branch — produced byte-identical evidence, and the plan was identifiable
+// while the thing it was compared against was not.
+func TestTwoContractsAtOnePathAreTellableApart(t *testing.T) {
+	dir := t.TempDir()
+	contract := filepath.Join(dir, "intent.json")
+	plan := write(t, "plan.json", passingPlan)
+
+	render := func(body string) string {
+		t.Helper()
+		if err := os.WriteFile(contract, []byte(body), 0o600); err != nil {
+			t.Fatalf("writing the contract: %v", err)
+		}
+		code, stdout, stderr := check(t, "--intent", contract, "--plan", plan)
+		if code != evidence.ExitPass {
+			t.Fatalf("exit = %d: %s", code, stderr)
+		}
+		return stdout
+	}
+
+	first := render(privateIntent)
+	second := render(strings.Replace(privateIntent,
+		`"change_id": "add-private-staging-assets"`, `"change_id": "add-private-staging-buckets"`, 1))
+
+	if first == second {
+		t.Fatal("two different contracts at one path produced identical evidence")
+	}
+
+	var bundle evidence.Bundle
+	if err := json.Unmarshal([]byte(first), &bundle); err != nil {
+		t.Fatalf("the bundle does not parse: %v", err)
+	}
+	if !strings.HasPrefix(bundle.Subject.IntentDigest, "sha256:") {
+		t.Errorf("intent digest = %q, want a sha256 digest", bundle.Subject.IntentDigest)
+	}
+}

@@ -416,7 +416,8 @@ func TestNoFieldCanForgeDocumentStructure(t *testing.T) {
 	// cell, a backtick closes a code span, and a Markdown renderer that
 	// permits HTML — GitHub's does — reads a tag mid-sentence as real
 	// structure.
-	const forgery = "x` | forged | cell | <h1>ALL CLEAR</h1> <!-- x"
+	const forgery = "x` | forged | cell | <h1>ALL CLEAR</h1> <!-- x " +
+		"![](https://host.invalid/p.png) [link](https://host.invalid/) [ref]: https://host.invalid/"
 	const benign = "ordinary-value"
 
 	paths := stringFieldsOf(hostileBundle())
@@ -509,6 +510,14 @@ func walkStrings(value reflect.Value, path string, visit func(string)) {
 			walkStrings(value.Index(i), fmt.Sprintf("%s[%d]", path, i), visit)
 		}
 	case reflect.Struct:
+		if value.Type() == reflect.TypeFor[evidence.Scalar]() {
+			// A Scalar holds its text unexported, so the walk finds nothing
+			// inside it and the field went uncovered. "A field added later is
+			// covered by what exists" does not hold for anything behind
+			// unexported state, and these two carry plan values.
+			visit(path)
+			return
+		}
 		for i := range value.NumField() {
 			field := value.Type().Field(i)
 			if !field.IsExported() {
@@ -590,6 +599,15 @@ func structureOf(document string) string {
 			shape = append(shape, fmt.Sprintf("|%d", countUnescaped(trimmed, '|')))
 		case strings.HasPrefix(trimmed, "- "):
 			shape = append(shape, "-")
+		}
+
+		// A link, an image and a link reference definition are all structure a
+		// reader can act on: an image fires a request from a report this build
+		// exists to keep offline, and a definition consumes the paragraph it
+		// sits in. Each of them needs an opening bracket, and prose escapes
+		// one, so an unescaped bracket outside a code span is the signal.
+		if brackets := countUnescaped(withoutCodeSpans(line), '['); brackets > 0 {
+			shape = append(shape, fmt.Sprintf("[%d", brackets))
 		}
 		// Raw HTML is structure wherever it sits, not only at the start of a
 		// line: a renderer that permits it — GitHub's does — reads a

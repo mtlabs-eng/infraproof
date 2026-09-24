@@ -40,9 +40,10 @@ func TestHelpSucceeds(t *testing.T) {
 
 func TestUsageErrorsExitTen(t *testing.T) {
 	cases := map[string][]string{
-		"no arguments":       {},
-		"unknown flag":       {"--bogus"},
-		"unimplemented verb": {"check", "--intent", "intent.yaml"},
+		"no arguments":   {},
+		"unknown flag":   {"--bogus"},
+		"unknown verb":   {"verify"},
+		"a missing flag": {"check", "--intent", "intent.json"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {

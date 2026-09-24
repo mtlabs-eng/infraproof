@@ -896,3 +896,52 @@ func TestAnEmptyConstraintIsStillAConstraint(t *testing.T) {
 		})
 	}
 }
+
+// TestSurroundingSpaceIsNotPartOfAValue keeps one rule for every string the
+// contract carries.
+//
+// derefString trims, so schema_version, environment and family all accept
+// surrounding space. allowed_clouds is a list and went through no such thing,
+// so a contract this build would otherwise accept was refused for a space —
+// and a reader was told their cloud is unrecognized when the name was right.
+func TestSurroundingSpaceIsNotPartOfAValue(t *testing.T) {
+	contract, err := intent.Parse([]byte(`{
+	  "schema_version": " 1.0 ", "change_id": " c ", "environment": " staging ",
+	  "allowed_clouds": [" aws "], "destructive_changes": " forbidden ",
+	  "resources": [{"family": " object_storage ", "exposure": " private "}]
+	}`), "c.json")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if len(contract.AllowedClouds) != 1 || contract.AllowedClouds[0] != "aws" {
+		t.Errorf("allowed clouds = %q, want [aws]", contract.AllowedClouds)
+	}
+}
+
+// TestAnErrorQuotesAValueWithoutReprintingTheFile keeps a validation message
+// readable.
+//
+// Naming the offending value is what makes a message actionable, and the
+// values are the reader's own contract rather than plan data. The length is
+// theirs too: a single entry may be a megabyte, and a message is written to a
+// terminal.
+func TestAnErrorQuotesAValueWithoutReprintingTheFile(t *testing.T) {
+	huge := strings.Repeat("a", 100000)
+	_, err := intent.Parse([]byte(`{
+	  "schema_version": "1.0", "change_id": "c", "environment": "staging",
+	  "allowed_clouds": ["`+huge+`"], "destructive_changes": "forbidden",
+	  "resources": [{"family": "object_storage", "exposure": "private"}]
+	}`), "c.json")
+	if err == nil {
+		t.Fatal("a cloud nobody supports was accepted")
+	}
+
+	if len(err.Error()) > 1000 {
+		t.Errorf("the message is %d bytes; it reprints the contract rather than quoting it",
+			len(err.Error()))
+	}
+	if !strings.Contains(err.Error(), "aaa") {
+		t.Errorf("the message does not say which value is wrong: %q", err.Error())
+	}
+}

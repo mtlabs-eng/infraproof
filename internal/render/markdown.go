@@ -39,6 +39,7 @@ func Markdown(b evidence.Bundle) ([]byte, error) {
 func subjectBlock(s evidence.Subject) string {
 	return strings.Join([]string{
 		"- Intent source: " + code(s.IntentSource),
+		"- Intent digest: " + code(s.IntentDigest),
 		"- Plan format version: " + code(s.PlanFormatVersion),
 		"- Plan digest: " + code(s.PlanDigest),
 	}, "\n")
@@ -303,13 +304,28 @@ func leadingDigits(s string) int {
 	return len(s)
 }
 
-// inlineText neutralises raw HTML in a free-text field. It is applied only to
-// plain prose, never to content inside a code span: a span already renders its
-// contents literally, so escaping there would show a reader "&amp;amp;" where the
-// data says "&amp;".
+// inlineText neutralises the markup a free-text field could otherwise open. It
+// is applied only to plain prose, never to content inside a code span: a span
+// already renders its contents literally, so escaping there would show a reader
+// "&amp;amp;" where the data says "&amp;".
+//
+// Raw HTML is one half: a renderer that permits it reads a mid-sentence tag as
+// real structure. The other half is the bracket. An image is a request the
+// report makes on the reader's behalf, to a host the text names, from a build
+// whose whole premise is that nothing leaves the machine; a link invites a
+// click; a reference definition consumes the paragraph it sits in. All three
+// need an opening bracket, so the bracket is escaped and none of them can
+// form. A backslash before it is how CommonMark says "this is the character,
+// not the syntax", and it renders as the character.
 func inlineText(s string) string {
+	// Every prose path, for the reason code() collapses them in a span: the
+	// bundle forbids a break in the four fields that existed when the rule was
+	// written, and a rule that names its fields cannot cover a field added
+	// later.
+	s = collapseBreaks(s)
 	s = strings.ReplaceAll(s, "&", "&amp;")
-	return strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	return strings.ReplaceAll(s, "[", `\[`)
 }
 
 // code wraps a value in a Markdown code span wide enough to contain it. A value
@@ -339,9 +355,24 @@ func code(s string) string {
 // collapseBreaks turns every line ending into a space, so a value cannot open a
 // block wherever it is rendered.
 func collapseBreaks(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	return strings.ReplaceAll(s, "\n", " ")
+	return strings.Map(func(char rune) rune {
+		if isControl(char) {
+			return ' '
+		}
+		return char
+	}, s)
+}
+
+// isControl reports the characters a report must not carry through.
+//
+// A break ends a code span and, if it is blank, the paragraph too. The rest of
+// the range is the same problem in a different renderer: a report is read in a
+// terminal as often as in a browser, and an escape sequence there moves the
+// cursor, clears the line or colours what follows, so a value carrying one can
+// hide the finding under it. None of them is text, and a plan author chooses
+// every one that reaches here.
+func isControl(char rune) bool {
+	return char < 0x20 || char == 0x7f || (char >= 0x80 && char <= 0x9f)
 }
 
 // optionalCode renders a pointer as code, or "-" when it is nil.

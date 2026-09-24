@@ -13,6 +13,7 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
   "summary": "The requested private storage change enables public access.",
   "subject": {
     "intent_source": "intent.yaml",
+    "intent_digest": "sha256:<hex>",
     "plan_format_version": "1.x",
     "plan_digest": "sha256:<hex>"
   },
@@ -86,6 +87,8 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
 - A value marked `REDACTED`, `UNKNOWN`, or `ABSENT` carries no value. Only a `KNOWN` fact has a value at all, so an unavailable or sensitive field cannot be presented as one.
 - Evidence records a location, never a value. An evidence reference has no value field, so raw source data cannot travel through evidence.
 - `plan_digest` is calculated over the exact input bytes and allows correlation without embedding the plan.
+- `intent_digest` is the same over the intent contract. A path names where a contract was read from, not which contract it was, so without it two different contracts at one path produce identical evidence.
+- Both digests are `sha256:` followed by sixty-four lowercase hexadecimal characters, and a bundle carrying anything else is invalid.
 - Timestamps are omitted from canonical golden output unless supplied externally.
 
 ## Enumerations

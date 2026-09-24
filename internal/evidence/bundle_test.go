@@ -15,7 +15,8 @@ func blockBundle() Bundle {
 		Subject: Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.x",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []Verification{
 			{Name: "terraform_plan", Status: VerificationVerified, Method: "terraform-plan-json"},
@@ -493,6 +494,57 @@ func TestProseFieldsRejectLineBreaks(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "single line") {
 				t.Fatalf("error %q does not explain the single-line requirement", err.Error())
+			}
+		})
+	}
+}
+
+// TestADigestMustBeADigest closes a field that accepted anything after its
+// prefix.
+//
+// The contract calls these fields a sha256 digest over the exact input bytes,
+// and a reader correlating a report with an input has only this to correlate
+// on. "sha256:probably-the-same-plan" satisfied a prefix check, and a field
+// that accepts prose is a field a later producer will fill with prose.
+func TestADigestMustBeADigest(t *testing.T) {
+	const good = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+	bad := map[string]string{
+		"no prefix":        "0000000000000000000000000000000000000000000000000000000000000000",
+		"prose":            "sha256:the same plan as yesterday",
+		"too short":        "sha256:00",
+		"too long":         good + "00",
+		"upper case":       "sha256:" + strings.Repeat("A", 64),
+		"not hexadecimal":  "sha256:" + strings.Repeat("g", 64),
+		"another function": "sha512:" + strings.Repeat("0", 64),
+	}
+
+	for _, field := range []struct {
+		name string
+		set  func(*Bundle, string)
+	}{
+		{"plan_digest", func(b *Bundle, v string) { b.Subject.PlanDigest = v }},
+		{"intent_digest", func(b *Bundle, v string) { b.Subject.IntentDigest = v }},
+	} {
+		t.Run(field.name, func(t *testing.T) {
+			for name, digest := range bad {
+				t.Run(name, func(t *testing.T) {
+					b := blockBundle()
+					field.set(&b, digest)
+					err := b.Validate()
+					if err == nil {
+						t.Fatalf("%s %q should be rejected", field.name, digest)
+					}
+					if !strings.Contains(err.Error(), field.name) {
+						t.Fatalf("error %q does not name the field", err.Error())
+					}
+				})
+			}
+
+			b := blockBundle()
+			field.set(&b, good)
+			if err := b.Validate(); err != nil {
+				t.Fatalf("a well-formed digest was rejected: %v", err)
 			}
 		})
 	}

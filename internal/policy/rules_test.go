@@ -18,7 +18,7 @@ func contract(mutate func(*intent.Contract)) intent.Contract {
 		AllowedClouds:      []string{"aws"},
 		DestructiveChanges: intent.DestructiveForbidden,
 		Resources:          []intent.ResourceIntent{{Family: "object_storage", Exposure: intent.ExposurePrivate}},
-		Digest:             "sha256:abc",
+		Digest:             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 		Source:             "intent.json",
 	}
 	if mutate != nil {

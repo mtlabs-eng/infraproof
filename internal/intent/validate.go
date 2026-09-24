@@ -76,15 +76,36 @@ func (c Contract) validateEnvelope() []error {
 	case !c.DestructiveChanges.Valid():
 		errs = append(errs, fmt.Errorf(
 			"destructive_changes is %q, want %q or %q",
-			c.DestructiveChanges, DestructiveForbidden, DestructiveAllowedWithWarning))
+			quotable(string(c.DestructiveChanges)), DestructiveForbidden, DestructiveAllowedWithWarning))
 	}
 
 	return errs
 }
 
+// quotable bounds a value a message quotes back.
+//
+// The values are the reader's own contract, so quoting one is what makes a
+// message actionable. Its length is theirs too, and a single entry may be a
+// megabyte: a message is written to a terminal, and one that reprints the file
+// is one nobody reads to the end. The truncation is stated rather than silent.
+func quotable(value string) string {
+	const limit = 80
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "… (truncated)"
+}
+
 // validateSchemaVersion holds the compatibility boundary at the major version.
-// A later minor version may add fields this build can safely ignore; a later
-// major version may redefine one it believes it understands.
+// A later major version may redefine a field this build believes it
+// understands, so it is refused.
+//
+// A later minor version is accepted here and then refused by the loader, which
+// rejects unknown fields: this build reads the version it knows and will not
+// guess at what a field it has never heard of was meant to constrain. Accepting
+// the version while refusing the document is the honest pair, because the
+// version says what the document claims to be and the fields say what it asks
+// for.
 func validateSchemaVersion(version string) error {
 	major, minor, found := strings.Cut(version, ".")
 	if !found {
@@ -146,9 +167,9 @@ func (c Contract) validateClouds() []error {
 		switch {
 		case !contains(knownClouds, cloud):
 			errs = append(errs, fmt.Errorf("allowed_clouds[%d] is %q, want one of %s",
-				i, cloud, strings.Join(knownClouds, ", ")))
+				i, quotable(cloud), strings.Join(knownClouds, ", ")))
 		case seen[cloud]:
-			errs = append(errs, fmt.Errorf("allowed_clouds[%d] repeats %q", i, cloud))
+			errs = append(errs, fmt.Errorf("allowed_clouds[%d] repeats %q", i, quotable(cloud)))
 		}
 		seen[cloud] = true
 	}
@@ -173,12 +194,12 @@ func (c Contract) validateResources() []error {
 			errs = append(errs, fmt.Errorf("resources[%d].family is required", i))
 		case !contains(knownFamilies, resource.Family):
 			errs = append(errs, fmt.Errorf("resources[%d].family is %q, want one of %s",
-				i, resource.Family, strings.Join(knownFamilies, ", ")))
+				i, quotable(resource.Family), strings.Join(knownFamilies, ", ")))
 		case seen[resource.Family]:
 			// One entry constrains a whole family, so two entries for one
 			// family either agree, and one is noise, or disagree, and neither
 			// can be applied.
-			errs = append(errs, fmt.Errorf("resources[%d] repeats family %q", i, resource.Family))
+			errs = append(errs, fmt.Errorf("resources[%d] repeats family %q", i, quotable(resource.Family)))
 		}
 		seen[resource.Family] = true
 
@@ -188,7 +209,7 @@ func (c Contract) validateResources() []error {
 				i, ExposureUnspecified))
 		case !resource.Exposure.Valid():
 			errs = append(errs, fmt.Errorf("resources[%d].exposure is %q, want %q, %q or %q",
-				i, resource.Exposure, ExposurePrivate, ExposurePublic, ExposureUnspecified))
+				i, quotable(string(resource.Exposure)), ExposurePrivate, ExposurePublic, ExposureUnspecified))
 		}
 	}
 	return errs
@@ -219,7 +240,7 @@ func (c Contract) validateConstraints() []error {
 			errs = append(errs, fmt.Errorf("constraints.required_tags has a blank key"))
 		}
 		if strings.TrimSpace(tags[key]) == "" {
-			errs = append(errs, fmt.Errorf("constraints.required_tags[%q] must not be blank", key))
+			errs = append(errs, fmt.Errorf("constraints.required_tags[%q] must not be blank", quotable(key)))
 		}
 	}
 	return errs

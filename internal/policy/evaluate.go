@@ -53,6 +53,7 @@ func Evaluate(contract intent.Contract, graph model.Graph, subject Subject) evid
 			// The path is supplied by whoever ran this build, and a file name
 			// may hold a line break on every platform this runs on.
 			IntentSource:      inline(contract.Source),
+			IntentDigest:      contract.Digest,
 			PlanFormatVersion: subject.PlanFormatVersion,
 			PlanDigest:        subject.PlanDigest,
 		},

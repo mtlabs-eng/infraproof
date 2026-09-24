@@ -183,7 +183,8 @@ func TestFindingsSatisfyTheEvidenceContract(t *testing.T) {
 		Subject: evidence.Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.2",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},
@@ -255,7 +256,8 @@ func TestAFindingFromAnUnknownCloudStillValidates(t *testing.T) {
 		Decision:      evidence.DecisionBlock,
 		Summary:       "The change grants public access to object storage.",
 		Subject: evidence.Subject{
-			IntentSource: "intent.yaml", PlanFormatVersion: "1.2", PlanDigest: "sha256:example",
+			IntentSource: "intent.yaml", PlanFormatVersion: "1.2", PlanDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},
