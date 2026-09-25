@@ -1983,6 +1983,21 @@ func TestEachMapperAnswersOneQuestionPerQuestion(t *testing.T) {
 				}
 			}
 
+			// Determinism, asked of two separately built candidates rather
+			// than of one expression compared with itself. A role is the key
+			// the withholding rule joins on, so an answer that depends on
+			// anything but the pair it is given joins the wrong things.
+			for _, group := range tc.groups {
+				for _, candidateType := range group {
+					first := roles.RoleOf(subject, change(candidateType, "candidate"))
+					second := roles.RoleOf(change(tc.subject, "subject"), change(candidateType, "candidate"))
+					if first != second {
+						t.Errorf("%s was given two answers about %s: %q and %q",
+							candidateType, tc.subject, first, second)
+					}
+				}
+			}
+
 			for _, candidateType := range tc.silent {
 				if role := roles.RoleOf(subject, change(candidateType, "other")); role != "" {
 					t.Errorf("%s was given the question %q about %s", candidateType, role, tc.subject)

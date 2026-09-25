@@ -40,6 +40,27 @@ func FuzzMarkdownStructure(f *testing.F) {
 	f.Add("&amp;lt;h1&amp;gt;")
 	f.Add("a\\`b")
 
+	// Where the oracle itself was wrong, twice. Escapes and code spans
+	// interleave: outside a span a backslash makes the next character literal,
+	// so an escaped backtick is not part of a run and "```0```[" renders inert;
+	// inside a span a backslash is ordinary, so "`[\\`" is a closed span whose
+	// content ends in one. A seed that only the fuzzer had found is a seed the
+	// next reader loses.
+	f.Add("```0```[")
+	f.Add("``````0``````[")
+	f.Add("`[\\")
+	f.Add("`\\`[")
+	f.Add("\\`[")
+	f.Add("``a``[")
+	f.Add("`0`[")
+	f.Add("\\\\[")
+	// A value ending in a backslash, which is the case that tells the two
+	// directions apart: inside a code span the backslash is ordinary, so the
+	// fence that follows it still closes the span. An oracle that honoured
+	// escapes there would pair this span's opener with the next span's, and
+	// swallow the cell boundary between them.
+	f.Add("x\\")
+
 	f.Fuzz(func(t *testing.T, value string) {
 		// The contract refuses a line break in an inline field, which is a
 		// stronger answer than escaping and is asserted in internal/evidence.

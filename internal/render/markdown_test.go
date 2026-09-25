@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -588,6 +589,10 @@ func walkSettable(value reflect.Value, path, target, text string, done *bool) {
 // headings, table rows and list items, with all inline content removed. Two
 // documents with the same structure differ only in what they say, never in
 // what they are.
+// autolink is CommonMark's absolute-URI autolink: a scheme of two or more
+// characters, a colon, and no space or angle bracket until the closing one.
+var autolink = regexp.MustCompile(`<[A-Za-z][A-Za-z0-9+.\-]{1,31}:[^<>[:space:]]*>`)
+
 func structureOf(document string) string {
 	var shape []string
 	for _, line := range strings.Split(document, "\n") {
@@ -615,9 +620,17 @@ func structureOf(document string) string {
 		// line: a renderer that permits it — GitHub's does — reads a
 		// mid-sentence tag as a real heading. Inside a code span it is inert,
 		// because the backticks protect it, so the spans come out first.
-		if bare := withoutCodeSpans(line); strings.Contains(bare, "<h1") ||
-			strings.Contains(bare, "<!--") {
+		bare := withoutCodeSpans(line)
+		if strings.Contains(bare, "<h1") || strings.Contains(bare, "<!--") {
 			shape = append(shape, "html")
+		}
+		// An autolink is a link nobody wrote as one: CommonMark turns
+		// "<scheme:anything>" into a live anchor, and a report that offers a
+		// reader something to click is a report that reaches the network this
+		// build exists to stay off. It is matched by none of the three signals
+		// above, which look for a bracket or for a tag by name.
+		if autolink.MatchString(bare) {
+			shape = append(shape, "autolink")
 		}
 	}
 	return strings.Join(shape, " ")
@@ -839,11 +852,17 @@ func TestABackslashSurvivesTheReport(t *testing.T) {
 // test blind to exactly the mutant it exists to catch: a code() that opens a
 // span and never closes it.
 func TestAnUnterminatedCodeSpanIsNotASpan(t *testing.T) {
+	// The last three are the interleaving of the two rules, and every expected
+	// answer here was checked against a CommonMark implementation rather than
+	// reasoned about. A backslash inside a span is an ordinary character, so
+	// the run after "b\\" still closes the span and what follows is live.
 	for name, line := range map[string]string{
-		"one unmatched tick":    "a ` <h1>live</h1>",
-		"mismatched runs":       "a ``b` <h1>live</h1>",
-		"closed then unmatched": "a `b`` c <h1>live</h1>",
-		"trailing run":          "a `b` c <h1>live</h1> `",
+		"one unmatched tick":                       "a ` <h1>live</h1>",
+		"mismatched runs":                          "a ``b` <h1>live</h1>",
+		"closed then unmatched":                    "a `b`` c <h1>live</h1>",
+		"trailing run":                             "a `b` c <h1>live</h1> `",
+		"a span whose content ends in a backslash": "a `b\\`<h1>live</h1>` c",
+		"and the same with text after it":          "a `b\\` c <h1>live</h1>",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if bare := withoutCodeSpans(line); !strings.Contains(bare, "<h1") {
@@ -853,8 +872,59 @@ func TestAnUnterminatedCodeSpanIsNotASpan(t *testing.T) {
 	}
 
 	// A properly closed span does protect its content.
-	if bare := withoutCodeSpans("a `<h1>inert</h1>` b"); strings.Contains(bare, "<h1") {
-		t.Errorf("a closed code span did not protect its content: %q", bare)
+	for name, line := range map[string]string{
+		"a closed span":                       "a `<h1>inert</h1>` b",
+		"a span opened after an escaped tick": "a \\`b`<h1>inert</h1>` c",
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Escaping the first backtick leaves the run one shorter, so the
+			// span opens later and closes around the tag. CommonMark agrees;
+			// an oracle that skipped the character after every backslash does
+			// not, and would report this as live.
+			if bare := withoutCodeSpans(line); strings.Contains(bare, "<h1") {
+				t.Errorf("a closed code span did not protect its content: %q -> %q", line, bare)
+			}
+		})
+	}
+}
+
+// TestTheShapeOfADocumentIncludesEveryLinkAReaderCanFollow pins the oracle
+// rather than the renderer.
+//
+// Prose escapes "<", so no field can produce an autolink today and the umbrella
+// test cannot exercise this signal through the renderer. That is an argument
+// for testing the signal here, not for leaving it out: what structureOf calls
+// structure is the definition the umbrella test compares against, and a
+// definition that omits a live link would pass a report carrying one. An
+// autolink is matched by none of the other signals -- there is no bracket and
+// no tag name to look for.
+func TestTheShapeOfADocumentIncludesEveryLinkAReaderCanFollow(t *testing.T) {
+	plain := structureOf("a line of text")
+
+	for name, line := range map[string]string{
+		"an absolute URI":   "a <https://host.invalid/x> b",
+		"another scheme":    "a <mailto:someone@host.invalid> b",
+		"no space needed":   "<ftp:x>",
+		"beside other text": "The change grants access. <https://host.invalid/> Remove it.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if structureOf(line) == plain {
+				t.Errorf("a live link is not part of this document's shape: %q", line)
+			}
+		})
+	}
+
+	for name, line := range map[string]string{
+		"escaped, as prose renders it": "a &lt;https://host.invalid/x&gt; b",
+		"inside a code span":           "a `<https://host.invalid/x>` b",
+		"not a scheme":                 "a <not a uri> b",
+		"no colon":                     "a <https> b",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if structureOf(line) != plain {
+				t.Errorf("inert text was counted as a link: %q -> %q", line, structureOf(line))
+			}
+		})
 	}
 }
 

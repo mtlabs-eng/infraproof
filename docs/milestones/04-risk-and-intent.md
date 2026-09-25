@@ -93,6 +93,20 @@ Carried forward rather than solved here:
   candidates are accounts and an account's are containers. Renaming both
   consistently changes nothing, so the tests pin that distinct questions carry
   distinct names and not which names they are.
+- The oracle the report's structural invariant is compared against is a
+  hand-written model of a CommonMark rule, and remains one. An independent
+  review differentially tested it against a reference CommonMark implementation
+  over 335,922 exhaustively enumerated inputs with exact-equality comparison and
+  120,000 random ones, finding no disagreement in either direction. That is
+  evidence and not a proof: the model can drift from the specification the next
+  time either is touched, and the inputs that caught it drifting twice are
+  pinned as seeds so a reader does not have to rediscover them.
+- `validateProse` refuses a value that renders to nothing, which is stronger
+  than what the contract refuses elsewhere. It is safe because no prose field
+  this build produces is wholly plan-derived, and nothing states that. A
+  producer that interpolated a bare plan value into a claim, a remediation, a
+  summary or an unknown's reason would turn a judgeable plan into an internal
+  error.
 - A report escapes what would open Markdown structure and what a terminal acts
   on. It does not strip bidirectional or zero-width characters, which change
   what a reader sees without changing what the bytes say. Stripping them is a
