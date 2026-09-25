@@ -21,12 +21,12 @@ Owns argument parsing, file access, output selection, exit codes, and user-facin
 Initial command:
 
 ```text
-infraproof check --intent <path> --plan <path> --format json|markdown
+infraproof check --intent <path> --plan <path> [--format json|markdown]
 ```
 
 ### Intent loader
 
-Loads and validates a versioned YAML or JSON Intent Contract. It rejects invalid structure and preserves omitted values as unspecified rather than inventing defaults.
+Loads and validates a versioned Intent Contract. It rejects invalid structure and preserves omitted values as unspecified rather than inventing defaults. This build reads JSON only; see `docs/INTENT-CONTRACT.md` for why YAML is deferred.
 
 ### Terraform plan loader
 
@@ -39,6 +39,8 @@ Loads the documented Terraform plan JSON representation. It validates supported 
 - unknown-value metadata;
 - sensitive-value metadata;
 - configuration references needed for dependency edges.
+
+A reference is not a relation. Correlation admits one only where a mapper declares the relation whole — the type that claims, the argument carrying the claim, and the type claimed — so a mention, an ordering dependency, or an interpolation of another resource's name cannot become a governance edge. A mapper that declares relations and declares none from a type has said that type makes no claims, and every reference it writes is a mention. A mapper that understands a type and declares no relations at all has said nothing, and its references are admitted, because narrowing what is not understood drops correlations this build cannot reason about either way. Silence and a statement are different answers.
 
 The loader must not render raw sensitive values in diagnostics.
 

@@ -40,9 +40,10 @@ func TestHelpSucceeds(t *testing.T) {
 
 func TestUsageErrorsExitTen(t *testing.T) {
 	cases := map[string][]string{
-		"no arguments":       {},
-		"unknown flag":       {"--bogus"},
-		"unimplemented verb": {"check", "--intent", "intent.yaml"},
+		"no arguments":   {},
+		"unknown flag":   {"--bogus"},
+		"unknown verb":   {"verify"},
+		"a missing flag": {"check", "--intent", "intent.json"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -62,14 +63,27 @@ func TestUsageErrorsExitTen(t *testing.T) {
 	}
 }
 
-// TestNoAnalysisCommandIsClaimed guards the milestone boundary: this build
-// models and renders an Evidence Bundle but cannot verify anything yet, and
-// must not imply otherwise.
-func TestNoAnalysisCommandIsClaimed(t *testing.T) {
+// TestHelpDoesNotOverclaim keeps the usage text honest about the boundary of
+// this build. It has verification now, and the earlier form of this test — that
+// no verification was claimed — no longer describes anything true. What still
+// needs holding is the other direction: the two limits a reader would otherwise
+// discover only by being wrong about them.
+func TestHelpDoesNotOverclaim(t *testing.T) {
 	var stdout, stderr strings.Builder
 
 	run([]string{"--help"}, &stdout, &stderr)
-	if !strings.Contains(stdout.String(), "not available") {
-		t.Fatalf("help %q does not state that verification is unavailable", stdout.String())
+	help := stdout.String()
+
+	if !strings.Contains(help, "check") {
+		t.Fatal("help does not mention the verification command")
+	}
+	if !strings.Contains(strings.ToLower(help), "yaml") {
+		t.Error("help does not say that the contract must be JSON")
+	}
+	if !strings.Contains(strings.ToLower(help), "network") {
+		t.Error("help does not say that the command reaches no network")
+	}
+	if strings.Contains(strings.ToLower(help), "live state") {
+		t.Error("help mentions live state, which no build has")
 	}
 }

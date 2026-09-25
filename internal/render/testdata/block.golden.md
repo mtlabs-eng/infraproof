@@ -5,8 +5,9 @@ The requested private storage change enables public access.
 ## Subject
 
 - Intent source: `intent.yaml`
+- Intent digest: `sha256:0000000000000000000000000000000000000000000000000000000000000000`
 - Plan format version: `1.x`
-- Plan digest: `sha256:example`
+- Plan digest: `sha256:0000000000000000000000000000000000000000000000000000000000000000`
 
 ## Verification
 
@@ -21,7 +22,7 @@ The requested private storage change enables public access.
 
 Object storage permits public access.
 
-- Resource: `aws_s3_bucket.assets` (aws, registry.terraform.io/hashicorp/aws)
+- Resource: `aws_s3_bucket.assets` (aws, `registry.terraform.io/hashicorp/aws`)
 - Expected: `object_storage.public_access` = `false`
 - Observed: `object_storage.public_access` = `true` (KNOWN)
 - Evidence: terraform_plan `aws_s3_bucket.assets` `resource_changes[].change.after`

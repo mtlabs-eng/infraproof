@@ -1,11 +1,12 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "decision": "UNKNOWN",
   "summary": "Public access could not be determined from the supplied plan.",
   "subject": {
     "intent_source": "intent.yaml",
+    "intent_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "plan_format_version": "1.x",
-    "plan_digest": "sha256:example"
+    "plan_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "verification": [
     {

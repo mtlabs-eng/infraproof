@@ -24,7 +24,7 @@ The initial product is an offline CLI. It consumes a structured intent contract 
 
 ## Status
 
-Two milestones are implemented.
+Four milestones are implemented.
 
 **Evidence Bundle** — modelled, validated, ordered canonically, and rendered as stable JSON and
 Markdown, with an exit-code contract.
@@ -42,9 +42,6 @@ outside the plan — an account-level block on AWS, an organization policy behin
 default. Where that is so, the answer is `UNKNOWN` and the missing control is named. That is the
 common case, not an edge one, and reporting `PASS` there would be a guess.
 
-Intent loading and the decision engine are not implemented, so the `check` command below is not yet
-available.
-
 **A result is about the plan, not about the infrastructure.** `PASS` means no plan-provable public
 exposure was found among the resource types this build understands — not that nothing is public. See
 [what a result means](docs/PRODUCT.md#what-a-result-means).
@@ -53,19 +50,45 @@ exposure was found among the resource types this build understands — not that 
 go test ./...
 go vet ./...
 go run ./cmd/infraproof --version
+```
+
+## Verifying a change
+
+```sh
+go run ./cmd/infraproof check \
+  --intent examples/intent.json \
+  --plan examples/tfplan.json \
+  --format markdown
+```
+
+Both files are read locally. The command reaches no network, needs no cloud account, and never
+applies anything.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | `PASS` — every supported check ran and found nothing |
+| 2 | `WARN` — the change needs a human decision |
+| 3 | `BLOCK` — deterministic evidence of a violation |
+| 4 | `UNKNOWN` — evidence required for a safe conclusion was unavailable |
+| 10 | invalid input or usage — not a verdict |
+| 11 | internal failure — not a verdict |
+
+An operational failure is never a decision: a missing file or a malformed contract exits 10 and
+prints no report, because a verdict reached from inputs that could not be read would be a verdict
+about nothing.
+
+The intent contract must be JSON. The format is documented in
+[docs/INTENT-CONTRACT.md](docs/INTENT-CONTRACT.md); YAML is deferred, and a YAML file is refused by
+name rather than failing as a syntax error.
+
+A constraint the contract states and this build does not evaluate is reported as an unknown rather
+than passed over, so a restriction enforced by nothing never sits silently beside a `PASS`. The same
+applies to coverage: a resource no rule judged, and a declaration the plan gave nothing to apply to,
+are both recorded. A `PASS` means everything was checked, not that nothing objected.
+
+```sh
 go run ./cmd/infraproof inspect --plan internal/terraformplan/testdata/nested-sensitive.json
 ```
 
 `inspect` is a development aid: it reports addresses, actions, and which fields are unknown or
 redacted, and reaches no verdict.
-
-## Planned user experience
-
-```sh
-infraproof check \
-  --intent intent.yaml \
-  --plan tfplan.json \
-  --format markdown
-```
-
-The command exits successfully for `PASS`, uses a distinct non-zero status for `WARN`, `BLOCK`, invalid input, and internal failure, and always supports machine-readable JSON output. This command is not registered yet; the exit-code contract it will use is implemented and tested.

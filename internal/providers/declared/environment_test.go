@@ -1,0 +1,261 @@
+package declared_test
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
+	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
+)
+
+// The package is exercised through the mappers, which is where its behaviour
+// matters, but it is also the one place the reading rule is written and it is
+// shared by every cloud. A defect here is a defect in all three at once, so it
+// is worth holding directly as well.
+
+func change(t *testing.T, after string) terraformplan.ResourceChange {
+	t.Helper()
+
+	raw := fmt.Sprintf(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "r.b", "mode": "managed", "type": "r", "name": "b", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {%s}}}
+	  ]
+	}`, after)
+
+	plan, err := terraformplan.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v\n%s", err, raw)
+	}
+	if len(plan.ResourceChanges) != 1 {
+		t.Fatalf("changes = %d, want 1", len(plan.ResourceChanges))
+	}
+	return plan.ResourceChanges[0]
+}
+
+func TestEnvironmentReadsAStatedDeclaration(t *testing.T) {
+	fact := declared.Environment(
+		change(t, `"tags": {"environment": "staging"}`), "tags", model.CloudAWS)
+
+	if !fact.IsKnown() || fact.Get() != "staging" {
+		t.Fatalf("fact = %v/%q", fact.State, fact.Get())
+	}
+	if len(fact.Sources) != 1 {
+		t.Fatalf("sources = %v, want one", fact.Sources)
+	}
+	if got, want := fact.Sources[0].AttributePath, "tags.environment"; got != want {
+		t.Errorf("attribute path = %q, want %q", got, want)
+	}
+	if fact.Sources[0].Cloud != model.CloudAWS {
+		t.Errorf("cloud = %q", fact.Sources[0].Cloud)
+	}
+}
+
+// TestEnvironmentReadsTheAttributeItWasGiven keeps the one provider-specific
+// part of this package genuinely parameterized. Every cloud calls the same
+// thing something else, and a reader that ignored its argument would work for
+// whichever cloud it was written against and silently fail for the others.
+func TestEnvironmentReadsTheAttributeItWasGiven(t *testing.T) {
+	subject := change(t, `"tags": {"environment": "from-tags"}, "labels": {"environment": "from-labels"}`)
+
+	for attribute, want := range map[string]string{"tags": "from-tags", "labels": "from-labels"} {
+		t.Run(attribute, func(t *testing.T) {
+			fact := declared.Environment(subject, attribute, model.CloudAWS)
+			if !fact.IsKnown() || fact.Get() != want {
+				t.Fatalf("fact = %v/%q, want %q", fact.State, fact.Get(), want)
+			}
+			if got := fact.Sources[0].AttributePath; got != attribute+".environment" {
+				t.Errorf("attribute path = %q", got)
+			}
+		})
+	}
+}
+
+// TestEveryWayOfNotSayingItIsNotKnown is the rule this package exists to
+// enforce, held over every shape an unstated declaration takes. A fact that is
+// Known here is compared with the contract; anything else is reported as
+// evidence the run did not have, and the difference between those two is the
+// difference between a verdict and a guess.
+func TestEveryWayOfNotSayingItIsNotKnown(t *testing.T) {
+	cases := map[string]struct {
+		after string
+		want  model.FactState
+	}{
+		"no attribute":              {`"name": "b"`, model.FactAbsent},
+		"the attribute is a string": {`"tags": "environment"`, model.FactAbsent},
+		"the attribute is a list":   {`"tags": ["environment"]`, model.FactAbsent},
+		"the attribute is empty":    {`"tags": {}`, model.FactAbsent},
+		"no matching key":           {`"tags": {"owner": "checkout"}`, model.FactAbsent},
+		"the value is a list":       {`"tags": {"environment": ["staging"]}`, model.FactAbsent},
+		"the value is a number":     {`"tags": {"environment": 1}`, model.FactAbsent},
+		"the value is empty":        {`"tags": {"environment": ""}`, model.FactAbsent},
+		"the value is whitespace":   {`"tags": {"environment": "   "}`, model.FactAbsent},
+		"the attribute is not yet known": {
+			`"tags": null}, "after_unknown": {"tags": true`, model.FactUnknown},
+		"the attribute is sensitive": {
+			`"tags": {"environment": "staging"}}, "after_sensitive": {"tags": true`, model.FactRedacted},
+		"the value is not yet known": {
+			`"tags": {"environment": null}}, "after_unknown": {"tags": {"environment": true}`,
+			model.FactUnknown},
+		"the value is sensitive": {
+			`"tags": {"environment": "staging"}}, "after_sensitive": {"tags": {"environment": true}`,
+			model.FactRedacted},
+		"two declarations disagree": {
+			`"tags": {"Environment": "staging", "environment": "production"}`, model.FactUnknown},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fact := declared.Environment(change(t, tc.after), "tags", model.CloudAWS)
+			if fact.IsKnown() {
+				t.Fatalf("an unstated declaration was read as %q", fact.Get())
+			}
+			if fact.State != tc.want {
+				t.Errorf("state = %q, want %q", fact.State, tc.want)
+			}
+		})
+	}
+}
+
+// TestOrderDoesNotDecideTheAnswer is the defect a review found in the fix for
+// the defect before it.
+//
+// The loop returned as soon as it met a matching key it could not use, before
+// looking at the rest. Keys are sorted, so "Environment" is examined before
+// "environment", and an empty first key discarded a readable second one and
+// fell through to Absent — the non-required side. An empty tag value is legal
+// on AWS, so this needed no hostile plan: a resource declaring production
+// passed a staging contract with exit 0.
+//
+// Every matching key is examined now, and what the resource said is decided by
+// what it says, not by where the alphabet puts it.
+func TestOrderDoesNotDecideTheAnswer(t *testing.T) {
+	cases := map[string]struct {
+		tags string
+		want model.FactState
+	}{
+		"an empty key sorting first": {
+			`{"Environment": "", "environment": "production"}`, model.FactUnknown},
+		"an empty key sorting last": {
+			`{"Environment": "production", "environment": ""}`, model.FactUnknown},
+		"an ill-typed key sorting first": {
+			`{"ENVIRONMENT": 123, "environment": "production"}`, model.FactUnknown},
+		"an ill-typed key sorting last": {
+			`{"Environment": "production", "environment": 123}`, model.FactUnknown},
+		"a readable key on each side of an unusable one": {
+			`{"ENVIRONMENT": "production", "Environment": "", "environment": "production"}`,
+			model.FactUnknown},
+		"two readable keys agreeing": {
+			`{"Environment": "production", "environment": "production"}`, model.FactKnown},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fact := declared.Environment(change(t, `"tags": `+tc.tags), "tags", model.CloudAWS)
+			if fact.State != tc.want {
+				t.Fatalf("state = %q, want %q (value %q)", fact.State, tc.want, fact.Get())
+			}
+		})
+	}
+}
+
+// TestTheSameTagsInEitherOrderGiveTheSameAnswer states the property the case
+// above is an instance of. A map has no order, and a verdict that depends on
+// one is a verdict that depends on something the plan did not say.
+func TestTheSameTagsInEitherOrderGiveTheSameAnswer(t *testing.T) {
+	pairs := [][2]string{
+		{`{"Environment": "", "environment": "production"}`, `{"environment": "production", "Environment": ""}`},
+		{`{"A": "x", "environment": "staging"}`, `{"environment": "staging", "A": "x"}`},
+		{`{"Environment": "a", "environment": "b"}`, `{"environment": "b", "Environment": "a"}`},
+	}
+
+	for i, pair := range pairs {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			first := declared.Environment(change(t, `"tags": `+pair[0]), "tags", model.CloudAWS)
+			second := declared.Environment(change(t, `"tags": `+pair[1]), "tags", model.CloudAWS)
+
+			if first.State != second.State || first.Get() != second.Get() {
+				t.Fatalf("one set of tags gave two answers: %v/%q and %v/%q",
+					first.State, first.Get(), second.State, second.Get())
+			}
+		})
+	}
+}
+
+// TestEveryOutcomeCarriesProvenance keeps a fact locatable whatever it says. A
+// reader told the environment could not be determined needs to know where the
+// tool looked.
+func TestEveryOutcomeCarriesProvenance(t *testing.T) {
+	for _, after := range []string{
+		`"name": "b"`,
+		`"tags": {"environment": "staging"}`,
+		`"tags": {"environment": ["staging"]}`,
+		`"tags": null}, "after_unknown": {"tags": true`,
+	} {
+		fact := declared.Environment(change(t, after), "tags", model.CloudGCP)
+		if len(fact.Sources) == 0 {
+			t.Errorf("a fact from %s carries no provenance", after)
+			continue
+		}
+		if fact.Sources[0].ResourceAddress != "r.b" {
+			t.Errorf("resource address = %q", fact.Sources[0].ResourceAddress)
+		}
+	}
+}
+
+// TestAWithheldObjectIsNotAnEmptyOne guards the container the attribute is read
+// out of, which nothing guarded.
+//
+// unreadable checked the attribute and the value and never the object holding
+// them. Value.Field on a non-object receiver returns the zero value, so a whole
+// "after" marked sensitive or not yet known collapsed to ABSENT one level down
+// — and the rule reports ABSENT as "the resource declares no environment",
+// non-required, which passes.
+//
+// Three false statements came out of one mask: the decision, the reason, and a
+// piece of evidence marked not redacted.
+func TestAWithheldObjectIsNotAnEmptyOne(t *testing.T) {
+	cases := map[string]struct {
+		change string
+		want   model.FactState
+	}{
+		"the whole after is sensitive": {
+			`"actions": ["create"], "before": null,
+			 "after": {"name": "b", "tags": {"environment": "production"}},
+			 "after_sensitive": true`,
+			model.FactRedacted,
+		},
+		"the whole after is not yet known": {
+			`"actions": ["create"], "before": null, "after": null, "after_unknown": true`,
+			model.FactUnknown,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := `{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "r.b", "mode": "managed", "type": "r", "name": "b",
+			     "provider_name": "p", "change": {` + tc.change + `}}
+			  ]
+			}`
+
+			plan, err := terraformplan.Parse([]byte(raw))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			fact := declared.Environment(plan.ResourceChanges[0], "tags", model.CloudAWS)
+
+			if fact.IsKnown() {
+				t.Fatalf("a withheld object was read as declaring %q", fact.Get())
+			}
+			if fact.State != tc.want {
+				t.Fatalf("state = %q, want %q; an object this run could not see is not one that "+
+					"said nothing", fact.State, tc.want)
+			}
+		})
+	}
+}

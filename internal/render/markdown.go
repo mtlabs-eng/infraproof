@@ -39,6 +39,7 @@ func Markdown(b evidence.Bundle) ([]byte, error) {
 func subjectBlock(s evidence.Subject) string {
 	return strings.Join([]string{
 		"- Intent source: " + code(s.IntentSource),
+		"- Intent digest: " + code(s.IntentDigest),
 		"- Plan format version: " + code(s.PlanFormatVersion),
 		"- Plan digest: " + code(s.PlanDigest),
 	}, "\n")
@@ -48,7 +49,7 @@ func subjectBlock(s evidence.Subject) string {
 func verificationTable(checks []evidence.Verification) string {
 	rows := make([][]string, 0, len(checks))
 	for _, v := range checks {
-		rows = append(rows, []string{inlineText(v.Name), string(v.Status), inlineText(v.Method)})
+		rows = append(rows, []string{inlineText(v.Name), inlineText(string(v.Status)), inlineText(v.Method)})
 	}
 	return table([]string{"Check", "Status", "Method"}, rows)
 }
@@ -76,8 +77,13 @@ func findingBullets(f evidence.Finding) []string {
 	bullets := make([]string, 0, 5+len(f.Evidence))
 
 	if f.Resource != nil {
+		// The provider is a plan value, so it goes in a code span like every
+		// other one. inlineText neutralises a tag and leaves a link, an image
+		// and emphasis alone — enough for a plan to make a report the reader
+		// trusts carry a clickable host of its choosing.
 		bullets = append(bullets, fmt.Sprintf("- Resource: %s (%s, %s)",
-			code(f.Resource.Address), f.Resource.Cloud, f.Resource.Provider))
+			code(f.Resource.Address), inlineText(string(f.Resource.Cloud)),
+			code(f.Resource.Provider)))
 	}
 	if f.Expected != nil {
 		bullets = append(bullets, fmt.Sprintf("- Expected: %s = %s",
@@ -106,7 +112,7 @@ func observedText(o evidence.ObservedFact) string {
 // evidenceText renders one evidence reference: where the data was read from,
 // never what it contained.
 func evidenceText(ref evidence.EvidenceRef) string {
-	parts := []string{ref.Source}
+	parts := []string{inlineText(ref.Source)}
 	if ref.ResourceAddress != "" {
 		parts = append(parts, code(ref.ResourceAddress))
 	}
@@ -175,13 +181,46 @@ func dividers(n int) []string {
 	return out
 }
 
-// escapeCell keeps a cell on one row: a literal pipe is escaped and any line
-// break collapses to a space, so free-text reasons cannot break the table.
+// escapeCell makes a value safe to place between two cell boundaries.
+//
+// A pipe must not open a cell, and the run of backslashes before it decides
+// whether it does: the table scanner reads a pipe as literal when that run is
+// odd and as a boundary when it is even. So a run immediately before a pipe is
+// doubled, and the pipe is then escaped, which leaves the run odd.
+//
+// A backslash anywhere else is left alone. Doubling every backslash also fixed
+// the boundary problem and cost the report its content: inside a code span a
+// Markdown renderer does no escape processing, so a doubled backslash is shown
+// doubled, and an address containing one stopped being the address the plan
+// held.
 func escapeCell(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	s = strings.ReplaceAll(s, "\n", " ")
-	return strings.ReplaceAll(s, "|", `\|`)
+	s = collapseBreaks(s)
+
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			if s[i] == '|' {
+				out.WriteString(`\|`)
+				continue
+			}
+			out.WriteByte(s[i])
+			continue
+		}
+
+		run := 0
+		for i+run < len(s) && s[i+run] == '\\' {
+			run++
+		}
+		if i+run < len(s) && s[i+run] == '|' {
+			// The run would otherwise decide the pipe's parity for us.
+			out.WriteString(strings.Repeat(`\\`, run) + `\|`)
+			i += run
+			continue
+		}
+		out.WriteString(strings.Repeat(`\`, run))
+		i += run - 1
+	}
+	return out.String()
 }
 
 // prose renders a free-text field as a standalone paragraph. The bundle
@@ -198,7 +237,11 @@ func escapeCell(s string) string {
 // Markdown renderer that permits HTML — GitHub's does — would otherwise let a
 // mid-sentence tag produce real structure.
 func prose(s string) string {
-	s = inlineText(strings.TrimSpace(s))
+	// Trimmed after the escaping, not only before it. Collapsing a control
+	// character leaves a space where the character was, and up to three spaces
+	// before a "#" is still a heading — so a summary beginning with one hid the
+	// opener from the check below and forged a heading with it.
+	s = strings.TrimSpace(inlineText(strings.TrimSpace(s)))
 	if at := blockOpenerAt(s); at >= 0 {
 		return s[:at] + `\` + s[at:]
 	}
@@ -265,13 +308,33 @@ func leadingDigits(s string) int {
 	return len(s)
 }
 
-// inlineText neutralises raw HTML in a free-text field. It is applied only to
-// plain prose, never to content inside a code span: a span already renders its
-// contents literally, so escaping there would show a reader "&amp;amp;" where the
-// data says "&amp;".
+// inlineText neutralises the markup a free-text field could otherwise open. It
+// is applied only to plain prose, never to content inside a code span: a span
+// already renders its contents literally, so escaping there would show a reader
+// "&amp;amp;" where the data says "&amp;".
+//
+// Raw HTML is one half: a renderer that permits it reads a mid-sentence tag as
+// real structure. The other half is the bracket. An image is a request the
+// report makes on the reader's behalf, to a host the text names, from a build
+// whose whole premise is that nothing leaves the machine; a link invites a
+// click; a reference definition consumes the paragraph it sits in. All three
+// need an opening bracket, so the bracket is escaped and none of them can
+// form. A backslash before it is how CommonMark says "this is the character,
+// not the syntax", and it renders as the character.
 func inlineText(s string) string {
+	// Every prose path, for the reason code() collapses them in a span: the
+	// bundle forbids a break in the four fields that existed when the rule was
+	// written, and a rule that names its fields cannot cover a field added
+	// later.
+	s = collapseBreaks(s)
 	s = strings.ReplaceAll(s, "&", "&amp;")
-	return strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	// The backslash first, and for the sake of the one after it. A value ending
+	// in a backslash met the escape added below and produced "\\[", which
+	// CommonMark reads as an escaped backslash followed by a live bracket --
+	// the escape defeated by the thing it was escaping.
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, "[", `\[`)
 }
 
 // code wraps a value in a Markdown code span wide enough to contain it. A value
@@ -279,6 +342,14 @@ func inlineText(s string) string {
 // backtick is padded, so the span cannot terminate early and spill a resource
 // address or field path into the surrounding prose as markup.
 func code(s string) string {
+	// A break inside a code span ends the span and, if it is blank, the
+	// paragraph too: everything after it becomes document text. The bundle
+	// contract forbids breaks in the four prose fields, but a code span renders
+	// addresses, paths and values, and a rule that names its fields cannot
+	// cover a field added later. Collapsing here makes the guarantee a property
+	// of the span rather than of a list.
+	s = collapseBreaks(s)
+
 	fence := "`"
 	for strings.Contains(s, fence) {
 		fence += "`"
@@ -288,6 +359,17 @@ func code(s string) string {
 		padding = " "
 	}
 	return fence + padding + s + padding + fence
+}
+
+// collapseBreaks turns every control character into a space.
+//
+// A break ends a code span and, if it is blank, the paragraph too; an escape
+// sequence moves a terminal's cursor or clears the line. The contract package
+// says which characters those are, because it is the one that says what a
+// single-line field may hold — and a renderer keeping its own copy of that rule
+// is how the two come to disagree.
+func collapseBreaks(s string) string {
+	return evidence.Inline(s)
 }
 
 // optionalCode renders a pointer as code, or "-" when it is nil.

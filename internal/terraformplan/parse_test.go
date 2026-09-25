@@ -185,3 +185,225 @@ func TestMalformedImportingIsReported(t *testing.T) {
 		t.Fatalf("error %q does not locate the importing block", err.Error())
 	}
 }
+
+// TestAChangeWithoutAProviderIsInvalidInput keeps a plan's own fault from being
+// reported as this program's.
+//
+// provider_name identifies which provider manages a resource, and the Evidence
+// Bundle requires it in every finding that names one. Reading it as absent and
+// carrying the gap forward meant a plan missing it reached a bundle invariant
+// and exited 11 — "internal failure", which the CLI contract reserves for a
+// program that broke its own rules. A malformed plan is invalid input, and
+// invalid input is refused at the boundary where it arrives.
+func TestAChangeWithoutAProviderIsInvalidInput(t *testing.T) {
+	cases := map[string]string{
+		"omitted":    `"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b"`,
+		"empty":      `"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": ""`,
+		"whitespace": `"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": "   "`,
+		"null":       `"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b", "provider_name": null`,
+	}
+
+	for name, fields := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := `{"format_version": "1.2", "resource_changes": [{` + fields +
+				`, "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}]}`
+
+			_, err := Parse([]byte(raw))
+			if err == nil {
+				t.Fatal("a change without a provider was accepted")
+			}
+			if !strings.Contains(err.Error(), "provider_name") {
+				t.Errorf("the error does not name the field: %v", err)
+			}
+		})
+	}
+}
+
+// TestTwoChangesAtOneAddressAreInvalid keeps the address usable as an identity.
+//
+// Terraform emits one change per address, and everything downstream relies on
+// that: correlation joins by address, and coverage records which addresses were
+// judged. A plan carrying two changes at one address makes one resource's
+// verdict answer for another's — a public bucket covered by a private one that
+// happens to share its name.
+//
+// A deposed object is the one case Terraform writes twice, and it is
+// distinguished by its deposed key, so it is admitted.
+//
+// The diagnostic names the path and a bounded token, never the address: an
+// address is a plan value, and a ParseError has no field capable of holding
+// one.
+func TestTwoChangesAtOneAddressAreInvalid(t *testing.T) {
+	const change = `"change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}`
+
+	duplicate := `{"format_version": "1.2", "resource_changes": [
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", ` + change + `},
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket_policy", "name": "b",
+	   "provider_name": "p", ` + change + `}
+	]}`
+
+	_, err := Parse([]byte(duplicate))
+	if err == nil {
+		t.Fatal("two changes at one address were accepted")
+	}
+	// The address is a plan value, so the diagnostic reports the path and a
+	// bounded token rather than the address itself.
+	if !strings.Contains(err.Error(), "resource_changes[1].address") {
+		t.Errorf("the error does not locate the duplicate: %v", err)
+	}
+
+	deposed := `{"format_version": "1.2", "resource_changes": [
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", ` + change + `},
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", "deposed": "abc123", ` + change + `}
+	]}`
+
+	if _, err := Parse([]byte(deposed)); err != nil {
+		t.Fatalf("a deposed object beside its current one was rejected: %v", err)
+	}
+}
+
+// TestADuplicateAddressDiagnosticCarriesNoPlanValue keeps the last plan-derived
+// string out of a diagnostic. Every other one goes through safeToken; this was
+// the only bypass, and an address is as much a plan value as any other.
+func TestADuplicateAddressDiagnosticCarriesNoPlanValue(t *testing.T) {
+	const secret = "aws_s3_bucket.hunter2-the-secret-name-and-more-besides"
+	const change = `"change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}`
+
+	raw := `{"format_version": "1.2", "resource_changes": [
+	  {"address": "` + secret + `", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", ` + change + `},
+	  {"address": "` + secret + `", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p", ` + change + `}
+	]}`
+
+	_, err := Parse([]byte(raw))
+	if err == nil {
+		t.Fatal("two changes at one address were accepted")
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Fatalf("the diagnostic carries a plan value: %v", err)
+	}
+	if len(err.Error()) > 300 {
+		t.Errorf("the diagnostic is %d bytes; it is not bounded", len(err.Error()))
+	}
+}
+
+// TestAnUnrecognizedActionIsCarriedAndFlagged keeps an unfamiliar verb from
+// reading as harmless, without discarding the rest of a plan over it.
+//
+// Milestone 02 decided the parser carries what it does not understand and the
+// policy layer refuses to conclude, and Action.Valid's doc comment says so.
+// Nothing called it: IsDestructive asks whether "delete" is among the actions,
+// so "Delete", "destroy" and any invented verb read as a change that destroys
+// nothing, and a contract forbidding destruction passed them.
+func TestAnUnrecognizedActionIsCarriedAndFlagged(t *testing.T) {
+	plan := func(actions string) []byte {
+		return []byte(`{"format_version": "1.2", "resource_changes": [
+		  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+		   "provider_name": "p",
+		   "change": {"actions": ` + actions + `, "before": {"bucket": "b"}, "after": null}}
+		]}`)
+	}
+
+	for name, actions := range map[string]string{
+		"a miscased delete": `["Delete"]`,
+		"another word":      `["destroy"]`,
+		"an invented verb":  `["evaporate"]`,
+		"empty":             `[""]`,
+		"one of a pair":     `["delete", "recreate"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := Parse(plan(actions))
+			if err != nil {
+				t.Fatalf("an unrecognized action must not fail the parse: %v", err)
+			}
+			if !parsed.ResourceChanges[0].HasUnrecognizedAction() {
+				t.Fatalf("%s was not flagged as unrecognized", actions)
+			}
+		})
+	}
+
+	for name, actions := range map[string]string{
+		"a delete":              `["delete"]`,
+		"a replace":             `["delete", "create"]`,
+		"the other replace":     `["create", "delete"]`,
+		"a no-op":               `["no-op"]`,
+		"a read":                `["read"]`,
+		"an update":             `["update"]`,
+		"a forgotten resource":  `["forget"]`,
+		"a forgotten and taken": `["create", "forget"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := Parse(plan(actions))
+			if err != nil {
+				t.Fatalf("a plan Terraform emits was rejected: %v", err)
+			}
+			if parsed.ResourceChanges[0].HasUnrecognizedAction() {
+				t.Fatalf("%s is an action Terraform emits and was flagged", actions)
+			}
+		})
+	}
+}
+
+// TestForgettingAnObjectIsNotDestroyingIt keeps the new verb's meaning
+// straight. A removed block drops a resource from state and leaves the object
+// alone, so it destroys nothing — but it is understood rather than ignored.
+func TestForgettingAnObjectIsNotDestroyingIt(t *testing.T) {
+	raw := []byte(`{"format_version": "1.2", "resource_changes": [
+	  {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	   "provider_name": "p",
+	   "change": {"actions": ["forget"], "before": {"bucket": "b"}, "after": null}}
+	]}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if plan.ResourceChanges[0].IsDestructive() {
+		t.Error("forgetting an object was read as destroying it")
+	}
+}
+
+// TestAnUnrecognizedModeIsRefused keeps the field that decides admissibility
+// from being believed without being checked.
+//
+// Mode says whether a plan entry is something the configuration manages or
+// something it only reads, and IsRead keys on it exactly — so any other
+// spelling is silently treated as managed, which is the permissive side. The
+// actions have carried a closed set and a guard since milestone 02; this had
+// neither, and it became load-bearing when admissibility began depending on it.
+func TestAnUnrecognizedModeIsRefused(t *testing.T) {
+	plan := func(mode string) []byte {
+		return []byte(`{"format_version": "1.2", "resource_changes": [
+		  {"address": "aws_s3_bucket.b", "mode": ` + mode + `, "type": "aws_s3_bucket", "name": "b",
+		   "provider_name": "p",
+		   "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}
+		]}`)
+	}
+
+	for name, mode := range map[string]string{
+		"a miscased data":  `"Data"`,
+		"an invented mode": `"observed"`,
+		"empty":            `""`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse(plan(mode)); err == nil {
+				t.Fatalf("an unrecognized mode was accepted: %s", mode)
+			}
+		})
+	}
+
+	for name, mode := range map[string]string{
+		"managed": `"managed"`,
+		"data":    `"data"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse(plan(mode)); err != nil {
+				t.Fatalf("a mode Terraform emits was rejected: %v", err)
+			}
+		})
+	}
+}

@@ -15,7 +15,8 @@ func blockBundle() Bundle {
 		Subject: Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.x",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []Verification{
 			{Name: "terraform_plan", Status: VerificationVerified, Method: "terraform-plan-json"},
@@ -496,4 +497,174 @@ func TestProseFieldsRejectLineBreaks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestADigestMustBeADigest closes a field that accepted anything after its
+// prefix.
+//
+// The contract calls these fields a sha256 digest over the exact input bytes,
+// and a reader correlating a report with an input has only this to correlate
+// on. "sha256:probably-the-same-plan" satisfied a prefix check, and a field
+// that accepts prose is a field a later producer will fill with prose.
+func TestADigestMustBeADigest(t *testing.T) {
+	const good = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+	bad := map[string]string{
+		"no prefix":        "0000000000000000000000000000000000000000000000000000000000000000",
+		"prose":            "sha256:the same plan as yesterday",
+		"too short":        "sha256:00",
+		"too long":         good + "00",
+		"upper case":       "sha256:" + strings.Repeat("A", 64),
+		"not hexadecimal":  "sha256:" + strings.Repeat("g", 64),
+		"another function": "sha512:" + strings.Repeat("0", 64),
+	}
+
+	for _, field := range []struct {
+		name string
+		set  func(*Bundle, string)
+	}{
+		{"plan_digest", func(b *Bundle, v string) { b.Subject.PlanDigest = v }},
+		{"intent_digest", func(b *Bundle, v string) { b.Subject.IntentDigest = v }},
+	} {
+		t.Run(field.name, func(t *testing.T) {
+			for name, digest := range bad {
+				t.Run(name, func(t *testing.T) {
+					b := blockBundle()
+					field.set(&b, digest)
+					err := b.Validate()
+					if err == nil {
+						t.Fatalf("%s %q should be rejected", field.name, digest)
+					}
+					if !strings.Contains(err.Error(), field.name) {
+						t.Fatalf("error %q does not name the field", err.Error())
+					}
+				})
+			}
+
+			b := blockBundle()
+			field.set(&b, good)
+			if err := b.Validate(); err != nil {
+				t.Fatalf("a well-formed digest was rejected: %v", err)
+			}
+		})
+	}
+}
+
+// TestAnErrorNamesThePositionAReaderWillSee closes a gap between the two
+// halves of rendering.
+//
+// A bundle is validated and then canonically ordered, so an error naming
+// findings[1] named the position a producer happened to write, and the reader
+// looking for it counted to a different record. The order is part of the
+// contract; the diagnostics have to speak it.
+func TestAnErrorNamesThePositionAReaderWillSee(t *testing.T) {
+	b := blockBundle()
+	high := b.Findings[0]
+
+	low := high
+	low.RuleID = "AAA_LOW_SEVERITY"
+	low.Severity = SeverityLow
+	low.Claim = "" // the violation
+
+	// Written low first; canonical order puts the critical finding first, so
+	// the offending record is findings[1] to a reader and findings[0] here.
+	b.Findings = []Finding{low, high}
+
+	err := b.Validate()
+	if err == nil {
+		t.Fatal("a finding with no claim was accepted")
+	}
+	if !strings.Contains(err.Error(), "findings[1]") {
+		t.Errorf("the error names a position the reader never sees: %v", err)
+	}
+}
+
+// TestABundleFromAnEarlierMinorVersionStillValidates holds the compatibility
+// rule this package states about itself.
+//
+// intent_digest arrived after 1.0. Requiring it of every bundle made this build
+// refuse output it produced last week, under a version string that had not
+// changed — which is a breaking change inside a minor version, and the document
+// says those need a new major version. The field is required of the versions
+// that have it, and a malformed one is refused whatever the version says.
+func TestABundleFromAnEarlierMinorVersionStillValidates(t *testing.T) {
+	const wellFormed = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+	t.Run("an earlier minor version without the field", func(t *testing.T) {
+		b := blockBundle()
+		b.SchemaVersion = "1.0"
+		b.Subject.IntentDigest = ""
+		if err := b.Validate(); err != nil {
+			t.Errorf("a bundle predating the field was refused: %v", err)
+		}
+	})
+
+	t.Run("an earlier minor version with a malformed field", func(t *testing.T) {
+		b := blockBundle()
+		b.SchemaVersion = "1.0"
+		b.Subject.IntentDigest = "sha256:the same contract as yesterday"
+		if err := b.Validate(); err == nil {
+			t.Error("a malformed digest was accepted because the version was old")
+		}
+	})
+
+	t.Run("this version without the field", func(t *testing.T) {
+		b := blockBundle()
+		b.Subject.IntentDigest = ""
+		if err := b.Validate(); err == nil {
+			t.Error("a bundle of the current version omitted the field and was accepted")
+		}
+	})
+
+	t.Run("this version with the field", func(t *testing.T) {
+		b := blockBundle()
+		b.Subject.IntentDigest = wellFormed
+		if err := b.Validate(); err != nil {
+			t.Errorf("a well-formed bundle was refused: %v", err)
+		}
+	})
+}
+
+// TestProseThatRendersToNothingIsEmpty closes the gap between what the contract
+// calls empty and what a reader sees.
+//
+// A control character is not a space, so a claim made only of them passed the
+// emptiness check -- and then the renderer collapsed each to a space and
+// trimmed them away, leaving a finding with a severity, a disposition and no
+// sentence. A field that renders to nothing is empty whatever its bytes say.
+func TestProseThatRendersToNothingIsEmpty(t *testing.T) {
+	for name, claim := range map[string]string{
+		"an escape":           "\x1b",
+		"a bell and a delete": "\a\x7f",
+		"a C1 introducer":     "\u009b",
+		"controls and spaces": " \x1b \a ",
+		"a tab, which is one": "	",
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := blockBundle()
+			b.Findings[0].Claim = claim
+			if err := b.Validate(); err == nil {
+				t.Errorf("a finding whose claim renders to nothing was accepted: %q", claim)
+			}
+		})
+	}
+
+	// An escape sequence is not empty: the escape becomes a space and the rest
+	// is text a reader sees, which is the whole point of collapsing rather than
+	// stripping.
+	t.Run("an escape sequence still says something", func(t *testing.T) {
+		b := blockBundle()
+		b.Findings[0].Claim = "\x1b[2K"
+		if err := b.Validate(); err != nil {
+			t.Errorf("a claim that renders as visible text was refused: %v", err)
+		}
+	})
+
+	t.Run("a claim with a control character in it is still a claim", func(t *testing.T) {
+		b := blockBundle()
+		b.Findings[0].Claim = "The change grants public access.\x1b"
+		if err := b.Validate(); err != nil {
+			t.Errorf("a readable claim was refused for one unreadable byte: %v", err)
+		}
+	})
 }

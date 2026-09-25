@@ -139,6 +139,9 @@ func (v Value) Len() int {
 // At returns the element at index i, or an Absent value when the index is out
 // of range or the value is not a readable array.
 func (v Value) At(i int) Value {
+	if withheld := v.withheld(); withheld != nil {
+		return *withheld
+	}
 	if v.Kind() != KindArray || i < 0 || i >= len(v.array) {
 		return Value{}
 	}
@@ -148,11 +151,57 @@ func (v Value) At(i int) Value {
 // Field returns the named field, or an Absent value when the key is not present
 // or the value is not a readable object. Absent is a real answer here: it is
 // how a caller learns the plan never mentioned the field.
+//
+// Except where the receiver itself was withheld. Nothing inside a value this
+// run was not permitted to see is absent — it is unreadable for the same
+// reason, and saying "absent" there is the answer that lets a caller conclude.
+// A whole "after" marked sensitive made every attribute under it look like one
+// the plan never mentioned.
 func (v Value) Field(name string) Value {
+	if withheld := v.withheld(); withheld != nil {
+		return *withheld
+	}
 	if v.Kind() != KindObject {
 		return Value{}
 	}
 	return v.object[name]
+}
+
+// withheld returns a value carrying the receiver's own unreadable state, or nil
+// when the receiver was readable.
+func (v Value) withheld() *Value {
+	switch v.State() {
+	case StateRedacted:
+		return &Value{present: true, sensitive: true}
+	case StateUnknown:
+		return &Value{present: true, unknown: true}
+	default:
+		return nil
+	}
+}
+
+// HoldsSensitive reports whether this value or anything inside it was marked
+// sensitive.
+//
+// State answers for the node alone, which is the right answer for reading a
+// value and the wrong one for locating it. A list whose elements are marked
+// individually is itself readable, so a reference to the list reported that
+// nothing was withheld while one of the things at that location was a secret.
+func (v Value) HoldsSensitive() bool {
+	if v.sensitive {
+		return true
+	}
+	for _, element := range v.array {
+		if element.HoldsSensitive() {
+			return true
+		}
+	}
+	for _, field := range v.object {
+		if field.HoldsSensitive() {
+			return true
+		}
+	}
+	return false
 }
 
 // Keys returns the field names of a readable object in sorted order, so that

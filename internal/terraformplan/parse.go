@@ -165,6 +165,13 @@ func parseResourceChanges(document map[string]any, errs *[]error) []ResourceChan
 	}
 
 	changes := make([]ResourceChange, 0, len(list))
+	// An address identifies a change, and everything downstream relies on it:
+	// correlation joins by address, and coverage records which addresses were
+	// judged. Two changes sharing one would make a verdict about one answer
+	// for the other. Terraform writes one change per address, except for a
+	// deposed object, which carries a key distinguishing it.
+	seen := map[string]bool{}
+
 	for i, item := range list {
 		path := "resource_changes" + indexPath(i)
 		object, ok := item.(map[string]any)
@@ -172,7 +179,21 @@ func parseResourceChanges(document map[string]any, errs *[]error) []ResourceChan
 			*errs = append(*errs, invalid(path, "must be an object"))
 			continue
 		}
-		changes = append(changes, parseResourceChange(path, object, errs))
+
+		change := parseResourceChange(path, object, errs)
+		identity := change.Address + "\x00" + change.Deposed
+		if change.Address != "" && seen[identity] {
+			// safeToken, like every other plan-derived string in a
+			// diagnostic: a ParseError has no field capable of holding a
+			// value, and an address is a plan value.
+			*errs = append(*errs, invalid(path+".address",
+				"is %s, which another change already uses; an address identifies one change",
+				safeToken(change.Address)))
+			continue
+		}
+		seen[identity] = true
+
+		changes = append(changes, change)
 	}
 	return changes
 }
@@ -183,10 +204,10 @@ func parseResourceChange(path string, object map[string]any, errs *[]error) Reso
 		ModuleAddress: optionalString(object, "module_address", path+".module_address", errs),
 		Type:          optionalString(object, "type", path+".type", errs),
 		Name:          optionalString(object, "name", path+".name", errs),
-		ProviderName:  optionalString(object, "provider_name", path+".provider_name", errs),
+		ProviderName:  requiredString(object, "provider_name", path+".provider_name", errs),
 		Deposed:       optionalString(object, "deposed", path+".deposed", errs),
 		ActionReason:  optionalString(object, "action_reason", path+".action_reason", errs),
-		Mode:          Mode(optionalString(object, "mode", path+".mode", errs)),
+		Mode:          parseMode(path+".mode", object, errs),
 	}
 	change.Index, change.HasIndex = parseIndex(path+".index", object, errs)
 
@@ -326,9 +347,25 @@ func parseIndex(path string, object map[string]any, errs *[]error) (string, bool
 	}
 }
 
+// parseMode reads the field that decides whether an entry is a change at all.
+// An unrecognized spelling is refused rather than read as managed: what it
+// means is Terraform's to say, and guessing would guess toward admitting.
+func parseMode(path string, object map[string]any, errs *[]error) Mode {
+	mode := Mode(requiredString(object, "mode", path, errs))
+	if mode != "" && !mode.Valid() {
+		*errs = append(*errs, invalid(path, "is %s, which this build does not recognize",
+			safeToken(string(mode))))
+		return ""
+	}
+	return mode
+}
+
 func requiredString(object map[string]any, name, path string, errs *[]error) string {
 	value := optionalString(object, name, path, errs)
-	if value == "" {
+	// Whitespace is not a value. A field that is blank once rendered is one the
+	// plan did not supply, and carrying it forward means a downstream contract
+	// refuses it later, as this program's fault rather than the plan's.
+	if strings.TrimSpace(value) == "" {
 		*errs = append(*errs, invalid(path, "must be present and not empty"))
 	}
 	return value

@@ -24,6 +24,13 @@ type Bundle struct {
 type Subject struct {
 	// IntentSource names the intent contract the change was compared against.
 	IntentSource string `json:"intent_source"`
+	// IntentDigest is a "sha256:"-prefixed digest of the exact contract bytes.
+	//
+	// A path names where a contract was read from and not which contract it
+	// was: a file edited between runs, a symlink, a checkout on another branch.
+	// Without this the plan was identifiable and the thing it was compared
+	// against was not.
+	IntentDigest string `json:"intent_digest"`
 	// PlanFormatVersion is the format version of the supplied plan.
 	PlanFormatVersion string `json:"plan_format_version"`
 	// PlanDigest is a "sha256:"-prefixed digest of the exact plan bytes. It

@@ -71,6 +71,27 @@ repeated inside a module that is takes its instance from the module, and every
 resource in that module instance shares it, so nothing has to be chosen and
 nothing has to change: the common module-per-bucket pattern stays answerable.
 
+A `PASS` also means every change in the plan was examined, not merely that
+nothing examined raised an objection. A data source is read rather than
+changed, so it is not part of that guarantee — and a resource whose mode says
+it is read while its actions say otherwise is not believed to be one.
+
+What a data source says is never evidence about another resource, in either
+direction. (This entered the product during review of milestone 04, for the
+reason recorded in `docs/milestones/04-risk-and-intent.md`.) It describes state as it already is, which is not what the change
+will do, so it can neither prove that exposure is prevented nor prove that it
+is granted. This is the single largest determinant of what this tool will
+conclude about a plan that contains one, so it is not silent about it: where a
+read would have answered a question, the answer is `UNKNOWN` and the report
+names what was withheld and why. A plan whose only account, policy or block is
+read rather than managed is a plan this tool cannot settle, and saying so is
+the honest answer rather than a limitation to work around. A
+resource this build normalized but has no rule for is reported, and prevents a
+`PASS`, because the alternative is a verdict that reads as "checked and fine"
+when it means "not checked". The same holds for a resource no mapper
+understood at all, and for a declaration in the contract that the plan gave
+nothing to apply to.
+
 ## Explicit non-goals
 
 - Generating Terraform code

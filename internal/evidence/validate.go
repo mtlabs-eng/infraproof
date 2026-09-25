@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -39,12 +40,19 @@ func violation(path, format string, args ...any) error {
 func (b Bundle) Validate() error {
 	var errs []error
 
+	// Indices are reported in canonical order, which is the order a reader
+	// sees: a bundle is validated and then ordered, so an error naming
+	// findings[1] named the position a producer happened to write it in and
+	// sent the reader counting to a different record. Canonical reorders and
+	// clones and decides nothing, so which violations are found is unchanged.
+	ordered := Canonical(b)
+
 	errs = append(errs, b.validateEnvelope()...)
 	errs = append(errs, b.validateVerification()...)
-	for i, f := range b.Findings {
+	for i, f := range ordered.Findings {
 		errs = append(errs, validateFinding(fmt.Sprintf("findings[%d]", i), f)...)
 	}
-	for i, u := range b.Unknowns {
+	for i, u := range ordered.Unknowns {
 		errs = append(errs, validateUnknown(fmt.Sprintf("unknowns[%d]", i), u)...)
 	}
 	errs = append(errs, b.validateDecisionConsistency()...)
@@ -53,8 +61,38 @@ func (b Bundle) Validate() error {
 }
 
 // validateEnvelope checks the schema version, decision, summary, and subject.
+// inlineFields returns every free-text field of the bundle envelope that
+// reaches a report as inline text, with the path to report it under.
+//
+// It is written as one list per structure rather than as checks scattered
+// through the validators, because scattering is how five of these came to be
+// missing: each was added to the contract without anyone remembering there was
+// a rule to add it to.
+func (b Bundle) inlineFields() [][2]string {
+	fields := [][2]string{
+		{"subject.intent_source", b.Subject.IntentSource},
+		{"subject.plan_format_version", b.Subject.PlanFormatVersion},
+		// The digests are computed rather than plan-derived, but the rule is
+		// about what a field can carry, not about who happens to fill it.
+		{"subject.plan_digest", b.Subject.PlanDigest},
+		{"subject.intent_digest", b.Subject.IntentDigest},
+	}
+	for i, check := range b.Verification {
+		fields = append(fields,
+			[2]string{fmt.Sprintf("verification[%d].name", i), check.Name},
+			[2]string{fmt.Sprintf("verification[%d].method", i), check.Method})
+	}
+	return fields
+}
+
 func (b Bundle) validateEnvelope() []error {
 	var errs []error
+
+	for _, field := range b.inlineFields() {
+		if err := validateSingleLine(field[0], field[1]); err != nil {
+			errs = append(errs, err)
+		}
+	}
 
 	if err := validateSchemaVersion(b.SchemaVersion); err != nil {
 		errs = append(errs, err)
@@ -71,13 +109,90 @@ func (b Bundle) validateEnvelope() []error {
 	if strings.TrimSpace(b.Subject.PlanFormatVersion) == "" {
 		errs = append(errs, violation("subject.plan_format_version", "must not be empty"))
 	}
-	if !strings.HasPrefix(b.Subject.PlanDigest, digestPrefix) ||
-		strings.TrimSpace(strings.TrimPrefix(b.Subject.PlanDigest, digestPrefix)) == "" {
-		errs = append(errs, violation("subject.plan_digest", "must be a non-empty digest prefixed with %q", digestPrefix))
+	if err := validateDigest("subject.plan_digest", b.Subject.PlanDigest); err != nil {
+		errs = append(errs, err)
+	}
+	// Required of the versions that have the field, and well-formed whenever it
+	// is present at all: a bundle predating it is still readable, and one
+	// carrying a malformed digest is refused whatever version it claims.
+	if b.Subject.IntentDigest != "" || carriesIntentDigest(b.SchemaVersion) {
+		if err := validateDigest("subject.intent_digest", b.Subject.IntentDigest); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	return errs
 }
+
+// carriesIntentDigest reports whether a declared version is one that has
+// subject.intent_digest. An unreadable version is not treated as an old one:
+// validateSchemaVersion refuses it separately, and reading it as "before the
+// field existed" would let anything skip the check by mangling one string.
+func carriesIntentDigest(version string) bool {
+	_, minor, found := strings.Cut(version, ".")
+	if !found || !isPlainNumber(minor) {
+		return true
+	}
+	value, err := strconv.Atoi(minor)
+	return err != nil || value >= intentDigestMinor
+}
+
+// Inline makes a value usable in a field this contract requires to be a single
+// line, by replacing every control character with a space.
+//
+// It normalizes more than validation refuses. A bundle carrying a control
+// character other than a line break is valid, because refusing one would turn a
+// plan this build can judge into an internal error -- which is the failure this
+// repository has fixed twice. A producer that passes its values through here
+// cannot emit one, and a reader's terminal never sees one from this build.
+//
+// A line break ends a paragraph and lets a value forge a heading. The rest of
+// the C0 range does the same job in a different reader: a report is read in a
+// terminal as often as in a browser, and an escape sequence there moves the
+// cursor, clears the line or colours what follows, so a value carrying one can
+// hide the record under it.
+//
+// It lives here because this package defines what those fields may hold, and
+// because a producer and a renderer each keeping their own version of the rule
+// is how two answers to one question come about.
+func Inline(value string) string {
+	return strings.Map(func(char rune) rune {
+		if isControlChar(char) {
+			return ' '
+		}
+		return char
+	}, value)
+}
+
+// isControlChar reports the characters no single-line field may carry.
+func isControlChar(char rune) bool {
+	return char < 0x20 || char == 0x7f || (char >= 0x80 && char <= 0x9f)
+}
+
+// validateDigest holds a digest field to what the contract says it is: sha256
+// over the exact input bytes.
+//
+// The check was the prefix and a non-blank remainder, so "sha256:the same plan
+// as yesterday" passed. A digest is the only thing a reader has to correlate a
+// report with the input it came from, and a field that accepts prose is one a
+// later producer fills with prose.
+func validateDigest(path, value string) error {
+	body, ok := strings.CutPrefix(value, digestPrefix)
+	if !ok || len(body) != sha256HexLength {
+		return violation(path, "must be %q followed by %d hexadecimal characters",
+			digestPrefix, sha256HexLength)
+	}
+	for _, char := range body {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return violation(path, "must be %q followed by %d hexadecimal characters",
+				digestPrefix, sha256HexLength)
+		}
+	}
+	return nil
+}
+
+// sha256HexLength is how many characters a sha256 digest takes in hexadecimal.
+const sha256HexLength = 64
 
 // validateSchemaVersion accepts any "1.<minor>" version. Minor additions are
 // backward-compatible within the major version; a different major version is a
@@ -153,8 +268,14 @@ func validateFinding(path string, f Finding) []error {
 		if strings.TrimSpace(f.Resource.Address) == "" {
 			errs = append(errs, violation(path+".resource.address", "must not be empty"))
 		}
+		if err := validateSingleLine(path+".resource.address", f.Resource.Address); err != nil {
+			errs = append(errs, err)
+		}
 		if strings.TrimSpace(f.Resource.Provider) == "" {
 			errs = append(errs, violation(path+".resource.provider", "must not be empty"))
+		}
+		if err := validateSingleLine(path+".resource.provider", f.Resource.Provider); err != nil {
+			errs = append(errs, err)
 		}
 		if !f.Resource.Cloud.Valid() {
 			errs = append(errs, violation(path+".resource.cloud", "unrecognized cloud %q", string(f.Resource.Cloud)))
@@ -165,8 +286,14 @@ func validateFinding(path string, f Finding) []error {
 		if strings.TrimSpace(f.Expected.Path) == "" {
 			errs = append(errs, violation(path+".expected.path", "must not be empty"))
 		}
+		if err := validateSingleLine(path+".expected.path", f.Expected.Path); err != nil {
+			errs = append(errs, err)
+		}
 		if !f.Expected.Value.Valid() {
 			errs = append(errs, violation(path+".expected.value", "must be built with Bool, String, or Int"))
+		}
+		if err := validateScalarText(path+".expected.value", f.Expected.Value); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
@@ -189,6 +316,12 @@ func validateObserved(path string, o ObservedFact) []error {
 
 	if strings.TrimSpace(o.Path) == "" {
 		errs = append(errs, violation(path+".path", "must not be empty"))
+	}
+	if err := validateSingleLine(path+".path", o.Path); err != nil {
+		errs = append(errs, err)
+	}
+	if err := validateScalarText(path+".value", o.Value); err != nil {
+		errs = append(errs, err)
 	}
 	if !o.State.Valid() {
 		errs = append(errs, violation(path+".state", "unrecognized fact state %q", string(o.State)))
@@ -215,6 +348,19 @@ func validateEvidence(parent string, refs []EvidenceRef) []error {
 		if strings.TrimSpace(ref.Path) == "" {
 			errs = append(errs, violation(path+".path", "must locate the data within the source"))
 		}
+		// Every field of a reference reaches a report as inline text, and a
+		// reference is assembled from plan-derived strings. The order is fixed
+		// rather than a map's, because a tool whose output is a function of its
+		// input must not describe one bundle two ways.
+		for _, field := range [][2]string{
+			{".source", ref.Source},
+			{".resource_address", ref.ResourceAddress},
+			{".path", ref.Path},
+		} {
+			if err := validateSingleLine(path+field[0], field[1]); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 
 	return errs
@@ -230,8 +376,14 @@ func validateUnknown(path string, u Unknown) []error {
 	if err := validateProse(path+".reason", u.Reason, "must explain the gap without quoting a sensitive value"); err != nil {
 		errs = append(errs, err)
 	}
-	if u.ResourceAddress != nil && strings.TrimSpace(*u.ResourceAddress) == "" {
-		errs = append(errs, violation(path+".resource_address", "must be null rather than empty when no resource applies"))
+	if u.ResourceAddress != nil {
+		if strings.TrimSpace(*u.ResourceAddress) == "" {
+			errs = append(errs, violation(path+".resource_address",
+				"must be null rather than empty when no resource applies"))
+		}
+		if err := validateSingleLine(path+".resource_address", *u.ResourceAddress); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	errs = append(errs, validateEvidence(path, u.Evidence)...)
 
@@ -304,13 +456,46 @@ func (b Bundle) validateDecisionConsistency() []error {
 	return errs
 }
 
+// validateSingleLine rejects a line break in a field that reaches the report as
+// inline text.
+//
+// The requirement is docs/EVIDENCE-BUNDLE.md's and it is structural: a break
+// ends a paragraph, and a code span, and everything after it becomes document
+// text. It was first written for the four prose fields, and every field added
+// afterwards that carries user-controlled content — a resource address, a
+// capability path, a scalar value, an evidence reference — needs the same
+// guarantee for the same reason. Enforcing it at the contract means no renderer
+// is the only thing standing between a plan value and a forged heading.
+//
+// The value is never quoted back: it may be a plan value, and an error message
+// is output.
+func validateSingleLine(path, value string) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return violation(path, "must be a single line; a line break would let this field forge document structure")
+	}
+	return nil
+}
+
+// validateScalarText applies the same rule to a fact value. Only a string
+// scalar can carry a break; a boolean or an integer has no room for one.
+func validateScalarText(path string, value *Scalar) error {
+	if value == nil {
+		return nil
+	}
+	return validateSingleLine(path, value.Display())
+}
+
 // validateProse checks a single-line human-readable field. Prose is rendered
 // into Markdown as document text, so a line break in it would let a claim or a
 // reason forge headings, list items, or table rows in a report a human is
 // expected to trust. Rejecting the break at the contract boundary keeps that
 // guarantee independent of any one renderer.
 func validateProse(path, value, requirement string) error {
-	if strings.TrimSpace(value) == "" {
+	// Emptiness is asked of what a reader sees. A control character is not a
+	// space, so a claim made only of them passed this check, and the renderer
+	// then collapsed each to a space and trimmed them away -- leaving a finding
+	// with a severity, a disposition and no sentence.
+	if strings.TrimSpace(Inline(value)) == "" {
 		return violation(path, "%s", requirement)
 	}
 	if strings.ContainsAny(value, "\r\n") {

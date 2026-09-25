@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
+	"github.com/mtlabs-eng/infraproof/internal/intent"
 	"github.com/mtlabs-eng/infraproof/internal/model"
 	"github.com/mtlabs-eng/infraproof/internal/policy"
 	"github.com/mtlabs-eng/infraproof/internal/providers"
@@ -27,7 +28,22 @@ func evaluate(t *testing.T, cloud, fixture string) policy.Result {
 	if err != nil {
 		t.Fatalf("parsing %s: %v", path, err)
 	}
-	return policy.StoragePublic(providers.Normalize(plan, providers.Default()))
+	return policy.StorageExposure(privateStorage, providers.Normalize(plan, providers.Default()))
+}
+
+// privateStorage is the contract these tests evaluate against: the one that
+// requires private object storage. It is what makes a proven public grant a
+// block rather than a warning, and it is stated once here so that every
+// scenario below compares the same declared intent.
+var privateStorage = intent.Contract{
+	SchemaVersion:      "1.0",
+	ChangeID:           "contract-test",
+	Environment:        "test",
+	AllowedClouds:      []string{"aws", "azure", "gcp"},
+	DestructiveChanges: intent.DestructiveForbidden,
+	Resources: []intent.ResourceIntent{
+		{Family: intent.FamilyObjectStorage, Exposure: intent.ExposurePrivate},
+	},
 }
 
 // scenario names one situation, and where each cloud expresses it.
@@ -167,7 +183,8 @@ func TestFindingsSatisfyTheEvidenceContract(t *testing.T) {
 		Subject: evidence.Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.2",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},
@@ -199,7 +216,7 @@ func TestTheRuleReadsOnlyTheModel(t *testing.T) {
 		},
 	}}}
 
-	result := policy.StoragePublic(graph)
+	result := policy.StorageExposure(privateStorage, graph)
 	if len(result.Findings) != 1 || result.Findings[0].RuleID != policy.RuleStoragePublic {
 		t.Fatalf("a cloud this build has never heard of should still be judged: %v", result.Findings)
 	}
@@ -226,7 +243,7 @@ func TestAFindingFromAnUnknownCloudStillValidates(t *testing.T) {
 		},
 	}}}
 
-	result := policy.StoragePublic(graph)
+	result := policy.StorageExposure(privateStorage, graph)
 	if len(result.Findings) != 1 {
 		t.Fatalf("findings = %d, want 1", len(result.Findings))
 	}
@@ -239,7 +256,8 @@ func TestAFindingFromAnUnknownCloudStillValidates(t *testing.T) {
 		Decision:      evidence.DecisionBlock,
 		Summary:       "The change grants public access to object storage.",
 		Subject: evidence.Subject{
-			IntentSource: "intent.yaml", PlanFormatVersion: "1.2", PlanDigest: "sha256:example",
+			IntentSource: "intent.yaml", PlanFormatVersion: "1.2", PlanDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},

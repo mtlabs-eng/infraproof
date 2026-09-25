@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "change_id": "add-private-staging-assets",
+  "environment": "staging",
+  "allowed_clouds": ["aws"],
+  "destructive_changes": "forbidden",
+  "resources": [
+    {
+      "family": "object_storage",
+      "exposure": "private",
+      "purpose": "application-assets"
+    }
+  ]
+}

@@ -3,7 +3,7 @@ package render_test
 import "github.com/mtlabs-eng/infraproof/internal/evidence"
 
 // contractBundle is the bundle equivalent of the reviewed contract example in
-// examples/expected-output.json. The parity test in json_test.go anchors the
+// docs/examples/evidence-bundle.json. The parity test in json_test.go anchors the
 // renderer to that reviewed document.
 func contractBundle() evidence.Bundle {
 	return evidence.Bundle{
@@ -13,7 +13,8 @@ func contractBundle() evidence.Bundle {
 		Subject: evidence.Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.x",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},
@@ -61,7 +62,8 @@ func passBundle() evidence.Bundle {
 		Subject: evidence.Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.x",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"},
@@ -82,7 +84,8 @@ func redactedBundle() evidence.Bundle {
 		Subject: evidence.Subject{
 			IntentSource:      "intent.yaml",
 			PlanFormatVersion: "1.x",
-			PlanDigest:        "sha256:example",
+			PlanDigest:        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			IntentDigest:      "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Verification: []evidence.Verification{
 			{Name: "terraform_plan", Status: evidence.VerificationPartial, Method: "terraform-plan-json"},

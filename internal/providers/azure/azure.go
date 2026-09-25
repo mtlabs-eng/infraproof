@@ -8,6 +8,7 @@ package azure
 
 import (
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -39,6 +40,34 @@ func (Mapper) IsSubject(resourceType string) bool {
 	return resourceType == typeContainer || resourceType == typeAccount
 }
 
+// The questions this mapper answers. A container asks which account gates it
+// and what it is itself set to; an account with no container in the plan asks
+// whether one is here at all.
+const (
+	roleAccountGate   = "account_gate"
+	roleAccessLevel   = attrAccessType
+	roleContainer     = "container"
+	roleAccountItself = attrAllowPublic
+)
+
+// RoleOf names the question a resource would answer about a subject.
+func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
+	switch {
+	case subject.Type == typeContainer && candidate.Type == typeAccount:
+		return roleAccountGate
+	case subject.Type == typeContainer && candidate.Address == subject.Address:
+		return roleAccessLevel
+	case subject.Type == typeAccount && candidate.Type == typeContainer:
+		return roleContainer
+	case subject.Type == typeAccount && candidate.Address == subject.Address:
+		return roleAccountItself
+	}
+	return ""
+}
+
+// attrTags is where Azure carries user-supplied labels.
+const attrTags = "tags"
+
 // Map normalizes a container together with the account that gates it, or an
 // account that has no container here to speak for it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
@@ -48,6 +77,7 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 		Cloud:       model.CloudAzure,
 		Family:      model.FamilyObjectStorage,
 		Destructive: subject.IsDestructive(),
+		Environment: declared.Environment(subject, attrTags, model.CloudAzure),
 	}
 
 	if subject.Type == typeAccount {
@@ -71,8 +101,10 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 	case account == nil:
 		capabilities.Unresolved = []model.MissingControl{{
 			CheckID: "AZURE_STORAGE_ACCOUNT_NOT_IN_PLAN",
-			Reason:  "The storage account gating anonymous access is not part of this plan.",
-			Cloud:   model.CloudAzure,
+			// Not an absence: a mapper sees the admissible changes, so an
+			// account present only as a read is invisible to it.
+			Reason: "This change does not set the storage account that gates anonymous access.",
+			Cloud:  model.CloudAzure,
 		}}
 	}
 	resource.ObjectStorage = &capabilities
@@ -102,7 +134,7 @@ func accountCapabilities(account terraformplan.ResourceChange, related []terrafo
 	capabilities := &model.ObjectStorageCapabilities{
 		Unresolved: []model.MissingControl{{
 			CheckID: "AZURE_CONTAINER_NOT_IN_PLAN",
-			Reason:  "This storage account permits anonymous access and no container of it is part of this plan.",
+			Reason:  "This storage account permits anonymous access and this change creates no container of it.",
 			Cloud:   model.CloudAzure,
 		}},
 	}
@@ -159,8 +191,8 @@ func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model
 		return answerUnknown, nil
 	}
 
-	sources := []model.Provenance{provenance(account.Address, attrAllowPublic)}
 	value := account.After.Field(attrAllowPublic)
+	sources := []model.Provenance{declared.Source(model.CloudAzure, account.Address, attrAllowPublic, value)}
 	switch {
 	case value.Kind() == terraformplan.KindBool:
 		if value.Bool() {
@@ -180,9 +212,9 @@ func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model
 // containerIsPublic reads the container's access level. blob exposes the blobs;
 // container additionally exposes the listing.
 func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance) {
-	sources := []model.Provenance{provenance(container.Address, attrAccessType)}
-
 	value := container.After.Field(attrAccessType)
+	sources := []model.Provenance{declared.Source(model.CloudAzure, container.Address, attrAccessType, value)}
+
 	switch {
 	case value.Kind() == terraformplan.KindString:
 		if value.Text() == accessTypePublic || value.Text() == accessTypeList {
@@ -225,6 +257,20 @@ func findType(changes []terraformplan.ResourceChange, resourceType string) (*ter
 	return found, false
 }
 
-func provenance(address, attribute string) model.Provenance {
-	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAzure}
+// Bindings declares that a container is placed in an account, and how.
+//
+// The provider accepts either the account's resource id or its name, and a
+// container carries one of them; both are the application, so both are
+// declared. An account declares nothing: containers name it, not the reverse.
+func (Mapper) Bindings() []declared.Binding {
+	return []declared.Binding{
+		{From: typeContainer, Attribute: "storage_account_id", To: typeAccount},
+		{From: typeContainer, Attribute: "storage_account_name", To: typeAccount},
+	}
+}
+
+// Environment reads a resource's declared environment with this provider's
+// vocabulary, so a control resource is asked the same question as a subject.
+func (m Mapper) Environment(change terraformplan.ResourceChange) model.Fact[string] {
+	return declared.Environment(change, attrTags, model.CloudAzure)
 }

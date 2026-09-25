@@ -1,0 +1,2532 @@
+package providers_test
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers"
+	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
+)
+
+// Each cloud names the same idea differently, and only an explicit declaration
+// counts. A module named "staging" or a file called staging.tfplan is a guess
+// about a name; docs/INTENT-CONTRACT.md is explicit that guessing is not
+// sufficient evidence for blocking.
+func TestEnvironmentIsReadFromAnExplicitDeclaration(t *testing.T) {
+	cases := map[string]struct {
+		resourceType string
+		address      string
+		attribute    string
+	}{
+		"AWS tags":   {"aws_s3_bucket", "aws_s3_bucket.b", "tags"},
+		"Azure tags": {"azurerm_storage_account", "azurerm_storage_account.b", "tags"},
+		"GCP labels": {"google_storage_bucket", "google_storage_bucket.b", "labels"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "%s", "mode": "managed", "type": "%s", "name": "b", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"name": "b", "%s": {"environment": "staging"}}}}
+			  ]
+			}`, tc.address, tc.resourceType, tc.attribute)
+
+			resource := normalizedAt(t, raw, tc.address)
+			if !resource.Environment.IsKnown() {
+				t.Fatalf("environment = %q, want a known declaration", resource.Environment.State)
+			}
+			if resource.Environment.Get() != "staging" {
+				t.Errorf("environment = %q", resource.Environment.Get())
+			}
+			if len(resource.Environment.Sources) == 0 {
+				t.Error("the declaration must locate the attribute it came from")
+			}
+		})
+	}
+}
+
+// TestAnEnvironmentKeyIsMatchedWithoutRegardToCase keeps a conventional tag
+// readable however it was capitalized. "Environment" and "environment" are one
+// declaration, not two.
+func TestAnEnvironmentKeyIsMatchedWithoutRegardToCase(t *testing.T) {
+	for _, key := range []string{"environment", "Environment", "ENVIRONMENT"} {
+		t.Run(key, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"bucket": "b", "tags": {"%s": "staging"}}}}
+			  ]
+			}`, key)
+
+			resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+			if !resource.Environment.IsKnown() || resource.Environment.Get() != "staging" {
+				t.Fatalf("environment = %v/%q", resource.Environment.State, resource.Environment.Get())
+			}
+		})
+	}
+}
+
+// TestNothingUnstatedDeclaresAnEnvironment is the rule the M03 rounds
+// converged on, applied to this fact. An absent tag, an unreadable one, and one
+// of the wrong kind are all unstated, and an unstated environment agrees with
+// nothing — least of all with whatever the contract happens to say.
+func TestNothingUnstatedDeclaresAnEnvironment(t *testing.T) {
+	cases := map[string]string{
+		"no tags at all":            `"bucket": "b"`,
+		"tags without the key":      `"bucket": "b", "tags": {"owner": "checkout"}`,
+		"an empty value":            `"bucket": "b", "tags": {"environment": ""}`,
+		"tags of the wrong kind":    `"bucket": "b", "tags": ["environment"]`,
+		"a value of the wrong kind": `"bucket": "b", "tags": {"environment": ["staging"]}`,
+	}
+
+	for name, after := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {%s}}}
+			  ]
+			}`, after)
+
+			resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+			if resource.Environment.IsKnown() {
+				t.Fatalf("an unstated environment was read as %q", resource.Environment.Get())
+			}
+		})
+	}
+}
+
+// TestAnUnreadableEnvironmentKeepsItsState separates "not declared" from "not
+// readable", because the two produce different reports: one says the resource
+// said nothing, the other says it said something this run could not see.
+func TestAnUnreadableEnvironmentKeepsItsState(t *testing.T) {
+	cases := map[string]struct {
+		after string
+		want  model.FactState
+	}{
+		"not yet known": {
+			`"bucket": "b", "tags": null}, "after_unknown": {"tags": true`,
+			model.FactUnknown,
+		},
+		"sensitive": {
+			`"bucket": "b", "tags": {"environment": "staging"}}, "after_sensitive": {"tags": true`,
+			model.FactRedacted,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {%s}}}
+			  ]
+			}`, tc.after)
+
+			resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+			if resource.Environment.State != tc.want {
+				t.Fatalf("state = %q, want %q", resource.Environment.State, tc.want)
+			}
+			if resource.Environment.IsKnown() {
+				t.Error("an unreadable declaration must not present a value")
+			}
+		})
+	}
+}
+
+// TestAnUninterpretedResourceDeclaresNoEnvironment keeps the fact tied to a
+// mapper that understood the resource. Reading a tag block from a resource type
+// no mapper claimed would be guessing that the provider calls it what AWS does.
+func TestAnUninterpretedResourceDeclaresNoEnvironment(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "vendor_thing.b", "mode": "managed", "type": "vendor_thing", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"tags": {"environment": "staging"}}}}
+	  ]
+	}`
+
+	resource := normalizedAt(t, raw, "vendor_thing.b")
+	if resource.Interpreted {
+		t.Fatal("no mapper should have claimed this resource")
+	}
+	if resource.Environment.IsKnown() {
+		t.Fatalf("an uninterpreted resource declared %q", resource.Environment.Get())
+	}
+}
+
+// TestTwoDeclarationsAreAmbiguousNotResolved is round eleven's finding one
+// level up. Two controls of one kind over one subject is not a fact stated
+// twice, it is a fact not stated: which of them the provider applies is not
+// something the plan says.
+//
+// Keys() is sorted, so "Environment" precedes "environment" and taking the
+// first match let a resource tagged with both report whichever sorted first —
+// a plan declaring production passing a staging contract, with the bundle
+// saying the change was consistent in every supported check.
+func TestTwoDeclarationsAreAmbiguousNotResolved(t *testing.T) {
+	cases := map[string]string{
+		"differing in case":  `{"Environment": "staging", "environment": "production"}`,
+		"the other way":      `{"Environment": "production", "environment": "staging"}`,
+		"three of them":      `{"ENVIRONMENT": "a", "Environment": "b", "environment": "c"}`,
+		"one of them absent": `{"Environment": "staging", "environment": ""}`,
+	}
+
+	for name, tags := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"bucket": "b", "tags": %s}}}
+			  ]
+			}`, tags)
+
+			resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+			if resource.Environment.IsKnown() {
+				t.Fatalf("two declarations resolved to %q", resource.Environment.Get())
+			}
+		})
+	}
+}
+
+// TestOneDeclarationRepeatedIsStillOneDeclaration keeps the ambiguity rule from
+// costing the ordinary case. Two keys that agree say one thing.
+func TestOneDeclarationRepeatedIsStillOneDeclaration(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "b", "tags": {"Environment": "staging", "environment": "staging"}}}}
+	  ]
+	}`
+
+	resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+	if !resource.Environment.IsKnown() || resource.Environment.Get() != "staging" {
+		t.Fatalf("two agreeing declarations gave %v/%q",
+			resource.Environment.State, resource.Environment.Get())
+	}
+}
+
+func normalizedAt(t *testing.T, raw, address string) model.NormalizedResource {
+	t.Helper()
+	plan, err := terraformplan.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v\n%s", err, raw)
+	}
+	resource, ok := providers.Normalize(plan, providers.Default()).At(address)
+	if !ok {
+		t.Fatalf("no normalized resource at %s", address)
+	}
+	return resource
+}
+
+// TestAnUnreadableValueKeepsItsStateWhenTheBlockIsReadable covers the marker on
+// the value rather than on the whole attribute.
+//
+// Removing the per-value check does not leak — the parser reports an unreadable
+// value as KindAbsent — but it degrades REDACTED to ABSENT, turning "the
+// resource said something this run could not see" into "the resource said
+// nothing". Those produce different reports, and after this milestone they
+// produce different decisions: one is a required unknown and the other is not.
+func TestAnUnreadableValueKeepsItsStateWhenTheBlockIsReadable(t *testing.T) {
+	cases := map[string]struct {
+		after string
+		want  model.FactState
+	}{
+		"the value is sensitive": {
+			`"bucket": "b", "tags": {"owner": "checkout", "environment": "staging"}},
+			 "after_sensitive": {"tags": {"environment": true}`,
+			model.FactRedacted,
+		},
+		"the value is not yet known": {
+			`"bucket": "b", "tags": {"owner": "checkout", "environment": null}},
+			 "after_unknown": {"tags": {"environment": true}`,
+			model.FactUnknown,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+			     "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {%s}}}
+			  ]
+			}`, tc.after)
+
+			resource := normalizedAt(t, raw, "aws_s3_bucket.b")
+			if resource.Environment.State != tc.want {
+				t.Fatalf("state = %q, want %q", resource.Environment.State, tc.want)
+			}
+		})
+	}
+}
+
+// TestAControlDefersOnlyToASubject keeps a deferral from pointing at another
+// control.
+//
+// A control resource's meaning belongs to the subject it governs. Two controls
+// correlated with each other — a policy and an ownership-controls block both
+// naming the same bucket are related through it — would otherwise vouch for one
+// another, and the question of whether anything judged them would be passed
+// back and forth and never answered.
+func TestAControlDefersOnlyToASubject(t *testing.T) {
+	// Two controls and no bucket. They are correlated with each other through
+	// the bucket they both name, which is not in this plan.
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket_policy.open", "mode": "managed", "type": "aws_s3_bucket_policy",
+	     "name": "open", "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "elsewhere"}}},
+	    {"address": "aws_s3_bucket_ownership_controls.own", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "own",
+	     "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "elsewhere"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket_policy.open", "mode": "managed", "type": "aws_s3_bucket_policy",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket_ownership_controls.own"]}}},
+	    {"address": "aws_s3_bucket_ownership_controls.own", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "own",
+	     "expressions": {"bucket": {"references": ["aws_s3_bucket_policy.open"]}}}
+	  ]}}
+	}`
+
+	for _, address := range []string{
+		"aws_s3_bucket_policy.open", "aws_s3_bucket_ownership_controls.own",
+	} {
+		resource := normalizedAt(t, raw, address)
+		if !resource.Interpreted {
+			t.Fatalf("%s should have been understood", address)
+		}
+		if len(resource.DefersTo) != 0 {
+			t.Errorf("%s defers to %v; a control is not a subject", address, resource.DefersTo)
+		}
+	}
+}
+
+// TestAControlDefersToTheSubjectItGoverns keeps the rule from costing the
+// ordinary case, where the bucket is right there.
+func TestAControlDefersToTheSubjectItGoverns(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket", "name": "assets",
+	     "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "provider_name": "registry.terraform.io/hashicorp/aws",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_bucket_public_access_block.assets")
+	if len(control.DefersTo) != 1 || control.DefersTo[0] != "aws_s3_bucket.assets" {
+		t.Fatalf("defers to %v, want the bucket it governs", control.DefersTo)
+	}
+}
+
+// TestAResourceThatGovernsWithoutNamingDefersToWhatItGoverns covers the two
+// deferrals the configuration does not record as a reference.
+//
+// An AWS account-wide block is scoped to the provider instance and names no
+// bucket. An Azure storage account is named by its containers rather than
+// naming them. In both cases the reference-based default finds nothing, and
+// without the mapper saying so each would read as a resource nothing examined —
+// which is false, since every verdict in the plan consults it.
+func TestAResourceThatGovernsWithoutNamingDefersToWhatItGoverns(t *testing.T) {
+	t.Run("an AWS account block", func(t *testing.T) {
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+		    {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+		     "type": "aws_s3_account_public_access_block", "name": "this", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"block_public_acls": true, "block_public_policy": true,
+		                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+		  ],
+		  "configuration": {
+		    "provider_config": {"aws": {"name": "aws", "full_name": "p"}},
+		    "root_module": {"resources": [
+		      {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		       "name": "assets", "provider_config_key": "aws", "expressions": {}},
+		      {"address": "aws_s3_account_public_access_block.this", "mode": "managed",
+		       "type": "aws_s3_account_public_access_block", "name": "this",
+		       "provider_config_key": "aws", "expressions": {}}
+		    ]}
+		  }
+		}`
+
+		block := normalizedAt(t, raw, "aws_s3_account_public_access_block.this")
+		if len(block.DefersTo) != 1 || block.DefersTo[0] != "aws_s3_bucket.assets" {
+			t.Fatalf("defers to %v, want the bucket it governs", block.DefersTo)
+		}
+	})
+
+	// The Azure account's deferral comes from the container's own reference to
+	// it, not from Governs: a container names its account, so the reference
+	// loop already supplies the link and a Governs for Azure was dead code.
+	t.Run("an Azure account with a container", func(t *testing.T) {
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "azurerm_storage_account.sa", "mode": "managed",
+		     "type": "azurerm_storage_account", "name": "sa", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"name": "s", "allow_nested_items_to_be_public": false}}},
+		    {"address": "azurerm_storage_container.assets", "mode": "managed",
+		     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"name": "assets", "container_access_type": "private"}}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "azurerm_storage_account.sa", "mode": "managed",
+		     "type": "azurerm_storage_account", "name": "sa", "expressions": {}},
+		    {"address": "azurerm_storage_container.assets", "mode": "managed",
+		     "type": "azurerm_storage_container", "name": "assets",
+		     "expressions": {"storage_account_id": {"references": [
+		       "azurerm_storage_account.sa.id", "azurerm_storage_account.sa"]}}}
+		  ]}}
+		}`
+
+		account := normalizedAt(t, raw, "azurerm_storage_account.sa")
+		if account.ObjectStorage != nil {
+			t.Fatal("an account with a container in the plan should defer to it")
+		}
+		if len(account.DefersTo) != 1 || account.DefersTo[0] != "azurerm_storage_container.assets" {
+			t.Fatalf("defers to %v, want the container it answers for", account.DefersTo)
+		}
+	})
+
+	t.Run("an account block in another provider instance", func(t *testing.T) {
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+		    {"address": "aws_s3_account_public_access_block.other", "mode": "managed",
+		     "type": "aws_s3_account_public_access_block", "name": "other", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"block_public_acls": true, "block_public_policy": true,
+		                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+		  ],
+		  "configuration": {
+		    "provider_config": {
+		      "aws": {"name": "aws", "full_name": "p"},
+		      "aws.other": {"name": "aws", "alias": "other", "full_name": "p"}
+		    },
+		    "root_module": {"resources": [
+		      {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		       "name": "assets", "provider_config_key": "aws", "expressions": {}},
+		      {"address": "aws_s3_account_public_access_block.other", "mode": "managed",
+		       "type": "aws_s3_account_public_access_block", "name": "other",
+		       "provider_config_key": "aws.other", "expressions": {}}
+		    ]}
+		  }
+		}`
+
+		block := normalizedAt(t, raw, "aws_s3_account_public_access_block.other")
+		if len(block.DefersTo) != 0 {
+			t.Fatalf("defers to %v; a block in another account governs nothing here", block.DefersTo)
+		}
+	})
+}
+
+// TestGovernsClaimsOnlyWhatItGoverns keeps the deferral from becoming a blanket
+// excuse.
+//
+// Governs answers for one resource type per mapper. Dropping that filter would
+// let any resource claim to govern every subject in the plan, so a control for
+// a bucket managed elsewhere would be covered by an unrelated bucket that
+// happens to be in the same plan — which is the orphan-control defect wearing
+// the deferral as a disguise.
+func TestGovernsClaimsOnlyWhatItGoverns(t *testing.T) {
+	// An ACL for a bucket that is not here, beside an unrelated bucket that is.
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.unrelated", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "unrelated", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "u"}}},
+	    {"address": "aws_s3_bucket_acl.elsewhere", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "elsewhere", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "managed-elsewhere", "acl": "public-read"}}}
+	  ],
+	  "configuration": {
+	    "provider_config": {"aws": {"name": "aws", "full_name": "p"}},
+	    "root_module": {"resources": [
+	      {"address": "aws_s3_bucket.unrelated", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "unrelated", "provider_config_key": "aws", "expressions": {}},
+	      {"address": "aws_s3_bucket_acl.elsewhere", "mode": "managed", "type": "aws_s3_bucket_acl",
+	       "name": "elsewhere", "provider_config_key": "aws", "expressions": {}}
+	    ]}
+	  }
+	}`
+
+	acl := normalizedAt(t, raw, "aws_s3_bucket_acl.elsewhere")
+	if len(acl.DefersTo) != 0 {
+		t.Fatalf("an ACL for a bucket managed elsewhere defers to %v", acl.DefersTo)
+	}
+
+	// The same shape in Azure. There is no Governs here — a container names its
+	// account, so the reference loop is the only route — and what must hold is
+	// that an account the container never names is not consulted for it.
+	azure := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.unrelated", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "unrelated", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "u", "allow_nested_items_to_be_public": false}}},
+	    {"address": "azurerm_storage_container.orphan", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "orphan", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "o", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.unrelated", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "unrelated", "expressions": {}},
+	    {"address": "azurerm_storage_container.orphan", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "orphan", "expressions": {}}
+	  ]}}
+	}`
+
+	// The container is a subject and reaches its own verdict, so the account's
+	// deferral to it is legitimate — but the container must not have been
+	// judged using an account it never names.
+	container := normalizedAt(t, azure, "azurerm_storage_container.orphan")
+	if container.ObjectStorage == nil {
+		t.Fatal("a container is a subject and must reach a verdict of its own")
+	}
+	if container.ObjectStorage.PublicAccess.IsKnown() {
+		t.Fatalf("a container whose account is absent was decided anyway: %v",
+			container.ObjectStorage.PublicAccess.Get())
+	}
+	for _, source := range container.ObjectStorage.PublicAccess.Sources {
+		if source.ResourceAddress == "azurerm_storage_account.unrelated" {
+			t.Fatal("an unrelated account was consulted for this container")
+		}
+	}
+}
+
+// TestEveryResourceIsAskedWhereItBelongs closes a claim the bundle made about
+// resources nothing had read.
+//
+// Only a subject went through the environment reader. A control resource and an
+// opaque one kept the zero fact, which the rule then reported as "the resource
+// declares no environment" — a false statement in a document whose only value
+// is that its statements are true, and the same defect the CLOUD_DETERMINABLE
+// wording was corrected for.
+//
+// A control carries tags like anything else, and a resource no mapper
+// understood carries whatever it carries. Reading the attribute is one call;
+// not reading it and then describing the result was the error.
+func TestEveryResourceIsAskedWhereItBelongs(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "tags": {"environment": "staging"}}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"tags": {"environment": "production"},
+	                          "block_public_acls": true}}},
+	    {"address": "vendor_thing.x", "mode": "managed", "type": "vendor_thing", "name": "x",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"tags": {"environment": "production"}}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "vendor_thing.x", "mode": "managed", "type": "vendor_thing", "name": "x",
+	     "expressions": {}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_bucket_public_access_block.assets")
+	if !control.Environment.IsKnown() || control.Environment.Get() != "production" {
+		t.Errorf("a control's environment was not read: %v/%q",
+			control.Environment.State, control.Environment.Get())
+	}
+
+	// A resource no mapper understood has no provider vocabulary to read it
+	// by, so it declares nothing — and must say that rather than nothing at
+	// all, which is what a zero fact says.
+	opaque := normalizedAt(t, raw, "vendor_thing.x")
+	if opaque.Interpreted {
+		t.Fatal("no mapper should have claimed this resource")
+	}
+	// The zero state is the answer here, and it is a different answer from
+	// Unknown: nobody looked, rather than somebody looked and could not tell.
+	// The rule turns the two into different sentences, and only one of them is
+	// true of a resource whose tags are plainly readable.
+	if opaque.Environment.State != "" {
+		t.Errorf("an opaque resource reported %q; nothing read it, which is not a determination",
+			opaque.Environment.State)
+	}
+	if opaque.Environment.IsKnown() {
+		t.Errorf("an opaque resource's tags were read by a vocabulary no mapper vouched for: %q",
+			opaque.Environment.Get())
+	}
+}
+
+// TestADataSourceIsNotAChange keeps a read out of a verdict about a change.
+//
+// Mode was parsed and read by nothing, so a data source of a supported type was
+// normalized as a subject and judged: reading an existing production bucket
+// produced an environment mismatch, and reading one alone produced a required
+// unknown asking a read to prove its exposure. Neither is about the change, and
+// docs/PRODUCT.md disclaims saying anything about existing infrastructure.
+//
+// A data source is kept in the graph, because a plan's contents are not
+// filtered, and it carries no capabilities, because it changes nothing.
+func TestADataSourceIsNotAChange(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+	     "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "prod", "tags": {"environment": "production"}}}}
+	  ]
+	}`
+
+	resource := normalizedAt(t, raw, "data.aws_s3_bucket.existing")
+
+	if resource.ObjectStorage != nil {
+		t.Error("a data source was given capabilities; it changes nothing to have them about")
+	}
+	if resource.Environment.IsKnown() {
+		t.Errorf("a data source declared an environment for the change: %q", resource.Environment.Get())
+	}
+	if resource.Destructive {
+		t.Error("a read was called destructive")
+	}
+}
+
+// TestAModeThatContradictsItsActionsIsNotBelieved keeps one unvalidated string
+// from erasing a resource from the report.
+//
+// Terraform's answer to "is this a change?" is the pair (mode, actions), and
+// this build restated it as mode == "data". A plan claiming to read while its
+// actions say delete was believed on the mode alone: four rules skipped it,
+// and the bundle did not mention that the plan contained anything.
+//
+// Two declarations that disagree are the project's own settled case. Neither
+// may be believed, and the disagreement is reported rather than resolved.
+func TestAModeThatContradictsItsActionsIsNotBelieved(t *testing.T) {
+	read := func(actions string) string {
+		return `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+		     "name": "existing", "provider_name": "p",
+		     "change": {"actions": ` + actions + `, "before": {"bucket": "b"}, "after": null}}
+		  ]
+		}`
+	}
+
+	t.Run("a read that says it deletes", func(t *testing.T) {
+		resource := normalizedAt(t, read(`["delete"]`), "data.aws_s3_bucket.existing")
+		if resource.ReadOnly {
+			t.Fatal("a change claiming to read while deleting was believed to be a read")
+		}
+	})
+
+	t.Run("a read that says it creates", func(t *testing.T) {
+		resource := normalizedAt(t, read(`["create"]`), "data.aws_s3_bucket.existing")
+		if resource.ReadOnly {
+			t.Fatal("a change claiming to read while creating was believed to be a read")
+		}
+	})
+
+	for name, actions := range map[string]string{
+		"a plain read": `["read"]`,
+		"a no-op read": `["no-op"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			resource := normalizedAt(t, read(actions), "data.aws_s3_bucket.existing")
+			if !resource.ReadOnly {
+				t.Fatalf("a data source whose actions agree was not read as one: %s", actions)
+			}
+		})
+	}
+}
+
+// TestAReadCannotDecideAVerdict draws the admissibility boundary where the
+// facts are made, rather than where they are read.
+//
+// ReadOnly was applied four times in the policy layer and nowhere in the
+// normalizer, so every rule could decline to judge a read and none could stop
+// a read from having already judged something else. An Azure container set to
+// blob access, beside a data source reporting that its account forbids
+// anonymous access, came back Known(false) — the plan proves prevention — on a
+// plan that manages the container and merely observes the account.
+//
+// Worse than the wrong verdict: the record naming the gap disappeared with it,
+// because the account looked present, and the data source appeared nowhere in
+// the bundle because a Known(false) emits nothing.
+func TestAReadCannotDecideAVerdict(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "data.azurerm_storage_account.existing", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "acct", "allow_nested_items_to_be_public": false}}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "data.azurerm_storage_account.existing", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "existing", "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {"storage_account_id": {"references": [
+	       "data.azurerm_storage_account.existing.id",
+	       "data.azurerm_storage_account.existing"]}}}
+	  ]}}
+	}`
+
+	container := normalizedAt(t, raw, "azurerm_storage_container.assets")
+	if container.ObjectStorage == nil {
+		t.Fatal("no normalized container")
+	}
+
+	exposure := container.ObjectStorage.PublicAccess
+	if exposure.IsKnown() && !exposure.Get() {
+		t.Fatal("a read of existing state was taken as proof that the change prevents exposure")
+	}
+	for _, source := range exposure.Sources {
+		if contains(source.ResourceAddress, "data.") {
+			t.Errorf("a read contributed to the verdict: %s", source.ResourceAddress)
+		}
+	}
+
+	// And the gap it hid is named again: the account gating this container is
+	// not part of this plan, whatever the plan reads about it.
+	var named bool
+	for _, control := range container.ObjectStorage.Unresolved {
+		if control.CheckID == "AZURE_STORAGE_ACCOUNT_NOT_IN_PLAN" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the missing account was not reported: %v", container.ObjectStorage.Unresolved)
+	}
+
+	// The read is still in the graph. Nothing in a plan is filtered away.
+	if _, ok := providers.Normalize(mustParse(t, raw), providers.Default()).
+		At("data.azurerm_storage_account.existing"); !ok {
+		t.Error("the data source was dropped from the graph rather than declared inadmissible")
+	}
+}
+
+// TestAReadCannotShutARouteForAManagedResource is the same boundary on the AWS
+// side, where a control is a separate resource rather than the subject's own
+// gate.
+func TestAReadCannotShutARouteForAManagedResource(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.existing", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.existing", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "existing",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	exposure := bucket.ObjectStorage.PublicAccess
+	if !exposure.IsKnown() || !exposure.Get() {
+		t.Fatalf("the bucket's own ACL grants public access: state=%q grants=%v",
+			exposure.State, exposure.Get())
+	}
+}
+
+func mustParse(t *testing.T, raw string) terraformplan.Plan {
+	t.Helper()
+	plan, err := terraformplan.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	return plan
+}
+
+// TestWithholdingASourceIsNotTheSameAsItsAbsence is the defect the previous
+// round's fix introduced, and the reason it introduced it.
+//
+// Excluding a read from what a mapper sees stops a read exonerating anything.
+// It also makes the read vanish, and an inadmissible fact and an absent fact
+// are different things. A container naming two accounts — one managed, one
+// read, which is what Terraform writes for a conditional — had its ambiguity
+// resolved by deletion: two candidates became one, the survivor became
+// authoritative, and a container explicitly set to blob access came back
+// proven private.
+//
+// A fact computed while something was withheld from it is not Known. The
+// withheld source is named, so the reader can see what the tool declined to
+// use and why the answer is open.
+func TestWithholdingASourceIsNotTheSameAsItsAbsence(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "azurerm_storage_account.locked", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "locked", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "l", "allow_nested_items_to_be_public": false}}},
+	    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "legacy", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "g", "allow_nested_items_to_be_public": true}}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "assets", "container_access_type": "blob"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "azurerm_storage_account.locked", "mode": "managed",
+	     "type": "azurerm_storage_account", "name": "locked", "expressions": {}},
+	    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+	     "type": "azurerm_storage_account", "name": "legacy", "expressions": {}},
+	    {"address": "azurerm_storage_container.assets", "mode": "managed",
+	     "type": "azurerm_storage_container", "name": "assets",
+	     "expressions": {"storage_account_id": {"references": [
+	       "data.azurerm_storage_account.legacy.id", "data.azurerm_storage_account.legacy",
+	       "azurerm_storage_account.locked.id", "azurerm_storage_account.locked"]}}}
+	  ]}}
+	}`
+
+	container := normalizedAt(t, raw, "azurerm_storage_container.assets")
+	if container.ObjectStorage == nil {
+		t.Fatal("no normalized container")
+	}
+
+	exposure := container.ObjectStorage.PublicAccess
+	if exposure.IsKnown() {
+		t.Fatalf("a candidate was withheld and the answer was settled anyway: %v", exposure.Get())
+	}
+
+	var named bool
+	for _, control := range container.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			named = true
+			// The address is located rather than narrated: it is a plan value,
+			// and a free-text field is rendered as prose.
+			var located bool
+			for _, source := range control.Sources {
+				if contains(source.ResourceAddress, "legacy") {
+					located = true
+				}
+			}
+			if !located {
+				t.Errorf("the record does not locate what was withheld: %v", control.Sources)
+			}
+		}
+	}
+	if !named {
+		t.Fatalf("nothing recorded that a source was withheld: %v", container.ObjectStorage.Unresolved)
+	}
+}
+
+// TestAWithheldGrantIsRecordedNotDiscarded is the same rule in the other
+// direction. A read cannot incriminate either — what it describes is existing
+// state, not what the change does — but discarding it silently left a bundle
+// saying the change was consistent in every supported check beside a plan that
+// states a public grant.
+func TestAWithheldGrantIsRecordedNotDiscarded(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a",
+	                          "policy": "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\"}]}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if bucket.ObjectStorage.PublicAccess.IsKnown() {
+		t.Fatalf("a withheld grant left the answer settled: %v",
+			bucket.ObjectStorage.PublicAccess.Get())
+	}
+
+	var named bool
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the withheld policy was not recorded: %v", bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestNothingIsWithheldFromAnOrdinaryPlan keeps the record off every plan that
+// has no read in it, so it means something when it appears.
+func TestNothingIsWithheldFromAnOrdinaryPlan(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if !bucket.ObjectStorage.PublicAccess.IsKnown() || bucket.ObjectStorage.PublicAccess.Get() {
+		t.Fatalf("the block shuts every route: %v/%v",
+			bucket.ObjectStorage.PublicAccess.State, bucket.ObjectStorage.PublicAccess.Get())
+	}
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			t.Errorf("a plan with no read recorded a withheld source: %v", control)
+		}
+	}
+}
+
+// TestWithholdingDependsOnWhetherItWouldHaveMattered replaces a guess with a
+// question the mapper answers.
+//
+// A withheld source was implicated by its type: anything a mapper interprets,
+// related to the subject, downgraded the verdict. That is a static stand-in for
+// a question about a particular derivation, and it was wrong in both directions
+// at once.
+//
+// It over-corrected where no choice was made: a GCP bucket whose prevention is
+// enforced is proven private from its own attribute, before any binding is
+// read, and an unrelated IAM policy read alongside it turned a PASS into an
+// UNKNOWN. And it under-corrected where a choice was made: a container naming
+// two accounts, one managed and one read, had the read deleted from the
+// candidate count and the survivor attributed — so the presence of a read made
+// the tool more certain than the presence of a managed resource, and produced a
+// BLOCK the plan does not determine.
+//
+// Whether a source would have mattered is answered by adding it back and
+// seeing whether the mapper says something else. The second answer is never
+// used as a verdict; only the difference between them is.
+func TestWithholdingDependsOnWhetherItWouldHaveMattered(t *testing.T) {
+	t.Run("a choice the read was a candidate for", func(t *testing.T) {
+		// The managed account permits, the read forbids, and which one gates
+		// the container is not stated.
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "azurerm_storage_account.open", "mode": "managed",
+		     "type": "azurerm_storage_account", "name": "open", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"name": "o", "allow_nested_items_to_be_public": true}}},
+		    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+		     "type": "azurerm_storage_account", "name": "legacy", "provider_name": "p",
+		     "change": {"actions": ["read"], "before": null,
+		                "after": {"name": "g", "allow_nested_items_to_be_public": false}}},
+		    {"address": "azurerm_storage_container.assets", "mode": "managed",
+		     "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"name": "assets", "container_access_type": "blob"}}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "azurerm_storage_account.open", "mode": "managed",
+		     "type": "azurerm_storage_account", "name": "open", "expressions": {}},
+		    {"address": "data.azurerm_storage_account.legacy", "mode": "data",
+		     "type": "azurerm_storage_account", "name": "legacy", "expressions": {}},
+		    {"address": "azurerm_storage_container.assets", "mode": "managed",
+		     "type": "azurerm_storage_container", "name": "assets",
+		     "expressions": {"storage_account_id": {"references": [
+		       "data.azurerm_storage_account.legacy.id", "data.azurerm_storage_account.legacy",
+		       "azurerm_storage_account.open.id", "azurerm_storage_account.open"]}}}
+		  ]}}
+		}`
+
+		container := normalizedAt(t, raw, "azurerm_storage_container.assets")
+		if container.ObjectStorage.PublicAccess.IsKnown() {
+			t.Fatalf("the identity of the gate was attributed by deleting a candidate: %v",
+				container.ObjectStorage.PublicAccess.Get())
+		}
+		if !withheldRecorded(container) {
+			t.Error("the candidate that was withheld is not named")
+		}
+	})
+
+	t.Run("a proof the read could not have touched", func(t *testing.T) {
+		// Prevention is enforced on the bucket itself, which settles the
+		// question before any binding is consulted. The read answers the
+		// binding question, which nothing admissible answered, so it contests
+		// nothing -- and it is not recorded either, because a settled answer
+		// leaves no open question for it to bear on.
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "google_storage_bucket.b", "mode": "managed",
+		     "type": "google_storage_bucket", "name": "b", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"name": "b", "public_access_prevention": "enforced"}}},
+		    {"address": "data.google_storage_bucket_iam_policy.current", "mode": "data",
+		     "type": "google_storage_bucket_iam_policy", "name": "current", "provider_name": "p",
+		     "change": {"actions": ["read"], "before": null,
+		                "after": {"bucket": "b", "policy_data": "{}"}}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "google_storage_bucket.b", "mode": "managed",
+		     "type": "google_storage_bucket", "name": "b", "expressions": {}},
+		    {"address": "data.google_storage_bucket_iam_policy.current", "mode": "data",
+		     "type": "google_storage_bucket_iam_policy", "name": "current",
+		     "expressions": {"bucket": {"references": [
+		       "google_storage_bucket.b.name", "google_storage_bucket.b"]}}}
+		  ]}}
+		}`
+
+		bucket := normalizedAt(t, raw, "google_storage_bucket.b")
+		exposure := bucket.ObjectStorage.PublicAccess
+		if !exposure.IsKnown() || exposure.Get() {
+			t.Fatalf("prevention is enforced on the bucket itself: %v/%v",
+				exposure.State, exposure.Get())
+		}
+		if withheldRecorded(bucket) {
+			t.Error("a source the verdict does not depend on was reported as withheld")
+		}
+	})
+
+	t.Run("a grant the read could not have made", func(t *testing.T) {
+		// The bucket's own ACL grants public access. A read cannot unsay it,
+		// and nothing here rests on choosing between candidates.
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+		    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+		     "name": "open", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+		    {"address": "data.aws_s3_bucket_policy.current", "mode": "data",
+		     "type": "aws_s3_bucket_policy", "name": "current", "provider_name": "p",
+		     "change": {"actions": ["read"], "before": null,
+		                "after": {"bucket": "a", "policy": "{}"}}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "expressions": {}},
+		    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+		     "name": "open",
+		     "expressions": {"bucket": {"references": [
+		       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+		    {"address": "data.aws_s3_bucket_policy.current", "mode": "data",
+		     "type": "aws_s3_bucket_policy", "name": "current",
+		     "expressions": {"bucket": {"references": [
+		       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+		  ]}}
+		}`
+
+		bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+		exposure := bucket.ObjectStorage.PublicAccess
+		if !exposure.IsKnown() || !exposure.Get() {
+			t.Fatalf("the bucket's own ACL grants public access: %v/%v",
+				exposure.State, exposure.Get())
+		}
+	})
+}
+
+func withheldRecorded(resource model.NormalizedResource) bool {
+	if resource.ObjectStorage == nil {
+		return false
+	}
+	for _, control := range resource.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAControlOverOnlyReadsSaysSo covers the flag through the normalizer, which
+// is where it was never set.
+//
+// governsOnlyReads was handed the admissible view of the graph, from which
+// every read has already been removed — so its read count was always zero and
+// the flag was always false. The test that existed set the flag by hand and
+// asserted on the sentence, so the whole path passed over the gap.
+func TestAControlOverOnlyReadsSaysSo(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+	     "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_policy.p", "mode": "managed", "type": "aws_s3_bucket_policy",
+	     "name": "p", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+	     "name": "existing", "expressions": {}},
+	    {"address": "aws_s3_bucket_policy.p", "mode": "managed", "type": "aws_s3_bucket_policy",
+	     "name": "p",
+	     "expressions": {"bucket": {"references": [
+	       "data.aws_s3_bucket.existing.id", "data.aws_s3_bucket.existing"]}}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_bucket_policy.p")
+	if !control.GovernsWithheld {
+		t.Fatal("a control whose only subject is a read was not marked as governing only reads")
+	}
+
+	// And a control over a managed subject is not.
+	managed := strings.ReplaceAll(raw, "data.aws_s3_bucket.existing", "aws_s3_bucket.existing")
+	managed = strings.ReplaceAll(managed, `"mode": "data"`, `"mode": "managed"`)
+	managed = strings.ReplaceAll(managed, `"actions": ["read"]`, `"actions": ["create"]`)
+	if ordinary := normalizedAt(t, managed, "aws_s3_bucket_policy.p"); ordinary.GovernsWithheld {
+		t.Error("a control over a managed subject was marked as governing only reads")
+	}
+}
+
+// TestAScopeGovernedControlIsWithheldToo covers the channel a mapper reads
+// that the edge map cannot see.
+//
+// An account-wide block names no bucket: it governs by provider instance, so
+// the mapper finds it by walking the scope rather than by following a
+// reference. A withheld candidate reached only that way was invisible to the
+// bookkeeping, so a read of one was deleted from the candidate count and named
+// nowhere — the same shape the reference channel had, in the other of the two
+// channels a mapper reads from.
+func TestAScopeGovernedControlIsWithheldToo(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "open", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}},
+	    {"address": "aws_s3_account_public_access_block.baseline", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "baseline", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "data.aws_s3_account_public_access_block.current", "mode": "data",
+	     "type": "aws_s3_account_public_access_block", "name": "current", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": false, "block_public_policy": false,
+	                          "ignore_public_acls": false, "restrict_public_buckets": false}}}
+	  ],
+	  "configuration": {
+	    "provider_config": {"aws": {"name": "aws", "full_name": "p"}},
+	    "root_module": {"resources": [
+	      {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "assets", "provider_config_key": "aws", "expressions": {}},
+	      {"address": "aws_s3_bucket_acl.open", "mode": "managed", "type": "aws_s3_bucket_acl",
+	       "name": "open", "provider_config_key": "aws",
+	       "expressions": {"bucket": {"references": [
+	         "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	      {"address": "aws_s3_account_public_access_block.baseline", "mode": "managed",
+	       "type": "aws_s3_account_public_access_block", "name": "baseline",
+	       "provider_config_key": "aws", "expressions": {}},
+	      {"address": "data.aws_s3_account_public_access_block.current", "mode": "data",
+	       "type": "aws_s3_account_public_access_block", "name": "current",
+	       "provider_config_key": "aws", "expressions": {}}
+	    ]}
+	  }
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if !withheldRecorded(bucket) {
+		t.Fatalf("a candidate reached only through the scope was not recorded: %v",
+			bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestNormalizingAPlanFullOfReadsStaysCheap keeps the withholding path from
+// costing more than the plan is worth.
+//
+// It has been quadratic twice and cubic once: a loop-invariant rebuilt per
+// change, a scan of every read per change, and every read of a subject type
+// treated as a candidate for every subject. The last of those took four seconds
+// on eight hundred changes.
+//
+// A ratio between two sizes turned out to measure the machine more than the
+// code once the code was fast — at a few milliseconds, scheduler noise and
+// garbage collection dominate. A generous absolute bound does not: the work
+// here is tens of milliseconds, the bound is two seconds, and every shape this
+// has taken before exceeded it by an order of magnitude.
+//
+// The plan must produce candidates or the test measures the wrong thing. The
+// previous one did not: its reads were of a subject type, which is related to
+// nothing and governs nothing, so the whole path returned at its first line and
+// a bound on a path that never ran replaced a bound on the path that did. The
+// assertion below is what keeps that from recurring — it fails if nothing was
+// withheld, whatever the timing says.
+func TestNormalizingAPlanFullOfReadsStaysCheap(t *testing.T) {
+	const (
+		buckets = 4000
+		scoped  = 50
+	)
+
+	plan, err := terraformplan.Parse(bucketPlan(t, buckets, scoped))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	type outcome struct {
+		resources int
+		withheld  int
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		graph := providers.Normalize(plan, providers.Default())
+		result := outcome{resources: len(graph.Resources)}
+		for _, resource := range graph.Resources {
+			if withheldRecorded(resource) {
+				result.withheld++
+			}
+		}
+		done <- result
+	}()
+
+	select {
+	case got := <-done:
+		if got.resources != 3*buckets+scoped {
+			t.Fatalf("normalized %d resources, want %d", got.resources, 3*buckets+scoped)
+		}
+		if got.withheld != buckets {
+			t.Fatalf("%d subjects recorded a withheld source, want %d; this plan is not "+
+				"exercising the path this test bounds", got.withheld, buckets)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("normalizing %d changes did not finish in two seconds", 3*buckets+scoped)
+	}
+}
+
+// bucketPlan builds a plan of n buckets, each with a public access block that
+// names it and a policy read beside it, together with a few account-wide blocks
+// read rather than changed.
+//
+// The blocks shut nothing. A bucket that blocks every route is proved private
+// by its own control, and a proof nothing could rival records no withheld
+// source at all — which would make this plan measure the path returning early,
+// the way the plan it replaced did.
+//
+// Both kinds of candidate are here on purpose. A read the configuration relates
+// to a subject reaches it through an edge; an account-wide block names no
+// bucket at all and reaches every subject in its own account through the scope.
+// The two are found by different code and only the second is quadratic.
+func bucketPlan(t *testing.T, buckets, scoped int) []byte {
+	t.Helper()
+
+	var changes, resources []string
+	for i := range buckets {
+		bucket := fmt.Sprintf("aws_s3_bucket.b%d", i)
+		block := fmt.Sprintf("aws_s3_bucket_public_access_block.p%d", i)
+		read := fmt.Sprintf("data.aws_s3_bucket_policy.d%d", i)
+		changes = append(changes,
+			fmt.Sprintf(`{"address": %q, "mode": "data", "type": "aws_s3_bucket_policy",
+			  "name": "d%d", "provider_name": "p", "provider_config_key": "aws",
+			  "change": {"actions": ["read"], "before": null,
+			             "after": {"bucket": "b%d", "policy": "{}"}}}`,
+				read, i, i),
+			fmt.Sprintf(`{"address": %q, "mode": "managed", "type": "aws_s3_bucket", "name": "b%d",
+			  "provider_name": "p", "provider_config_key": "aws",
+			  "change": {"actions": ["create"], "before": null, "after": {"bucket": "b%d"}}}`,
+				bucket, i, i),
+			fmt.Sprintf(`{"address": %q, "mode": "managed",
+			  "type": "aws_s3_bucket_public_access_block", "name": "p%d", "provider_name": "p",
+			  "provider_config_key": "aws",
+			  "change": {"actions": ["create"], "before": null,
+			             "after": {"block_public_acls": false, "block_public_policy": false,
+			                       "ignore_public_acls": false, "restrict_public_buckets": false}}}`,
+				block, i))
+		resources = append(resources,
+			fmt.Sprintf(`{"address": %q, "mode": "data", "type": "aws_s3_bucket_policy",
+			  "name": "d%d", "provider_config_key": "aws",
+			  "expressions": {"bucket": {"references": [%q, %q]}}}`, read, i, bucket+".id", bucket),
+			fmt.Sprintf(`{"address": %q, "mode": "managed", "type": "aws_s3_bucket",
+			  "name": "b%d", "provider_config_key": "aws", "expressions": {}}`, bucket, i),
+			fmt.Sprintf(`{"address": %q, "mode": "managed",
+			  "type": "aws_s3_bucket_public_access_block", "name": "p%d",
+			  "provider_config_key": "aws",
+			  "expressions": {"bucket": {"references": [%q, %q]}}}`,
+				block, i, bucket+".id", bucket))
+	}
+
+	for i := range scoped {
+		read := fmt.Sprintf("data.aws_s3_account_public_access_block.a%d", i)
+		changes = append(changes, fmt.Sprintf(`{"address": %q, "mode": "data",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d", "provider_name": "p",
+		  "provider_config_key": "aws",
+		  "change": {"actions": ["read"], "before": null,
+		             "after": {"block_public_acls": false, "block_public_policy": false,
+		                       "ignore_public_acls": false, "restrict_public_buckets": false}}}`,
+			read, i))
+		resources = append(resources, fmt.Sprintf(`{"address": %q, "mode": "data",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d",
+		  "provider_config_key": "aws", "expressions": {}}`, read, i))
+	}
+
+	return []byte(`{"format_version": "1.2", "resource_changes": [` + strings.Join(changes, ",") +
+		`], "configuration": {"root_module": {"resources": [` + strings.Join(resources, ",") + `]}}}`)
+}
+
+// TestOnlyTheUnreadableSourceIsMarkedWithheld covers the mapper side of a flag
+// the bundle reports per reference.
+//
+// The policy test builds provenance by hand, so nothing exercised the mappers
+// that produce it: marking every source of a redacted fact and marking none at
+// all both passed. A fact is redacted when any one of its sources was, and the
+// others were read — that is how the mapper concluded at all.
+func TestOnlyTheUnreadableSourceIsMarkedWithheld(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": false, "block_public_policy": false,
+	                          "ignore_public_acls": false, "restrict_public_buckets": false}}},
+	    {"address": "aws_s3_bucket_policy.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"policy": "{}"}, "after_sensitive": {"policy": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "aws_s3_bucket_policy.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	exposure := bucket.ObjectStorage.PublicAccess
+	if exposure.State != model.FactRedacted {
+		t.Fatalf("the policy is sensitive, so exposure is %q, want %q",
+			exposure.State, model.FactRedacted)
+	}
+
+	var withheld, read int
+	for _, source := range exposure.Sources {
+		if source.Withheld {
+			withheld++
+			if source.AttributePath != "policy" {
+				t.Errorf("a value the mapper read is marked withheld: %s %s",
+					source.ResourceAddress, source.AttributePath)
+			}
+			continue
+		}
+		read++
+	}
+	if withheld != 1 {
+		t.Errorf("sources marked withheld = %d, want exactly the policy", withheld)
+	}
+	if read == 0 {
+		t.Error("the block flags were read in order to conclude, and none says so")
+	}
+}
+
+// TestAnUnrelatedReadContestsNothing keeps a read from being a candidate for
+// every subject in the plan.
+//
+// A control that governs by scope names no subject, so it has to be offered to
+// all of them. A subject names no subject either — it declares no relation
+// from itself — and treating one as scope-governed made every data source of a
+// subject type a candidate for every managed resource of that type. Where a
+// verdict is read from the subject's own attribute, as GCP's prevention is,
+// that is a collision by construction: the verdict cites a bucket and the read
+// is a bucket.
+//
+// Reading some buckets and managing others is an ordinary plan.
+func TestAnUnrelatedReadContestsNothing(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "a", "public_access_prevention": "enforced"}}},
+	    {"address": "data.google_storage_bucket.somewhere_else", "mode": "data",
+	     "type": "google_storage_bucket", "name": "somewhere_else", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"name": "other", "public_access_prevention": "inherited"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "assets", "expressions": {}},
+	    {"address": "data.google_storage_bucket.somewhere_else", "mode": "data",
+	     "type": "google_storage_bucket", "name": "somewhere_else", "expressions": {}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "google_storage_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+
+	exposure := bucket.ObjectStorage.PublicAccess
+	if !exposure.IsKnown() || exposure.Get() {
+		t.Fatalf("prevention is enforced on this bucket and nothing here contests it: %v/%v",
+			exposure.State, exposure.Get())
+	}
+	if withheldRecorded(bucket) {
+		t.Errorf("a read of another bucket was reported as contesting this one: %v",
+			bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestAWithdrawnDeterminationIsMarkedAsOne records which of two facts an
+// undetermined exposure is.
+//
+// Downgrading Known to Unknown makes the two indistinguishable downstream, and
+// the rule bounds one of them by what the contract asked for. A plan setting
+// acl = "public-read" beside a data source of the same kind was therefore
+// reported as consistent with the contract in every supported check: the
+// determination was withdrawn, the withdrawal looked like a question nobody
+// asked, and no unknown was required.
+func TestAWithdrawnDeterminationIsMarkedAsOne(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "acl": "public-read"}}},
+	    {"address": "data.aws_s3_bucket_acl.current", "mode": "data", "type": "aws_s3_bucket_acl",
+	     "name": "current", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a", "acl": "private"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_acl.current", "mode": "data", "type": "aws_s3_bucket_acl",
+	     "name": "current", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if bucket.ObjectStorage.PublicAccess.IsKnown() {
+		t.Fatalf("the answer was settled by choosing between a change and a read: %v",
+			bucket.ObjectStorage.PublicAccess.Get())
+	}
+	if !bucket.ObjectStorage.Withdrawn {
+		t.Error("a determination was withdrawn and nothing records that it ever existed")
+	}
+}
+
+// TestAnAnswerNobodyReachedIsNotAWithdrawnOne is the other direction. A read
+// recorded beside a question the plan never settled has withdrawn nothing, and
+// marking it as a withdrawal would make every undetermined plan a required
+// unknown regardless of what the contract asked.
+func TestAnAnswerNobodyReachedIsNotAWithdrawnOne(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if bucket.ObjectStorage.Withdrawn {
+		t.Error("nothing was determined here, so nothing could have been withdrawn")
+	}
+}
+
+// TestAControlGoverningAnotherAccountContestsNothing is the scoping the
+// withholding path had lost.
+//
+// An account-wide public access block belongs to the AWS account its provider
+// instance points at, and the mapper filters on exactly that before letting one
+// decide anything. The withholding path offered every scope-governed read to
+// every subject in the plan instead, so a block read in one account withdrew a
+// verdict about a bucket in another — a correlation the configuration does not
+// declare, which is the thing this repository spent three rounds removing.
+func TestAControlGoverningAnotherAccountContestsNothing(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "aws", "provider_config_key": "aws",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_account_public_access_block.main", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "main",
+	     "provider_name": "aws", "provider_config_key": "aws",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "data.aws_s3_account_public_access_block.audit", "mode": "data",
+	     "type": "aws_s3_account_public_access_block", "name": "audit",
+	     "provider_name": "aws", "provider_config_key": "aws.west",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": false, "block_public_policy": false,
+	                          "ignore_public_acls": false, "restrict_public_buckets": false}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_config_key": "aws", "expressions": {}},
+	    {"address": "aws_s3_account_public_access_block.main", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "main",
+	     "provider_config_key": "aws", "expressions": {}},
+	    {"address": "data.aws_s3_account_public_access_block.audit", "mode": "data",
+	     "type": "aws_s3_account_public_access_block", "name": "audit",
+	     "provider_config_key": "aws.west", "expressions": {}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if !bucket.ObjectStorage.PublicAccess.IsKnown() || bucket.ObjectStorage.PublicAccess.Get() {
+		t.Errorf("prevention is proved in this account and a read in another unsettled it: %v",
+			bucket.ObjectStorage.PublicAccess)
+	}
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			t.Errorf("a control governing another account was reported as bearing on this one: %v", control)
+		}
+	}
+}
+
+// TestAControlFromAnotherCloudContestsNothing is the same hole across clouds.
+// An S3 account block says nothing whatever about a Cloud Storage bucket, and
+// no mapper claims otherwise; the answer has to come from a mapper rather than
+// from the shape of the plan.
+func TestAControlFromAnotherCloudContestsNothing(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "assets", "provider_name": "google",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "a", "public_access_prevention": "inherited"}}},
+	    {"address": "data.aws_s3_account_public_access_block.org", "mode": "data",
+	     "type": "aws_s3_account_public_access_block", "name": "org", "provider_name": "aws",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": false, "block_public_policy": false,
+	                          "ignore_public_acls": false, "restrict_public_buckets": false}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "assets", "expressions": {}},
+	    {"address": "data.aws_s3_account_public_access_block.org", "mode": "data",
+	     "type": "aws_s3_account_public_access_block", "name": "org", "expressions": {}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "google_storage_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			t.Errorf("an AWS control was reported as bearing on a GCP bucket: %v", control)
+		}
+	}
+}
+
+// TestTwoKindsAnsweringOneQuestionBothCount is the failure the other way round.
+//
+// Ownership controls set to BucketOwnerEnforced make an ACL impossible to
+// apply, so a read of one bears on exactly the question an ACL answers. Reading
+// the role off the resource type could not see that: the types differ, so a
+// candidate for a question the verdict rests on was dropped without a word.
+func TestTwoKindsAnsweringOneQuestionBothCount(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "acl": "public-read"}}},
+	    {"address": "data.aws_s3_bucket_ownership_controls.assets", "mode": "data",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a", "rule": [{"object_ownership": "BucketOwnerEnforced"}]}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_ownership_controls.assets", "mode": "data",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	var named bool
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID == "SOURCE_WITHHELD" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("a read bearing on the question this verdict rests on was dropped without a word: %v",
+			bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestAWithheldSourceIsLocatedNotNarrated keeps plan-derived text out of prose.
+//
+// A resource address is a plan value: a for_each key is author-controlled and
+// reaches the address verbatim, so interpolating one into a free-text field
+// puts it somewhere the renderer escapes as prose. Evidence references are the
+// field built to carry a location, and the renderer sets them in code.
+func TestAWithheldSourceIsLocatedNotNarrated(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "data.aws_s3_bucket_policy.assets[\"![](https://example.invalid/p.png)\"]",
+	     "mode": "data", "type": "aws_s3_bucket_policy", "name": "assets", "provider_name": "p",
+	     "index": "![](https://example.invalid/p.png)",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "data.aws_s3_bucket_policy.assets", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+
+	var found bool
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID != "SOURCE_WITHHELD" {
+			continue
+		}
+		found = true
+		if contains(control.Reason, "example.invalid") {
+			t.Errorf("a plan value reached a free-text field: %q", control.Reason)
+		}
+		var located bool
+		for _, source := range control.Sources {
+			if contains(source.ResourceAddress, "example.invalid") {
+				located = true
+			}
+		}
+		if !located {
+			t.Errorf("the withheld source is named nowhere a reader can act on: %v", control.Sources)
+		}
+	}
+	if !found {
+		t.Fatalf("nothing recorded the withheld policy: %v", bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestOnlyASecretMarksAReferenceAsRedacted holds the bundle's own definition of
+// the field: the located value is sensitive and was not read.
+//
+// A value Terraform has not computed yet is not a secret. Marking one said that
+// a report withheld something it had simply not been told, which is the same
+// misstatement as the one it replaced, told about a different plan.
+func TestOnlyASecretMarksAReferenceAsRedacted(t *testing.T) {
+	plan := func(sensitive string) string {
+		return `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+		    {"address": "aws_s3_bucket_policy.assets", "mode": "managed",
+		     "type": "aws_s3_bucket_policy", "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"bucket": "a"}, "after_unknown": {"policy": true}` + sensitive + `}}
+		  ],
+		  "configuration": {"root_module": {"resources": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "expressions": {}},
+		    {"address": "aws_s3_bucket_policy.assets", "mode": "managed",
+		     "type": "aws_s3_bucket_policy", "name": "assets",
+		     "expressions": {"bucket": {"references": [
+		       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+		  ]}}
+		}`
+	}
+
+	t.Run("not yet computed", func(t *testing.T) {
+		bucket := normalizedAt(t, plan(""), "aws_s3_bucket.assets")
+		if withheldSource(bucket, "aws_s3_bucket_policy.assets", "policy") {
+			t.Error("a value the plan has not computed yet was reported as a secret")
+		}
+	})
+
+	t.Run("sensitive", func(t *testing.T) {
+		bucket := normalizedAt(t, plan(`, "after_sensitive": {"policy": true}`), "aws_s3_bucket.assets")
+		if !withheldSource(bucket, "aws_s3_bucket_policy.assets", "policy") {
+			t.Error("a sensitive value was reported as one the report had read")
+		}
+	})
+}
+
+// TestASecretInsideAListMarksTheReferenceToIt is the same rule where the mark
+// is on an element and the reference locates the list. GCP is where this
+// happens: members is a list and Terraform marks its entries one by one.
+func TestASecretInsideAListMarksTheReferenceToIt(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"name": "a", "public_access_prevention": "inherited"}}},
+	    {"address": "google_storage_bucket_iam_binding.assets", "mode": "managed",
+	     "type": "google_storage_bucket_iam_binding", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "members": ["user:a@example.com", "secret"]},
+	                "after_sensitive": {"members": [false, true]}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "google_storage_bucket.assets", "mode": "managed",
+	     "type": "google_storage_bucket", "name": "assets", "expressions": {}},
+	    {"address": "google_storage_bucket_iam_binding.assets", "mode": "managed",
+	     "type": "google_storage_bucket_iam_binding", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "google_storage_bucket.assets.name", "google_storage_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "google_storage_bucket.assets")
+	if !withheldSource(bucket, "google_storage_bucket_iam_binding.assets", "members") {
+		t.Error("a secret in the list is invisible from the reference that locates the list")
+	}
+}
+
+func withheldSource(resource model.NormalizedResource, address, attribute string) bool {
+	if resource.ObjectStorage == nil {
+		return false
+	}
+	for _, source := range resource.ObjectStorage.PublicAccess.Sources {
+		if source.ResourceAddress == address && source.AttributePath == attribute {
+			return source.Withheld
+		}
+	}
+	return false
+}
+
+// TestAControlThisPlanReadsIsNotAControlThisPlanLacks covers a sentence that
+// told a reader to add what they had already added.
+//
+// A mapper is given the admissible changes, so a control present only as a read
+// is invisible to it and it reported the control missing. The sentence is what
+// a reader acts on, and "not part of this plan" beside the resource in the plan
+// is the mistake this repository names elsewhere. What is true in both cases is
+// that the plan does not change it, and that is what the record now says — so
+// the sentence no longer depends on something the mapper cannot see.
+func TestAControlThisPlanReadsIsNotAControlThisPlanLacks(t *testing.T) {
+	cases := map[string]struct {
+		subject, control, check string
+		read                    string
+	}{
+		"an account-wide S3 block": {
+			subject: `{"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			           "name": "assets", "provider_name": "p", "provider_config_key": "aws",
+			           "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}}`,
+			control: "aws_s3_bucket.assets",
+			check:   "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK",
+			read: `{"address": "data.aws_s3_account_public_access_block.org", "mode": "data",
+			        "type": "aws_s3_account_public_access_block", "name": "org",
+			        "provider_name": "p", "provider_config_key": "aws",
+			        "change": {"actions": ["read"], "before": null,
+			                   "after": {"block_public_acls": true, "block_public_policy": true,
+			                             "ignore_public_acls": true, "restrict_public_buckets": true}}}`,
+		},
+		"the account gating a container": {
+			subject: `{"address": "azurerm_storage_container.assets", "mode": "managed",
+			           "type": "azurerm_storage_container", "name": "assets", "provider_name": "p",
+			           "change": {"actions": ["create"], "before": null,
+			                      "after": {"name": "assets", "container_access_type": "private"}}}`,
+			control: "azurerm_storage_container.assets",
+			check:   "AZURE_STORAGE_ACCOUNT_NOT_IN_PLAN",
+			read: `{"address": "data.azurerm_storage_account.existing", "mode": "data",
+			        "type": "azurerm_storage_account", "name": "existing", "provider_name": "p",
+			        "change": {"actions": ["read"], "before": null,
+			                   "after": {"name": "e", "allow_nested_items_to_be_public": false}}}`,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			without := fmt.Sprintf(`{"format_version": "1.2", "resource_changes": [%s]}`, tc.subject)
+			with := fmt.Sprintf(`{"format_version": "1.2", "resource_changes": [%s, %s]}`,
+				tc.subject, tc.read)
+
+			absent := reasonFor(t, normalizedAt(t, without, tc.control), tc.check)
+			present := reasonFor(t, normalizedAt(t, with, tc.control), tc.check)
+			if absent != present {
+				t.Errorf("the record describes a control the mapper cannot see:\n absent: %q\npresent: %q",
+					absent, present)
+			}
+			if contains(absent, "not part of this plan") {
+				t.Errorf("the record claims an absence it cannot establish: %q", absent)
+			}
+		})
+	}
+}
+
+func reasonFor(t *testing.T, resource model.NormalizedResource, check string) string {
+	t.Helper()
+	if resource.ObjectStorage == nil {
+		t.Fatalf("%s reached no verdict", resource.Address)
+	}
+	for _, control := range resource.ObjectStorage.Unresolved {
+		if control.CheckID == check {
+			return control.Reason
+		}
+	}
+	t.Fatalf("%s did not report %s: %v", resource.Address, check, resource.ObjectStorage.Unresolved)
+	return ""
+}
+
+// TestAControlTheVerdictUsedIsCited covers evidence a reader cannot find.
+//
+// Ownership controls set to BucketOwnerEnforced make an ACL impossible to
+// apply, so they decide the ACL route outright — and the mapper consulted them
+// while citing nothing, which left a verdict resting on a resource no evidence
+// reference names. docs/PRODUCT.md requires every finding to locate the source
+// data it came from, and a source consulted and not cited is the one kind of
+// evidence a reader cannot check.
+func TestAControlTheVerdictUsedIsCited(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "acl": "public-read"}}},
+	    {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "rule": [{"object_ownership": "BucketOwnerEnforced"}]}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "aws_s3_bucket_ownership_controls.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_ownership_controls", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if bucket.ObjectStorage.PublicAccess.IsKnown() && bucket.ObjectStorage.PublicAccess.Get() {
+		t.Fatal("an ACL that cannot be applied was read as a grant")
+	}
+
+	var cited bool
+	for _, source := range bucket.ObjectStorage.PublicAccess.Sources {
+		if source.ResourceAddress == "aws_s3_bucket_ownership_controls.assets" {
+			cited = true
+		}
+	}
+	if !cited {
+		t.Errorf("the control that decided the ACL route is cited nowhere: %v",
+			bucket.ObjectStorage.PublicAccess.Sources)
+	}
+}
+
+// TestAProofNothingCouldRivalStands is the over-refusal the role mechanism
+// introduced.
+//
+// Contesting was decided by whether some admissible resource shared the read's
+// question. That is what was available to the mapper, not what the answer
+// rested on: a bucket's own public access block proves prevention on its own,
+// and a read of the account-wide block answers a question the proof never
+// consulted. The ordinary way to write an account baseline beside a hardened
+// bucket therefore went from PASS to UNKNOWN.
+//
+// What a withheld source has to rival is a question the verdict actually cited.
+func TestAProofNothingCouldRivalStands(t *testing.T) {
+	cases := map[string]struct {
+		raw     string
+		subject string
+	}{
+		"an account baseline read beside a bucket that blocks everything": {
+			subject: "aws_s3_bucket.assets",
+			raw: `{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "assets", "provider_name": "p", "provider_config_key": "aws",
+			     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+			    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+			     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+			     "provider_name": "p", "provider_config_key": "aws",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"block_public_acls": true, "block_public_policy": true,
+			                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+			    {"address": "data.aws_s3_account_public_access_block.org", "mode": "data",
+			     "type": "aws_s3_account_public_access_block", "name": "org",
+			     "provider_name": "p", "provider_config_key": "aws",
+			     "change": {"actions": ["read"], "before": null,
+			                "after": {"block_public_acls": true, "block_public_policy": true,
+			                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+			  ],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "assets", "provider_config_key": "aws", "expressions": {}},
+			    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+			     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+			     "provider_config_key": "aws", "expressions": {"bucket": {"references": [
+			       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+			    {"address": "data.aws_s3_account_public_access_block.org", "mode": "data",
+			     "type": "aws_s3_account_public_access_block", "name": "org",
+			     "provider_config_key": "aws", "expressions": {}}
+			  ]}}
+			}`,
+		},
+		"an ACL read beside a bucket that blocks everything": {
+			subject: "aws_s3_bucket.assets",
+			raw: `{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "assets", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+			    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+			     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"block_public_acls": true, "block_public_policy": true,
+			                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+			    {"address": "data.aws_s3_bucket_acl.current", "mode": "data",
+			     "type": "aws_s3_bucket_acl", "name": "current", "provider_name": "p",
+			     "change": {"actions": ["read"], "before": null,
+			                "after": {"bucket": "a", "acl": "public-read"}}}
+			  ],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+			     "name": "assets", "expressions": {}},
+			    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+			     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+			     "expressions": {"bucket": {"references": [
+			       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+			    {"address": "data.aws_s3_bucket_acl.current", "mode": "data",
+			     "type": "aws_s3_bucket_acl", "name": "current",
+			     "expressions": {"bucket": {"references": [
+			       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+			  ]}}
+			}`,
+		},
+		"an IAM read beside a bucket that enforces prevention": {
+			subject: "google_storage_bucket.assets",
+			raw: `{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {"address": "google_storage_bucket.assets", "mode": "managed",
+			     "type": "google_storage_bucket", "name": "assets", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"name": "a", "public_access_prevention": "enforced"}}},
+			    {"address": "google_storage_bucket_iam_member.team", "mode": "managed",
+			     "type": "google_storage_bucket_iam_member", "name": "team", "provider_name": "p",
+			     "change": {"actions": ["create"], "before": null,
+			                "after": {"bucket": "a", "member": "user:a@example.com"}}},
+			    {"address": "data.google_storage_bucket_iam_member.current", "mode": "data",
+			     "type": "google_storage_bucket_iam_member", "name": "current", "provider_name": "p",
+			     "change": {"actions": ["read"], "before": null,
+			                "after": {"bucket": "a", "member": "allUsers"}}}
+			  ],
+			  "configuration": {"root_module": {"resources": [
+			    {"address": "google_storage_bucket.assets", "mode": "managed",
+			     "type": "google_storage_bucket", "name": "assets", "expressions": {}},
+			    {"address": "google_storage_bucket_iam_member.team", "mode": "managed",
+			     "type": "google_storage_bucket_iam_member", "name": "team",
+			     "expressions": {"bucket": {"references": [
+			       "google_storage_bucket.assets.name", "google_storage_bucket.assets"]}}},
+			    {"address": "data.google_storage_bucket_iam_member.current", "mode": "data",
+			     "type": "google_storage_bucket_iam_member", "name": "current",
+			     "expressions": {"bucket": {"references": [
+			       "google_storage_bucket.assets.name", "google_storage_bucket.assets"]}}}
+			  ]}}
+			}`,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			subject := normalizedAt(t, tc.raw, tc.subject)
+			if subject.ObjectStorage == nil {
+				t.Fatal("no normalized subject")
+			}
+			exposure := subject.ObjectStorage.PublicAccess
+			if !exposure.IsKnown() || exposure.Get() {
+				t.Errorf("prevention is proved by the change itself and a read unsettled it: %v/%v",
+					exposure.State, exposure.Get())
+			}
+			if subject.ObjectStorage.Withdrawn {
+				t.Error("a proof the read could not have rivalled was withdrawn")
+			}
+		})
+	}
+}
+
+// TestAGrantNamesTheControlThatWouldHavePreventedIt is the other half of the
+// same gate.
+//
+// docs/PRODUCT.md promises that where a read would have answered a question,
+// the report names what was withheld. A plan granting public access beside a
+// read of the block that would stop it said nothing about the read at all,
+// because the record was suppressed whenever the answer was settled -- and a
+// grant does not settle what else is in force.
+//
+// The grant itself stands. What a data source describes is what is already
+// there, and the change still asks for public access, which is what
+// STORAGE_PUBLIC asserts.
+func TestAGrantNamesTheControlThatWouldHavePreventedIt(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "a", "acl": "public-read"}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.existing", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "existing", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "assets", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.existing", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "existing",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	exposure := bucket.ObjectStorage.PublicAccess
+	if !exposure.IsKnown() || !exposure.Get() {
+		t.Fatalf("the change grants public access and a read unsaid it: %v/%v",
+			exposure.State, exposure.Get())
+	}
+	if !withheldRecorded(bucket) {
+		t.Errorf("the control that would have prevented the grant is named nowhere: %v",
+			bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestOnlyTheEnvironmentDeclarationMarksItsOwnReference covers the location the
+// environment fact points at.
+//
+// The reference names the declaration, not the block holding it. Asking the
+// whole block would mark the reference because some unrelated tag is a secret,
+// which is the error of reporting a value the mapper plainly read; asking
+// nothing would leave a secret unmarked. The key is matched without regard to
+// case, so the lookup has to match the scan.
+func TestOnlyTheEnvironmentDeclarationMarksItsOwnReference(t *testing.T) {
+	plan := func(tags, sensitive string) string {
+		return fmt.Sprintf(`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+		     "name": "assets", "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"bucket": "a", "tags": %s},
+		                "after_sensitive": {"tags": %s}}}
+		  ]
+		}`, tags, sensitive)
+	}
+
+	cases := map[string]struct {
+		tags, sensitive string
+		want            bool
+	}{
+		"a sensitive declaration": {
+			`{"environment": "staging"}`, `{"environment": true}`, true},
+		"a sensitive declaration spelled differently": {
+			`{"Environment": "staging"}`, `{"Environment": true}`, true},
+		"a sensitive tag that is not the declaration": {
+			`{"environment": "staging", "owner": "x"}`, `{"owner": true}`, false},
+		"nothing sensitive": {
+			`{"environment": "staging"}`, `{}`, false},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			bucket := normalizedAt(t, plan(tc.tags, tc.sensitive), "aws_s3_bucket.assets")
+			if len(bucket.Environment.Sources) != 1 {
+				t.Fatalf("sources = %v, want the declaration located once", bucket.Environment.Sources)
+			}
+			if got := bucket.Environment.Sources[0].Withheld; got != tc.want {
+				t.Errorf("the reference reports the value as secret = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheWithheldRecordSaysWhatItLeftOut covers the bound on how many sources
+// one record locates.
+//
+// A plan may hold a control per subject and the record is per subject, so the
+// pairing is quadratic and so is the report. Truncating silently would read as
+// "these are the sources", which is the same sentence-level lie as reporting an
+// unchecked thing as checked.
+func TestTheWithheldRecordSaysWhatItLeftOut(t *testing.T) {
+	const reads = 25
+
+	var changes, resources []string
+	changes = append(changes, `{"address": "aws_s3_bucket.assets", "mode": "managed",
+	  "type": "aws_s3_bucket", "name": "assets", "provider_name": "p", "provider_config_key": "aws",
+	  "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}}`)
+	resources = append(resources, `{"address": "aws_s3_bucket.assets", "mode": "managed",
+	  "type": "aws_s3_bucket", "name": "assets", "provider_config_key": "aws", "expressions": {}}`)
+	for i := range reads {
+		address := fmt.Sprintf("data.aws_s3_account_public_access_block.a%d", i)
+		changes = append(changes, fmt.Sprintf(`{"address": %q, "mode": "data",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d", "provider_name": "p",
+		  "provider_config_key": "aws",
+		  "change": {"actions": ["read"], "before": null,
+		             "after": {"block_public_acls": false, "block_public_policy": false,
+		                       "ignore_public_acls": false, "restrict_public_buckets": false}}}`,
+			address, i))
+		resources = append(resources, fmt.Sprintf(`{"address": %q, "mode": "data",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d",
+		  "provider_config_key": "aws", "expressions": {}}`, address, i))
+	}
+	raw := `{"format_version": "1.2", "resource_changes": [` + strings.Join(changes, ",") +
+		`], "configuration": {"root_module": {"resources": [` + strings.Join(resources, ",") + `]}}}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+
+	var found bool
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID != "SOURCE_WITHHELD" {
+			continue
+		}
+		found = true
+		if len(control.Sources) >= reads {
+			t.Errorf("the record locates %d sources; a per-subject record of every control "+
+				"in the plan is quadratic in the plan", len(control.Sources))
+		}
+		if !contains(control.Reason, fmt.Sprintf("%d sources were withheld", reads)) {
+			t.Errorf("the record truncates without saying so: %q", control.Reason)
+		}
+	}
+	if !found {
+		t.Fatalf("nothing was recorded: %v", bucket.ObjectStorage.Unresolved)
+	}
+}
+
+// TestAControlOverReadsAloneSaysSoWhateverItGovernsThrough covers a control
+// that reaches its subjects through the scope rather than through a reference.
+//
+// An account-wide public access block names no bucket, which is what its
+// Governs declaration exists for. The check for "every subject of this control
+// is one the verdict may not read" was given the edge set, which is empty for
+// exactly that control, so it answered no — and coverage then told the reader
+// the control applies to a resource that is not part of this plan, with the
+// resource sitting in the plan as a data source.
+func TestAControlOverReadsAloneSaysSoWhateverItGovernsThrough(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_account_public_access_block.main", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "main",
+	     "provider_name": "p", "provider_config_key": "aws",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+	     "name": "existing", "provider_name": "p", "provider_config_key": "aws",
+	     "change": {"actions": ["read"], "before": null, "after": {"bucket": "e"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_account_public_access_block.main", "mode": "managed",
+	     "type": "aws_s3_account_public_access_block", "name": "main",
+	     "provider_config_key": "aws", "expressions": {}},
+	    {"address": "data.aws_s3_bucket.existing", "mode": "data", "type": "aws_s3_bucket",
+	     "name": "existing", "provider_config_key": "aws", "expressions": {}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_account_public_access_block.main")
+	if len(control.DefersTo) != 0 {
+		t.Fatalf("the control defers to %v; this plan changes no bucket", control.DefersTo)
+	}
+	if !control.GovernsWithheld {
+		t.Error("every bucket this control governs is one the verdict may not read, and the " +
+			"report will say the bucket is not part of the plan")
+	}
+}
+
+// TestNormalizingAPlanFullOfManagedControlsStaysCheap bounds the other shape,
+// which the test above cannot see.
+//
+// That one fills the plan with reads, and a read is answered and returned
+// before the coverage bookkeeping runs. So the path that asks what a control
+// governs through the scope — the one an account-wide block takes, because it
+// names no bucket and has no edges — was never timed by anything. It resolved
+// each governed address by scanning the plan, which costs controls times
+// subjects times plan, and a two-thousand-bucket plan with a hundred of them
+// took nine seconds.
+//
+// A hundred account-wide blocks in one plan is not ordinary. It is what an
+// organization baseline written per account looks like when several land in one
+// apply, and a verifier that takes nine seconds over it is one nobody runs.
+func TestNormalizingAPlanFullOfManagedControlsStaysCheap(t *testing.T) {
+	const (
+		buckets  = 4000
+		controls = 100
+	)
+
+	plan, err := terraformplan.Parse(managedControlPlan(t, buckets, controls))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	type outcome struct{ resources, governing int }
+	done := make(chan outcome, 1)
+	go func() {
+		graph := providers.Normalize(plan, providers.Default())
+		result := outcome{resources: len(graph.Resources)}
+		for _, resource := range graph.Resources {
+			if len(resource.DefersTo) > 0 {
+				result.governing++
+			}
+		}
+		done <- result
+	}()
+
+	select {
+	case got := <-done:
+		if got.resources != buckets+controls {
+			t.Fatalf("normalized %d resources, want %d", got.resources, buckets+controls)
+		}
+		if got.governing != controls {
+			t.Fatalf("%d controls resolved what they govern, want %d; this plan is not "+
+				"exercising the path this test bounds", got.governing, controls)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("normalizing %d changes did not finish in two seconds", buckets+controls)
+	}
+}
+
+// managedControlPlan builds a plan of n buckets and m account-wide public
+// access blocks, all changed rather than read, in one provider instance.
+func managedControlPlan(t *testing.T, buckets, controls int) []byte {
+	t.Helper()
+
+	var changes, resources []string
+	for i := range buckets {
+		bucket := fmt.Sprintf("aws_s3_bucket.b%d", i)
+		changes = append(changes, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_bucket", "name": "b%d", "provider_name": "p", "provider_config_key": "aws",
+		  "change": {"actions": ["create"], "before": null, "after": {"bucket": "b%d"}}}`,
+			bucket, i, i))
+		resources = append(resources, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_bucket", "name": "b%d", "provider_config_key": "aws",
+		  "expressions": {}}`, bucket, i))
+	}
+	for i := range controls {
+		control := fmt.Sprintf("aws_s3_account_public_access_block.a%d", i)
+		changes = append(changes, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d", "provider_name": "p",
+		  "provider_config_key": "aws",
+		  "change": {"actions": ["create"], "before": null,
+		             "after": {"block_public_acls": false, "block_public_policy": false,
+		                       "ignore_public_acls": false, "restrict_public_buckets": false}}}`,
+			control, i))
+		resources = append(resources, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d",
+		  "provider_config_key": "aws", "expressions": {}}`, control, i))
+	}
+
+	return []byte(`{"format_version": "1.2", "resource_changes": [` + strings.Join(changes, ",") +
+		`], "configuration": {"root_module": {"resources": [` + strings.Join(resources, ",") + `]}}}`)
+}
+
+// TestAControlOverNothingHereIsNotAControlOverReads separates the two reasons a
+// control can defer to nobody.
+//
+// Its subject may be managed in another plan, and then "this controls a
+// resource that is not part of this plan" is the true sentence and the one a
+// reader can act on. Or its subjects are all in this plan and all inadmissible,
+// and then that sentence is false. Reading an empty set as the second made the
+// report tell a reader to add what they had already added — the mistake the
+// flag exists to prevent, produced by the flag itself.
+func TestAControlOverNothingHereIsNotAControlOverReads(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket_policy.orphan", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "orphan", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "managed-elsewhere", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket_policy.orphan", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "orphan", "expressions": {}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_bucket_policy.orphan")
+	if len(control.DefersTo) != 0 {
+		t.Fatalf("the control defers to %v; its bucket is not in this plan", control.DefersTo)
+	}
+	if control.GovernsWithheld {
+		t.Error("a control whose subject is managed elsewhere was reported as governing only " +
+			"resources this plan reads")
+	}
+}
+
+// TestWithdrawingAVerdictReopensWhatWasSuppressed covers the reads a
+// withdrawal puts back in play.
+//
+// A source answering a question nothing cited is not recorded while the verdict
+// proves prevention: nothing is open for it to bear on. But if another source
+// withdraws that verdict, the question is open again and the first source was
+// dropped on an assumption that no longer holds — so the report named what
+// overturned the answer and not what else it had declined.
+func TestWithdrawingAVerdictReopensWhatWasSuppressed(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.current", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "current", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": false, "block_public_policy": false,
+	                          "ignore_public_acls": false, "restrict_public_buckets": false}}},
+	    {"address": "data.aws_s3_bucket_policy.current", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "current", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.current", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "current",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_policy.current", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "current",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if !bucket.ObjectStorage.Withdrawn {
+		t.Fatal("the read of the same block did not withdraw the proof")
+	}
+
+	located := map[string]bool{}
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID != "SOURCE_WITHHELD" {
+			continue
+		}
+		for _, source := range control.Sources {
+			located[source.ResourceAddress] = true
+		}
+	}
+	for _, address := range []string{
+		"data.aws_s3_bucket_public_access_block.current",
+		"data.aws_s3_bucket_policy.current",
+	} {
+		if !located[address] {
+			t.Errorf("%s is in the plan, bears on a question this verdict now leaves open, "+
+				"and is named nowhere: %v", address, bucket.ObjectStorage.Unresolved)
+		}
+	}
+}

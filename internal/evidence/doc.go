@@ -10,4 +10,10 @@ package evidence
 
 // SchemaVersion is the Evidence Bundle contract version this package writes.
 // Readers accept any 1.x version and ignore fields they do not recognize.
-const SchemaVersion = "1.0"
+const SchemaVersion = "1.1"
+
+// intentDigestMinor is the minor version that added subject.intent_digest. A
+// bundle declaring an earlier one predates the field, and refusing it would be
+// a breaking change inside a major version — which this contract says needs a
+// new major version.
+const intentDigestMinor = 1

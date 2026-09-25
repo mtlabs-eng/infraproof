@@ -639,3 +639,43 @@ func TestAFlagMaskIsNotAContainer(t *testing.T) {
 		t.Fatalf("an unknown node has no readable children, got %d", l.Len())
 	}
 }
+
+// TestSensitivityIsVisibleFromTheContainerHoldingIt covers the gap between a
+// value's own state and what it holds.
+//
+// A list marked sensitive element by element is readable as a list: State is
+// KNOWN, because the container was not marked. Evidence locates the container,
+// though, and reporting that location as readable says a secret was read in
+// order to conclude. The question a reference needs answered is whether
+// anything sensitive is inside, not whether the outermost node was marked.
+func TestSensitivityIsVisibleFromTheContainerHoldingIt(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "r.a", "mode": "managed", "type": "r", "name": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"members": ["allUsers", "secret"], "plain": ["a", "b"]},
+	                "after_sensitive": {"members": [false, true]}}}
+	  ]
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	after := plan.ResourceChanges[0].After
+
+	members := after.Field("members")
+	if members.State() != StateKnown {
+		t.Fatalf("the list itself was readable: state = %q", members.State())
+	}
+	if !members.HoldsSensitive() {
+		t.Error("a sensitive element is invisible from the list that holds it")
+	}
+	if after.Field("plain").HoldsSensitive() {
+		t.Error("a list of readable values was reported as holding a secret")
+	}
+	if !after.HoldsSensitive() {
+		t.Error("sensitivity two levels down is invisible from the top")
+	}
+}

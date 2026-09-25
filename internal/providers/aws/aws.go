@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -43,6 +44,59 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
+// The questions this mapper answers about a bucket, one per thing that can be
+// asked rather than one per thing that can answer.
+//
+// The two block levels were one question and are two. They shut the same routes
+// and they are not rivals: a bucket-level block set by this change proves
+// prevention whatever an account-wide one says, so a read of the account
+// baseline beside a hardened bucket contested a proof it could not have
+// touched, and the most ordinary hardening idiom in S3 came back undetermined.
+const (
+	roleBucketName  = "bucket"
+	roleACLRoute    = "acl"
+	roleOwnership   = "object_ownership"
+	rolePolicyRoute = "policy"
+	roleBucketBlock = "public_access_block"
+	roleAccountWide = "account_public_access_block"
+)
+
+// RoleOf names the question a resource would answer about a bucket.
+//
+// The account-wide block is the case the resource type cannot express: it
+// governs the buckets in its own account and says nothing whatever about any
+// other, which is the filter publicAccess already applies before letting one
+// decide anything. Stating it here is what keeps a block read in one account
+// from unsettling a verdict about a bucket in another.
+func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
+	if subject.Type != typeBucket {
+		return ""
+	}
+	switch candidate.Type {
+	case typeBucket:
+		// The subject answers for its own name, which every verdict cites.
+		return roleBucketName
+	case typeBucketACL:
+		return roleACLRoute
+	case typeOwnershipControls:
+		return roleOwnership
+	case typeBucketPolicy:
+		return rolePolicyRoute
+	case typePublicAccessBlock:
+		return roleBucketBlock
+	case typeAccountBlock:
+		if !sameProviderInstance(subject, candidate) {
+			return ""
+		}
+		return roleAccountWide
+	}
+	return ""
+}
+
+// attrTags is where AWS carries user-supplied labels. It is the only part of
+// reading a declared environment that differs between clouds.
+const attrTags = "tags"
+
 // Map normalizes a bucket together with the controls that refer to it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	capabilities := model.ObjectStorageCapabilities{
@@ -55,6 +109,7 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 		Cloud:         model.CloudAWS,
 		Family:        model.FamilyObjectStorage,
 		Destructive:   subject.IsDestructive(),
+		Environment:   declared.Environment(subject, attrTags, model.CloudAWS),
 		ObjectStorage: &capabilities,
 	}
 }
@@ -101,7 +156,7 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	}
 
 	sources := append(acl.sources, policy.sources...)
-	sources = append(sources, provenance(subject.Address, "bucket"))
+	sources = append(sources, declared.Source(model.CloudAWS, subject.Address, "bucket", subject.After.Field("bucket")))
 
 	// A grant nothing blocks settles it.
 	for _, c := range []channel{acl, policy} {
@@ -149,13 +204,21 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 // effect: the bucket block, the account block, and ownership controls, which
 // can disable ACLs for the bucket outright.
 func aclChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
+	ownership := findType(related, typeOwnershipControls)
 	c := channel{blocked: strongest(
 		blockedBy(block, "block_public_acls", "ignore_public_acls"),
 		blockedBy(account, "block_public_acls", "ignore_public_acls"),
-		aclsDisabled(findType(related, typeOwnershipControls)),
+		aclsDisabled(ownership),
 	)}
 	if block != nil {
 		c.sources = blockProvenance(block)
+	}
+	if ownership != nil {
+		// Consulted, so cited. BucketOwnerEnforced decides this route outright,
+		// and a verdict resting on a resource no reference names is one a
+		// reader cannot check.
+		c.sources = append(c.sources, declared.Source(model.CloudAWS, ownership.Address,
+			"rule.object_ownership", ownership.After.Field("rule")))
 	}
 
 	acl := findType(related, typeBucketACL)
@@ -163,7 +226,7 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 		return c
 	}
 	value := acl.After.Field("acl")
-	c.sources = append(c.sources, provenance(acl.Address, "acl"))
+	c.sources = append(c.sources, declared.Source(model.CloudAWS, acl.Address, "acl", value))
 
 	switch value.State() {
 	case terraformplan.StateKnown:
@@ -194,7 +257,7 @@ func policyChannel(related []terraformplan.ResourceChange, block, account *terra
 		return c
 	}
 	document := policy.After.Field("policy")
-	c.sources = append(c.sources, provenance(policy.Address, "policy"))
+	c.sources = append(c.sources, declared.Source(model.CloudAWS, policy.Address, "policy", document))
 
 	switch document.State() {
 	case terraformplan.StateKnown:
@@ -352,8 +415,13 @@ func unresolvedControls(subject terraformplan.ResourceChange, scope []terraformp
 	}
 	return []model.MissingControl{{
 		CheckID: "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK",
-		Reason:  "The account-level S3 public access block is not part of this plan and overrides bucket-level settings.",
-		Cloud:   model.CloudAWS,
+		// Not "is not part of this plan": a mapper sees the admissible changes,
+		// so a block present only as a read is invisible to it and the sentence
+		// would tell a reader to add what they have already added. What is true
+		// either way is that this change does not set it.
+		Reason: "This change does not set the account-level S3 public access block, " +
+			"which overrides bucket-level settings.",
+		Cloud: model.CloudAWS,
 	}}
 }
 
@@ -391,7 +459,7 @@ func blockProvenance(block *terraformplan.ResourceChange) []model.Provenance {
 	}
 	out := make([]model.Provenance, 0, 4)
 	for _, flag := range []string{"block_public_acls", "block_public_policy", "ignore_public_acls", "restrict_public_buckets"} {
-		out = append(out, provenance(block.Address, flag))
+		out = append(out, declared.Source(model.CloudAWS, block.Address, flag, block.After.Field(flag)))
 	}
 	return out
 }
@@ -420,10 +488,6 @@ func sameProviderInstance(subject, control terraformplan.ResourceChange) bool {
 // reporting. A replacement is not a removal: the object is there afterwards.
 func beingRemoved(change terraformplan.ResourceChange) bool {
 	return change.IsDestructive() && !change.IsReplace()
-}
-
-func provenance(address, attribute string) model.Provenance {
-	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudAWS}
 }
 
 // policyGrantsPublic reports whether a bucket policy grants access to everyone,
@@ -552,4 +616,55 @@ func principalIsEveryone(raw json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+// Governs reports the buckets an account-wide block applies to.
+//
+// It names none of them: it is scoped to the provider instance, not to a
+// resource, so the configuration records no reference and the reference-based
+// default finds nothing. Without this, an account block in a plan whose buckets
+// were all judged some other way would be reported as a resource nothing
+// examined — which is false, since every bucket verdict consults it.
+func (m Mapper) Governs(resource terraformplan.ResourceChange,
+	scope []terraformplan.ResourceChange) []string {
+
+	if resource.Type != typeAccountBlock {
+		return nil
+	}
+
+	var buckets []string
+	for i := range scope {
+		if scope[i].Type == typeBucket && sameProviderInstance(scope[i], resource) {
+			buckets = append(buckets, scope[i].Address)
+		}
+	}
+	return buckets
+}
+
+// Bindings declares which S3 resources govern which, and through what.
+//
+// Every bucket-scoped control carries the bucket's name or id in "bucket", and
+// that argument alone is the application. A policy document interpolating a
+// bucket ARN, or an ordering dependency, names a bucket without being applied
+// to it.
+//
+// A bucket declares nothing: it makes no claims about what governs it, so a
+// reference it writes is a mention. An account-wide block declares nothing
+// either — it is scoped to the provider instance rather than to a resource,
+// and says so through Governs.
+func (Mapper) Bindings() []declared.Binding {
+	var relations []declared.Binding
+	for _, control := range []string{
+		typePublicAccessBlock, typeBucketPolicy, typeBucketACL, typeOwnershipControls,
+	} {
+		relations = append(relations, declared.Binding{
+			From: control, Attribute: "bucket", To: typeBucket})
+	}
+	return relations
+}
+
+// Environment reads a resource's declared environment with this provider's
+// vocabulary, so a control resource is asked the same question as a subject.
+func (m Mapper) Environment(change terraformplan.ResourceChange) model.Fact[string] {
+	return declared.Environment(change, attrTags, model.CloudAWS)
 }

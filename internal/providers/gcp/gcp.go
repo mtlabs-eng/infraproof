@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -48,6 +49,31 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
+// The questions this mapper answers about a bucket. Prevention is read from the
+// bucket itself, so the subject answers for it and nothing else can.
+const (
+	roleIAMGrant   = "iam_grant"
+	rolePrevention = attrPrevention
+)
+
+// RoleOf names the question a resource would answer about a bucket.
+func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
+	if subject.Type != typeBucket {
+		return ""
+	}
+	switch candidate.Type {
+	case typeBucket:
+		return rolePrevention
+	case typeIAMMember, typeIAMBinding, typeIAMPolicy:
+		return roleIAMGrant
+	}
+	return ""
+}
+
+// attrLabels is where GCP carries user-supplied labels; the other two clouds
+// call the same thing tags.
+const attrLabels = "labels"
+
 // Map normalizes a bucket together with the IAM resources bound to it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	prevention, preventionSources := preventionState(subject)
@@ -69,6 +95,7 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 		Cloud:         model.CloudGCP,
 		Family:        model.FamilyObjectStorage,
 		Destructive:   subject.IsDestructive(),
+		Environment:   declared.Environment(subject, attrLabels, model.CloudGCP),
 		ObjectStorage: &capabilities,
 	}
 }
@@ -116,7 +143,7 @@ func publicAccess(prevention answer, preventionSources []model.Provenance,
 // preventionState reads public_access_prevention. Only "enforced" proves
 // anything: "inherited" defers to an organization policy this plan cannot see.
 func preventionState(bucket terraformplan.ResourceChange) (answer, []model.Provenance) {
-	sources := []model.Provenance{provenance(bucket.Address, attrPrevention)}
+	sources := []model.Provenance{declared.Source(model.CloudGCP, bucket.Address, attrPrevention, bucket.After.Field(attrPrevention))}
 
 	value := bucket.After.Field(attrPrevention)
 	switch value.State() {
@@ -147,13 +174,13 @@ func publicBinding(related []terraformplan.ResourceChange) (answer, []model.Prov
 	for _, change := range related {
 		switch change.Type {
 		case typeIAMMember:
-			sources = append(sources, provenance(change.Address, "member"))
+			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "member", change.After.Field("member")))
 			escalate(memberIsEveryone(change.After.Field("member")))
 		case typeIAMBinding:
-			sources = append(sources, provenance(change.Address, "members"))
+			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "members", change.After.Field("members")))
 			escalate(membersIncludeEveryone(change.After.Field("members")))
 		case typeIAMPolicy:
-			sources = append(sources, provenance(change.Address, "policy_data"))
+			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "policy_data", change.After.Field("policy_data")))
 			escalate(policyDataGrantsPublic(change.After.Field("policy_data")))
 		}
 	}
@@ -229,6 +256,23 @@ func unreadable(value terraformplan.Value) answer {
 	return answerUnknown
 }
 
-func provenance(address, attribute string) model.Provenance {
-	return model.Provenance{ResourceAddress: address, AttributePath: attribute, Cloud: model.CloudGCP}
+// Bindings declares which IAM resources grant on which buckets, and through
+// what.
+//
+// A member, a binding and a policy all carry the bucket in "bucket". A
+// condition expression or an ordering dependency may name a bucket without
+// granting anything on it. A bucket declares nothing.
+func (Mapper) Bindings() []declared.Binding {
+	var relations []declared.Binding
+	for _, grant := range []string{typeIAMMember, typeIAMBinding, typeIAMPolicy} {
+		relations = append(relations, declared.Binding{
+			From: grant, Attribute: "bucket", To: typeBucket})
+	}
+	return relations
+}
+
+// Environment reads a resource's declared environment with this provider's
+// vocabulary, so a control resource is asked the same question as a subject.
+func (m Mapper) Environment(change terraformplan.ResourceChange) model.Fact[string] {
+	return declared.Environment(change, attrLabels, model.CloudGCP)
 }

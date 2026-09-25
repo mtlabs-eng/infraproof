@@ -23,15 +23,19 @@ func mustReadFile(t *testing.T, path string) []byte {
 
 // TestJSONMatchesReviewedContractExample anchors the renderer to the reviewed
 // contract document rather than to whatever the implementation happens to emit.
+// The file it compares against is the bundle docs/EVIDENCE-BUNDLE.md walks
+// through, not the output of the command in the README. It used to sit in
+// examples/ beside the contract and plan that command reads, where its name
+// and location said otherwise.
 func TestJSONMatchesReviewedContractExample(t *testing.T) {
-	want := mustReadFile(t, filepath.Join("..", "..", "examples", "expected-output.json"))
+	want := mustReadFile(t, filepath.Join("..", "..", "docs", "examples", "evidence-bundle.json"))
 
 	got, err := render.JSON(contractBundle())
 	if err != nil {
 		t.Fatalf("render.JSON: %v", err)
 	}
 	if string(got) != string(want) {
-		t.Fatalf("canonical JSON does not match examples/expected-output.json\n--- got ---\n%s\n--- want ---\n%s", got, want)
+		t.Fatalf("canonical JSON does not match docs/examples/evidence-bundle.json\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
 
