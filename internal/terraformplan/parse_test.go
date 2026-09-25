@@ -407,3 +407,184 @@ func TestAnUnrecognizedModeIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestAPlanNamingOneKeyTwiceIsRefused closes the last place a stated identity
+// was read as the one written last.
+//
+// resource_changes and the configuration walk each refuse two entries at one
+// address, because an address identifies one resource. A repeated JSON key is
+// the same claim made one level down, and it never reached either check:
+// encoding/json collapses repeated members into the last one while decoding, so
+// a second "one" under module_calls discarded that module's whole configuration
+// before anything could look. Measured on a plan whose ACL is public-read, the
+// verdict went from BLOCK to UNKNOWN with no diagnostic.
+func TestAPlanNamingOneKeyTwiceIsRefused(t *testing.T) {
+	cases := map[string]string{
+		"a module call": `{
+		  "format_version": "1.2",
+		  "configuration": {"root_module": {"module_calls": {
+		    "one": {"module": {"resources": []}},
+		    "one": {"module": {"resources": []}}
+		  }}}
+		}`,
+		"a provider instance": `{
+		  "format_version": "1.2",
+		  "configuration": {"provider_config": {
+		    "aws": {"name": "aws"},
+		    "aws": {"name": "aws"}
+		  }}
+		}`,
+		"an attribute of a change": `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+		     "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"acl": "private", "acl": "public-read"}}}
+		  ]
+		}`,
+		"the format version itself": `{"format_version": "1.2", "format_version": "9.0"}`,
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(raw))
+			if err == nil {
+				t.Fatal("a document naming one key twice was accepted, and one of the two was discarded")
+			}
+			if !strings.Contains(err.Error(), "more than once") {
+				t.Errorf("the error does not say what is wrong: %v", err)
+			}
+		})
+	}
+}
+
+// TestARepeatedKeyIsFoundPastEveryArrayInFrontOfIt covers the walk rather than
+// the rule.
+//
+// The cases above are minimal, and a token stream re-synchronises by accident
+// on a minimal document: a scan that never descended into arrays still found
+// their repeated keys, because the array's own closing token happened to leave
+// the reader where the next key was. A plan is not minimal. Its resource
+// changes are an array of objects holding arrays, and the configuration comes
+// after all of them -- so a scan that skips an array skips the rest of the
+// document, and the repeated module call this commit exists to refuse is
+// accepted with nothing said.
+func TestARepeatedKeyIsFoundPastEveryArrayInFrontOfIt(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "b", "tags": [{"k": "v"}, {"k": "v"}]}}}
+	  ],
+	  "configuration": {"root_module": {"module_calls": {
+	    "one": {"module": {"resources": []}},
+	    "one": {"module": {"resources": []}}
+	  }}}
+	}`)
+
+	_, err := Parse(raw)
+	if err == nil {
+		t.Fatal("a repeated module call behind an array of changes was accepted")
+	}
+	if !strings.Contains(err.Error(), "configuration.root_module.module_calls.one") {
+		t.Errorf("the error does not locate the repeated key: %v", err)
+	}
+}
+
+// TestADiagnosticLocatesTheRepeatedKey holds the other half of a diagnostic:
+// saying something is wrong, and saying where. Evidence that names the wrong
+// place is not evidence.
+func TestADiagnosticLocatesTheRepeatedKey(t *testing.T) {
+	cases := map[string]struct{ raw, path string }{
+		"inside a change": {`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+		     "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"acl": "private", "acl": "public-read"}}}
+		  ]
+		}`, "resource_changes[0].change.after.acl"},
+		"a provider instance": {`{
+		  "format_version": "1.2",
+		  "configuration": {"provider_config": {
+		    "aws": {"name": "aws"}, "aws": {"name": "aws"}}}
+		}`, "configuration.provider_config.aws"},
+		"a long field name": {
+			`{"format_version": "1.2", "terraform_version": "1.14.0", "terraform_version": "1.0.0"}`,
+			"terraform_version"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.raw))
+			if err == nil {
+				t.Fatal("the document was accepted")
+			}
+			if !strings.Contains(err.Error(), tc.path) {
+				t.Errorf("the error locates the wrong place.\n want it to contain %q\n  got %v",
+					tc.path, err)
+			}
+		})
+	}
+}
+
+// TestADocumentTooDeepToScanIsRefusedRatherThanSkipped covers the bound.
+//
+// Past it the scan cannot keep looking, and there are two ways to stop: refuse
+// the document, or accept it with everything below unscanned. Only the first is
+// safe to be wrong about, and nothing held the code to it.
+func TestADocumentTooDeepToScanIsRefusedRatherThanSkipped(t *testing.T) {
+	deep := func(levels int, tail string) []byte {
+		return []byte(`{"format_version": "1.2", "a": ` +
+			strings.Repeat(`{"b": `, levels) + tail + strings.Repeat(`}`, levels) + `}`)
+	}
+
+	// Well inside the bound, and holding a repeated key at the bottom: read and
+	// refused for the repetition, not for the depth.
+	if _, err := Parse(deep(100, `{"c": 1, "c": 2}`)); err == nil ||
+		!strings.Contains(err.Error(), "more than once") {
+		t.Errorf("a repeated key a hundred levels down was not found: %v", err)
+	}
+
+	// Past the bound: refused for the depth, whatever is below.
+	_, err := Parse(deep(600, `null`))
+	if err == nil {
+		t.Fatal("a document too deep to scan was accepted, and everything below the bound went unread")
+	}
+	if !strings.Contains(err.Error(), "nested") {
+		t.Errorf("the error does not say the document is too deep: %v", err)
+	}
+}
+
+// TestRepeatedKeysAreRefusedOnlyWithinOneObject keeps the rule from refusing
+// the ordinary case. The same name in two different objects is two different
+// keys, which is most of a plan.
+func TestRepeatedKeysAreRefusedOnlyWithinOneObject(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket", "name": "a",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}
+	  ],
+	  "configuration": {"root_module": {"module_calls": {
+	    "one": {"module": {"resources": [
+	      {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "a", "expressions": {}}]}},
+	    "two": {"module": {"resources": [
+	      {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "a", "expressions": {}}]}}
+	  }}}
+	}`)
+
+	if _, err := Parse(raw); err != nil {
+		t.Fatalf("an ordinary plan was refused: %v", err)
+	}
+}
