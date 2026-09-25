@@ -115,6 +115,10 @@ Carried forward rather than solved here:
   the record a reader will count to. It does not check that a bundle it is
   given is in that order, so the ordering is a property of what this build
   emits rather than one it verifies on input.
+- The plan parser refuses two entries at one address in `resource_changes` and
+  now in the configuration walk as well. Nothing checks the other identities a
+  plan states: two provider instances under one key, or two module calls of one
+  name, are each read as the last one written.
 
 ## Safety semantics
 

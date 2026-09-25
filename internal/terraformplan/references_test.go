@@ -2,6 +2,7 @@ package terraformplan
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -589,5 +590,81 @@ func TestARepeatedDeclarationIsRecorded(t *testing.T) {
 	}
 	if changeAt(t, plan, "aws_s3_bucket.single").DeclaredRepeated {
 		t.Fatal("a resource declared without repetition is not repeated")
+	}
+}
+
+// TestTwoConfigurationEntriesAtOneAddressAreRefused holds one rule in the two
+// places a plan states an identity.
+//
+// resource_changes refuses two entries at one address, because an address
+// identifies one change and a verdict about one would answer for the other.
+// The configuration walk accepted them and kept the last, so a second entry
+// erased the first one's references — and a reference is the only dependable
+// link between a resource and the controls over it. A plan naming the bucket an
+// ACL applies to, then repeating the ACL with no arguments, reported the grant
+// as undetermined rather than as the grant it states.
+//
+// Nothing about that is visible to a reader: the plan parses, the verdict moves,
+// and no diagnostic says why.
+func TestTwoConfigurationEntriesAtOneAddressAreRefused(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}},
+	    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "a", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"acl": "public-read"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "expressions": {}},
+	    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "a", "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.b.id", "aws_s3_bucket.b"]}}},
+	    {"address": "aws_s3_bucket_acl.a", "mode": "managed", "type": "aws_s3_bucket_acl",
+	     "name": "a", "expressions": {}}
+	  ]}}
+	}`)
+
+	_, err := Parse(raw)
+	if err == nil {
+		t.Fatal("a configuration declaring one address twice was accepted, and one of the two was discarded")
+	}
+	if !strings.Contains(err.Error(), "configuration.root_module.resources[2].address") {
+		t.Errorf("the error does not locate the second entry: %v", err)
+	}
+	if strings.Contains(err.Error(), "aws_s3_bucket_acl.a") {
+		t.Errorf("a plan value reached a diagnostic: %v", err)
+	}
+}
+
+// TestOneAddressPerModuleIsNotOneAddressPerPlan keeps the rule where it
+// belongs. Two modules declaring the same relative address are two resources,
+// and the qualified address is what distinguishes them.
+func TestOneAddressPerModuleIsNotOneAddressPerPlan(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "module.one.aws_s3_bucket.b", "module_address": "module.one", "mode": "managed",
+	     "type": "aws_s3_bucket", "name": "b", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}},
+	    {"address": "module.two.aws_s3_bucket.b", "module_address": "module.two", "mode": "managed",
+	     "type": "aws_s3_bucket", "name": "b", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}
+	  ],
+	  "configuration": {"root_module": {"module_calls": {
+	    "one": {"module": {"resources": [
+	      {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	       "expressions": {}}]}},
+	    "two": {"module": {"resources": [
+	      {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	       "expressions": {}}]}}
+	  }}}
+	}`)
+
+	if _, err := Parse(raw); err != nil {
+		t.Fatalf("two modules declaring the same relative address were refused: %v", err)
 	}
 }

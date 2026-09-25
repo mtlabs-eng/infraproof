@@ -138,9 +138,26 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 				if address == "" {
 					continue
 				}
+				qualified := joinAddress(addressPrefix, address)
+				if _, declared := byAddress[qualified]; declared {
+					// The same rule resource_changes applies, for the same
+					// reason: an address identifies one resource. Keeping the
+					// last entry discarded the first one's references, and a
+					// reference is the only dependable link between a resource
+					// and the controls over it — so a second entry with no
+					// arguments erased a stated correlation and left a grant
+					// looking undetermined, with nothing said about it.
+					//
+					// safeToken, like every plan-derived string in a
+					// diagnostic: an address is a plan value.
+					*errs = append(*errs, invalid(entryPath+".address",
+						"is %s, which another resource in this module already declares; "+
+							"an address identifies one resource", safeToken(address)))
+					continue
+				}
 				_, byForEach := fields["for_each_expression"]
 				_, byCount := fields["count_expression"]
-				byAddress[joinAddress(addressPrefix, address)] = configResource{
+				byAddress[qualified] = configResource{
 					providerConfigKey: optionalString(fields, "provider_config_key", entryPath+".provider_config_key", errs),
 					repeated:          byForEach || byCount,
 					references:        parseExpressions(entryPath, fields, addressPrefix, errs),
