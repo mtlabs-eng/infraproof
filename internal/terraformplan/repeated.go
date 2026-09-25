@@ -3,7 +3,6 @@ package terraformplan
 import (
 	"bytes"
 	"encoding/json"
-	"strconv"
 )
 
 // maxKeyDepth bounds how deep the scan below will walk. A plan is nested as
@@ -28,17 +27,18 @@ const maxKeyDepth = 512
 // this repository keeps being caught by: module_calls and provider_config are
 // the two that move a verdict today, and the next map added would need
 // remembering.
-//
-// A document this cannot read at all is left alone. The decode reports it, in
-// the message encoding/json produces, and saying it twice in two voices tells a
-// reader less.
+// The decode runs before this and has already succeeded, so the
+// walk below cannot meet a token the reader rejects. Where it would, it refuses
+// the document rather than returning: a scan that stops early and says nothing
+// is a document read as checked when it was not, and that shape must not be one
+// line of reordering away.
 func rejectRepeatedKeys(raw []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 
 	token, err := decoder.Token()
 	if err != nil {
-		return nil
+		return errUnscannable
 	}
 	return scanValue(decoder, token, "", 0)
 }
@@ -73,14 +73,14 @@ func scanObject(decoder *json.Decoder, path string, depth int) error {
 	for {
 		key, err := decoder.Token()
 		if err != nil {
-			return nil
+			return errUnscannable
 		}
 		if delim, ok := key.(json.Delim); ok && delim == '}' {
 			return nil
 		}
 		name, ok := key.(string)
 		if !ok {
-			return nil
+			return errUnscannable
 		}
 
 		here := join(path, name)
@@ -93,7 +93,7 @@ func scanObject(decoder *json.Decoder, path string, depth int) error {
 
 		value, err := decoder.Token()
 		if err != nil {
-			return nil
+			return errUnscannable
 		}
 		if err := scanValue(decoder, value, here, depth+1); err != nil {
 			return err
@@ -105,7 +105,7 @@ func scanArray(decoder *json.Decoder, path string, depth int) error {
 	for i := 0; ; i++ {
 		token, err := decoder.Token()
 		if err != nil {
-			return nil
+			return errUnscannable
 		}
 		if delim, ok := token.(json.Delim); ok && delim == ']' {
 			return nil
@@ -118,15 +118,57 @@ func scanArray(decoder *json.Decoder, path string, depth int) error {
 
 // join builds a diagnostic path, keeping a key out of it unless it is plainly a
 // field name. A key is a plan value and a diagnostic is read in a CI log.
+//
+// The path is bounded too. Each component is short, and the number of them is
+// whatever the producer nested, so a crafted document could otherwise put five
+// hundred components on one line. Where it is cut is said rather than left to
+// be noticed.
 func join(path, name string) string {
-	safe := safeToken(name)
-	if unquoted, err := strconv.Unquote(safe); err == nil {
-		name = unquoted
-	} else {
-		name = "a key this build will not repeat"
-	}
 	if path == "" {
-		return name
+		return readableKey(name)
 	}
-	return path + "." + name
+	joined := path + "." + readableKey(name)
+	if len(joined) <= pathLimit {
+		return joined
+	}
+	return "…" + joined[len(joined)-pathLimit:]
 }
+
+// readableKey returns a key a diagnostic may repeat, or a description of one it
+// may not.
+//
+// safeToken exists for a version string and bounds at sixteen characters, which
+// is the wrong bound here: "terraform_version" is seventeen, so the field most
+// likely to be repeated by a careless producer was reported as unnameable and
+// the diagnostic located nothing. A field name is longer than a version and is
+// still not free text, so the character set stays and the length grows.
+func readableKey(name string) string {
+	if name == "" || len(name) > keyLimit {
+		return unnameableKey
+	}
+	for _, char := range name {
+		switch {
+		case char >= '0' && char <= '9', char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z':
+		case char == '.', char == '-', char == '_', char == '/', char == '[', char == ']':
+		default:
+			return unnameableKey
+		}
+	}
+	return name
+}
+
+// errUnscannable reports a document the walk could not read to the end. The
+// decode has already accepted it, so this is unreachable; it is an error rather
+// than a silent return because the alternative reads an unchecked document as a
+// checked one.
+var errUnscannable = invalid("", "could not be read to the end while checking for repeated keys")
+
+const (
+	// keyLimit bounds how much of one key a diagnostic repeats.
+	keyLimit = 64
+	// pathLimit bounds the whole path, because the number of components is the
+	// producer's to choose.
+	pathLimit = 200
+	// unnameableKey stands in for a key this build will not put in a log.
+	unnameableKey = "a key this build will not repeat"
+)
