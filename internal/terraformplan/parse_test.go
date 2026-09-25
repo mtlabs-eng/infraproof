@@ -407,3 +407,83 @@ func TestAnUnrecognizedModeIsRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestAPlanNamingOneKeyTwiceIsRefused closes the last place a stated identity
+// was read as the one written last.
+//
+// resource_changes and the configuration walk each refuse two entries at one
+// address, because an address identifies one resource. A repeated JSON key is
+// the same claim made one level down, and it never reached either check:
+// encoding/json collapses repeated members into the last one while decoding, so
+// a second "one" under module_calls discarded that module's whole configuration
+// before anything could look. Measured on a plan whose ACL is public-read, the
+// verdict went from BLOCK to UNKNOWN with no diagnostic.
+func TestAPlanNamingOneKeyTwiceIsRefused(t *testing.T) {
+	cases := map[string]string{
+		"a module call": `{
+		  "format_version": "1.2",
+		  "configuration": {"root_module": {"module_calls": {
+		    "one": {"module": {"resources": []}},
+		    "one": {"module": {"resources": []}}
+		  }}}
+		}`,
+		"a provider instance": `{
+		  "format_version": "1.2",
+		  "configuration": {"provider_config": {
+		    "aws": {"name": "aws"},
+		    "aws": {"name": "aws"}
+		  }}
+		}`,
+		"an attribute of a change": `{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+		     "provider_name": "p",
+		     "change": {"actions": ["create"], "before": null,
+		                "after": {"acl": "private", "acl": "public-read"}}}
+		  ]
+		}`,
+		"the format version itself": `{"format_version": "1.2", "format_version": "9.0"}`,
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(raw))
+			if err == nil {
+				t.Fatal("a document naming one key twice was accepted, and one of the two was discarded")
+			}
+			if !strings.Contains(err.Error(), "more than once") {
+				t.Errorf("the error does not say what is wrong: %v", err)
+			}
+		})
+	}
+}
+
+// TestRepeatedKeysAreRefusedOnlyWithinOneObject keeps the rule from refusing
+// the ordinary case. The same name in two different objects is two different
+// keys, which is most of a plan.
+func TestRepeatedKeysAreRefusedOnlyWithinOneObject(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket", "name": "a",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket.b", "mode": "managed", "type": "aws_s3_bucket", "name": "b",
+	     "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "b"}}}
+	  ],
+	  "configuration": {"root_module": {"module_calls": {
+	    "one": {"module": {"resources": [
+	      {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "a", "expressions": {}}]}},
+	    "two": {"module": {"resources": [
+	      {"address": "aws_s3_bucket.a", "mode": "managed", "type": "aws_s3_bucket",
+	       "name": "a", "expressions": {}}]}}
+	  }}}
+	}`)
+
+	if _, err := Parse(raw); err != nil {
+		t.Fatalf("an ordinary plan was refused: %v", err)
+	}
+}

@@ -54,6 +54,13 @@ func parseDocument(raw []byte) (Plan, error) {
 		return Plan{}, invalid("", "unexpected content after the plan document at byte offset %d", decoder.InputOffset())
 	}
 
+	// Before anything reads the decoded maps: a repeated key has already been
+	// collapsed in them, and what it discarded cannot be recovered from what
+	// survived.
+	if err := rejectRepeatedKeys(raw); err != nil {
+		return Plan{}, err
+	}
+
 	var plan Plan
 	var errs []error
 
