@@ -632,50 +632,72 @@ func structureOf(document string) string {
 // blind to the mutant it exists to catch — a code() that opens a span and
 // never closes it.
 //
-// So a run is a delimiter only once its partner has been found. The line is
-// scanned first to learn which runs pair up.
+// Escapes and spans interleave, and that is the part a local rule cannot get
+// right. Outside a span a backslash makes the next character literal, so an
+// escaped backtick is not part of a run: "\\```0```[" is a literal backtick
+// followed by a run of two, which finds no partner, so nothing is a span and
+// everything is text. Inside a span a backslash is an ordinary character, so
+// "`[\\`" is a closed span whose content happens to end in one — which is why
+// skipping the character after every backslash is wrong in the other direction.
+//
+// So the line is walked once, left to right, in the order the two rules apply.
 func withoutCodeSpans(line string) string {
-	type run struct{ start, length int }
+	var out strings.Builder
 
-	var runs []run
-	for i := 0; i < len(line); i++ {
-		if line[i] != '`' {
-			continue
-		}
-		length := 0
-		for i+length < len(line) && line[i+length] == '`' {
-			length++
-		}
-		runs = append(runs, run{start: i, length: length})
-		i += length - 1
-	}
+	for i := 0; i < len(line); {
+		switch {
+		case line[i] == '\\' && i+1 < len(line):
+			// Both characters are literal, and the escaped one cannot open a
+			// span. They are kept, because countUnescaped reads the backslash
+			// to decide whether what follows is syntax.
+			out.WriteString(line[i : i+2])
+			i += 2
 
-	// Pair each opener with the next run of equal length, as CommonMark does.
-	removed := map[int]int{}
-	used := make([]bool, len(runs))
-	for a := range runs {
-		if used[a] {
-			continue
-		}
-		for b := a + 1; b < len(runs); b++ {
-			if used[b] || runs[b].length != runs[a].length {
+		case line[i] == '`':
+			opener := backtickRun(line, i)
+			closer := closingRun(line, i+opener, opener)
+			if closer < 0 {
+				// No partner, so this is text rather than a delimiter.
+				out.WriteString(line[i : i+opener])
+				i += opener
 				continue
 			}
-			removed[runs[a].start] = runs[b].start + runs[b].length
-			used[a], used[b] = true, true
-			break
+			i = closer + opener
+
+		default:
+			out.WriteByte(line[i])
+			i++
 		}
 	}
 
-	var out strings.Builder
-	for i := 0; i < len(line); i++ {
-		if end, ok := removed[i]; ok {
-			i = end - 1
+	return out.String()
+}
+
+// backtickRun returns the length of the run of backticks starting at i.
+func backtickRun(line string, i int) int {
+	length := 0
+	for i+length < len(line) && line[i+length] == '`' {
+		length++
+	}
+	return length
+}
+
+// closingRun returns the offset of the first run of exactly n backticks at or
+// after from, or -1. A backslash inside a span is an ordinary character, so the
+// search for a closer does not honour escapes.
+func closingRun(line string, from, n int) int {
+	for i := from; i < len(line); {
+		if line[i] != '`' {
+			i++
 			continue
 		}
-		out.WriteByte(line[i])
+		length := backtickRun(line, i)
+		if length == n {
+			return i
+		}
+		i += length
 	}
-	return out.String()
+	return -1
 }
 
 // countUnescaped counts the cell boundaries in a table row.

@@ -361,8 +361,6 @@ func code(s string) string {
 	return fence + padding + s + padding + fence
 }
 
-// collapseBreaks turns every line ending into a space, so a value cannot open a
-// block wherever it is rendered.
 // collapseBreaks turns every control character into a space.
 //
 // A break ends a code span and, if it is blank, the paragraph too; an escape

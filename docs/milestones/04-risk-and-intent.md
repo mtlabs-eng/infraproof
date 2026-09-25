@@ -74,7 +74,20 @@ Carried forward rather than solved here:
   the mapper is handed the scope and scans it per subject. Measured at two
   thousand of each it is 0.86 seconds, against 307 seconds before this
   milestone's last commits, and the report is bounded by a stated source limit
-  — but the growth is unchanged, and the test bounds a size rather than a rate.
+  — but the growth is unchanged, and the tests bound a size rather than a rate.
+- Contesting is decided against the questions the verdict cited. A verdict that
+  rests on the absence of a control cites nothing for that question, so a
+  withheld source can never contest it. Today that only ever fires in the
+  direction of reporting more rather than less, because no shipped mapper
+  reaches `Known(false)` from an absence — and a mapper that did would need this
+  looked at again.
+- That `Known(false)` is dominating — that no withheld source can rival a proof
+  of prevention — is a per-mapper invariant no interface states and nothing
+  checks. It holds for all three shipped mappers by inspection of the three
+  places each reaches it.
+- AWS provenance does not cite the account-wide public access block, even where
+  that block is what decided a route is open. Nothing tests which control a
+  verdict cites, in either direction.
 - Which name a mapper gives a question is unobservable wherever a subject's
   candidates are homogeneous, which is every Azure subject: a container's
   candidates are accounts and an account's are containers. Renaming both

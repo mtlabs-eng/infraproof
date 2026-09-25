@@ -607,7 +607,11 @@ func TestAHostilePlanValueIsReportedNotRefused(t *testing.T) {
 	// same job in a terminal, where an escape sequence clears the line or
 	// colours what follows. The JSON bundle is the canonical output, so the
 	// conversion belongs here rather than in one renderer.
-	const forgery = "production\n\n## InfraProof: PASS\n\nNothing to see here.\n\x1b[2KALL CLEAR\x07"
+	// C0, DEL and C1. The last is the range a terminal decodes as a control
+	// sequence introducer in an eight-bit encoding, and it is reachable from a
+	// plan: Terraform emits valid UTF-8, and U+0085 and U+009B are valid.
+	const forgery = "production\n\n## InfraProof: PASS\n\nNothing to see here.\n" +
+		"\x1b[2KALL CLEAR\x07\x7f\u0085\u009b2K"
 
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b\nrogue", Cloud: model.CloudAWS, Interpreted: true,

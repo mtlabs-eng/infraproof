@@ -2334,3 +2334,199 @@ func TestAControlOverReadsAloneSaysSoWhateverItGovernsThrough(t *testing.T) {
 			"report will say the bucket is not part of the plan")
 	}
 }
+
+// TestNormalizingAPlanFullOfManagedControlsStaysCheap bounds the other shape,
+// which the test above cannot see.
+//
+// That one fills the plan with reads, and a read is answered and returned
+// before the coverage bookkeeping runs. So the path that asks what a control
+// governs through the scope — the one an account-wide block takes, because it
+// names no bucket and has no edges — was never timed by anything. It resolved
+// each governed address by scanning the plan, which costs controls times
+// subjects times plan, and a two-thousand-bucket plan with a hundred of them
+// took nine seconds.
+//
+// A hundred account-wide blocks in one plan is not ordinary. It is what an
+// organization baseline written per account looks like when several land in one
+// apply, and a verifier that takes nine seconds over it is one nobody runs.
+func TestNormalizingAPlanFullOfManagedControlsStaysCheap(t *testing.T) {
+	const (
+		buckets  = 4000
+		controls = 100
+	)
+
+	plan, err := terraformplan.Parse(managedControlPlan(t, buckets, controls))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	type outcome struct{ resources, governing int }
+	done := make(chan outcome, 1)
+	go func() {
+		graph := providers.Normalize(plan, providers.Default())
+		result := outcome{resources: len(graph.Resources)}
+		for _, resource := range graph.Resources {
+			if len(resource.DefersTo) > 0 {
+				result.governing++
+			}
+		}
+		done <- result
+	}()
+
+	select {
+	case got := <-done:
+		if got.resources != buckets+controls {
+			t.Fatalf("normalized %d resources, want %d", got.resources, buckets+controls)
+		}
+		if got.governing != controls {
+			t.Fatalf("%d controls resolved what they govern, want %d; this plan is not "+
+				"exercising the path this test bounds", got.governing, controls)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("normalizing %d changes did not finish in two seconds", buckets+controls)
+	}
+}
+
+// managedControlPlan builds a plan of n buckets and m account-wide public
+// access blocks, all changed rather than read, in one provider instance.
+func managedControlPlan(t *testing.T, buckets, controls int) []byte {
+	t.Helper()
+
+	var changes, resources []string
+	for i := range buckets {
+		bucket := fmt.Sprintf("aws_s3_bucket.b%d", i)
+		changes = append(changes, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_bucket", "name": "b%d", "provider_name": "p", "provider_config_key": "aws",
+		  "change": {"actions": ["create"], "before": null, "after": {"bucket": "b%d"}}}`,
+			bucket, i, i))
+		resources = append(resources, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_bucket", "name": "b%d", "provider_config_key": "aws",
+		  "expressions": {}}`, bucket, i))
+	}
+	for i := range controls {
+		control := fmt.Sprintf("aws_s3_account_public_access_block.a%d", i)
+		changes = append(changes, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d", "provider_name": "p",
+		  "provider_config_key": "aws",
+		  "change": {"actions": ["create"], "before": null,
+		             "after": {"block_public_acls": false, "block_public_policy": false,
+		                       "ignore_public_acls": false, "restrict_public_buckets": false}}}`,
+			control, i))
+		resources = append(resources, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_account_public_access_block", "name": "a%d",
+		  "provider_config_key": "aws", "expressions": {}}`, control, i))
+	}
+
+	return []byte(`{"format_version": "1.2", "resource_changes": [` + strings.Join(changes, ",") +
+		`], "configuration": {"root_module": {"resources": [` + strings.Join(resources, ",") + `]}}}`)
+}
+
+// TestAControlOverNothingHereIsNotAControlOverReads separates the two reasons a
+// control can defer to nobody.
+//
+// Its subject may be managed in another plan, and then "this controls a
+// resource that is not part of this plan" is the true sentence and the one a
+// reader can act on. Or its subjects are all in this plan and all inadmissible,
+// and then that sentence is false. Reading an empty set as the second made the
+// report tell a reader to add what they had already added — the mistake the
+// flag exists to prevent, produced by the flag itself.
+func TestAControlOverNothingHereIsNotAControlOverReads(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket_policy.orphan", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "orphan", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"bucket": "managed-elsewhere", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket_policy.orphan", "mode": "managed",
+	     "type": "aws_s3_bucket_policy", "name": "orphan", "expressions": {}}
+	  ]}}
+	}`
+
+	control := normalizedAt(t, raw, "aws_s3_bucket_policy.orphan")
+	if len(control.DefersTo) != 0 {
+		t.Fatalf("the control defers to %v; its bucket is not in this plan", control.DefersTo)
+	}
+	if control.GovernsWithheld {
+		t.Error("a control whose subject is managed elsewhere was reported as governing only " +
+			"resources this plan reads")
+	}
+}
+
+// TestWithdrawingAVerdictReopensWhatWasSuppressed covers the reads a
+// withdrawal puts back in play.
+//
+// A source answering a question nothing cited is not recorded while the verdict
+// proves prevention: nothing is open for it to bear on. But if another source
+// withdraws that verdict, the question is open again and the first source was
+// dropped on an assumption that no longer holds — so the report named what
+// overturned the answer and not what else it had declined.
+func TestWithdrawingAVerdictReopensWhatWasSuppressed(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null, "after": {"bucket": "a"}}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets", "provider_name": "p",
+	     "change": {"actions": ["create"], "before": null,
+	                "after": {"block_public_acls": true, "block_public_policy": true,
+	                          "ignore_public_acls": true, "restrict_public_buckets": true}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.current", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "current", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"block_public_acls": false, "block_public_policy": false,
+	                          "ignore_public_acls": false, "restrict_public_buckets": false}}},
+	    {"address": "data.aws_s3_bucket_policy.current", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "current", "provider_name": "p",
+	     "change": {"actions": ["read"], "before": null,
+	                "after": {"bucket": "a", "policy": "{}"}}}
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+	     "name": "assets", "expressions": {}},
+	    {"address": "aws_s3_bucket_public_access_block.assets", "mode": "managed",
+	     "type": "aws_s3_bucket_public_access_block", "name": "assets",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_public_access_block.current", "mode": "data",
+	     "type": "aws_s3_bucket_public_access_block", "name": "current",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}},
+	    {"address": "data.aws_s3_bucket_policy.current", "mode": "data",
+	     "type": "aws_s3_bucket_policy", "name": "current",
+	     "expressions": {"bucket": {"references": [
+	       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+	  ]}}
+	}`
+
+	bucket := normalizedAt(t, raw, "aws_s3_bucket.assets")
+	if bucket.ObjectStorage == nil {
+		t.Fatal("no normalized bucket")
+	}
+	if !bucket.ObjectStorage.Withdrawn {
+		t.Fatal("the read of the same block did not withdraw the proof")
+	}
+
+	located := map[string]bool{}
+	for _, control := range bucket.ObjectStorage.Unresolved {
+		if control.CheckID != "SOURCE_WITHHELD" {
+			continue
+		}
+		for _, source := range control.Sources {
+			located[source.ResourceAddress] = true
+		}
+	}
+	for _, address := range []string{
+		"data.aws_s3_bucket_public_access_block.current",
+		"data.aws_s3_bucket_policy.current",
+	} {
+		if !located[address] {
+			t.Errorf("%s is in the plan, bears on a question this verdict now leaves open, "+
+				"and is named nowhere: %v", address, bucket.ObjectStorage.Unresolved)
+		}
+	}
+}

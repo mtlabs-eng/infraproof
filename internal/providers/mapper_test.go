@@ -1989,9 +1989,6 @@ func TestEachMapperAnswersOneQuestionPerQuestion(t *testing.T) {
 				}
 			}
 
-			if got := roles.RoleOf(subject, subject); got != roles.RoleOf(subject, subject) {
-				t.Error("the same pair was given two answers")
-			}
 		})
 	}
 }

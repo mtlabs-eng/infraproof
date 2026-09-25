@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mtlabs-eng/infraproof/internal/intent"
 )
@@ -957,19 +956,38 @@ func TestAnErrorQuotesAValueWithoutReprintingTheFile(t *testing.T) {
 func TestEveryQuotedValueIsBoundedAndWellFormed(t *testing.T) {
 	huge := strings.Repeat("€", 5000)
 
-	cases := map[string]func(map[string]any){
-		"schema_version":      func(c map[string]any) { c["schema_version"] = strings.Repeat("9", 5000) },
-		"destructive_changes": func(c map[string]any) { c["destructive_changes"] = huge },
-		"a cloud":             func(c map[string]any) { c["allowed_clouds"] = []string{huge} },
-		"a family": func(c map[string]any) {
-			c["resources"] = []map[string]string{{"family": huge, "exposure": "private"}}
+	// Eighty characters of a three-byte rune is not eighty bytes, which is the
+	// distinction a byte-counting bound loses: it cuts inside the character at
+	// that offset and quotes an invalid sequence.
+	truncated := strings.Repeat("€", 80) + "… (truncated)"
+
+	cases := map[string]struct {
+		mutate func(map[string]any)
+		want   string
+	}{
+		"schema_version": {
+			func(c map[string]any) { c["schema_version"] = strings.Repeat("9", 5000) },
+			strings.Repeat("9", 80) + "… (truncated)",
 		},
-		"an exposure": func(c map[string]any) {
-			c["resources"] = []map[string]string{{"family": "object_storage", "exposure": huge}}
+		"destructive_changes": {
+			func(c map[string]any) { c["destructive_changes"] = huge }, truncated,
+		},
+		"a cloud": {
+			func(c map[string]any) { c["allowed_clouds"] = []string{huge} }, truncated,
+		},
+		"a family": {
+			func(c map[string]any) {
+				c["resources"] = []map[string]string{{"family": huge, "exposure": "private"}}
+			}, truncated,
+		},
+		"an exposure": {
+			func(c map[string]any) {
+				c["resources"] = []map[string]string{{"family": "object_storage", "exposure": huge}}
+			}, truncated,
 		},
 	}
 
-	for name, mutate := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			contract := map[string]any{
 				"schema_version":      "1.0",
@@ -979,22 +997,30 @@ func TestEveryQuotedValueIsBoundedAndWellFormed(t *testing.T) {
 				"destructive_changes": "forbidden",
 				"resources":           []map[string]string{{"family": "object_storage", "exposure": "private"}},
 			}
-			mutate(contract)
+			tc.mutate(contract)
+			expected := tc.want
 			body, err := json.Marshal(contract)
 			if err != nil {
 				t.Fatalf("Marshal: %v", err)
 			}
 
-			if _, err := intent.Parse(body, "c.json"); err == nil {
+			_, err = intent.Parse(body, "c.json")
+			if err == nil {
 				t.Fatal("the contract was accepted")
-			} else {
-				if len(err.Error()) > 1000 {
-					t.Errorf("the message is %d bytes; it reprints the contract rather than quoting it",
-						len(err.Error()))
-				}
-				if !utf8.ValidString(err.Error()) {
-					t.Errorf("the message is not valid UTF-8: %q", err.Error())
-				}
+			}
+			message := err.Error()
+
+			if len(message) > 1000 {
+				t.Errorf("the message is %d bytes; it reprints the contract rather than quoting it",
+					len(message))
+			}
+			// Not utf8.ValidString of the message: the message is built with
+			// %q, which renders an invalid byte as an escape and leaves the
+			// message itself valid whatever was cut. The oracle has to look at
+			// what was quoted, so it is built here from the value and compared.
+			if !strings.Contains(message, expected) {
+				t.Errorf("the quoted value is not the value cut on a character boundary.\n"+
+					" want the message to contain %q\n got %q", expected, message)
 			}
 		})
 	}

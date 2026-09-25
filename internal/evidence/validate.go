@@ -140,6 +140,12 @@ func carriesIntentDigest(version string) bool {
 // Inline makes a value usable in a field this contract requires to be a single
 // line, by replacing every control character with a space.
 //
+// It normalizes more than validation refuses. A bundle carrying a control
+// character other than a line break is valid, because refusing one would turn a
+// plan this build can judge into an internal error -- which is the failure this
+// repository has fixed twice. A producer that passes its values through here
+// cannot emit one, and a reader's terminal never sees one from this build.
+//
 // A line break ends a paragraph and lets a value forge a heading. The rest of
 // the C0 range does the same job in a different reader: a report is read in a
 // terminal as often as in a browser, and an escape sequence there moves the
@@ -485,7 +491,11 @@ func validateScalarText(path string, value *Scalar) error {
 // expected to trust. Rejecting the break at the contract boundary keeps that
 // guarantee independent of any one renderer.
 func validateProse(path, value, requirement string) error {
-	if strings.TrimSpace(value) == "" {
+	// Emptiness is asked of what a reader sees. A control character is not a
+	// space, so a claim made only of them passed this check, and the renderer
+	// then collapsed each to a space and trimmed them away -- leaving a finding
+	// with a severity, a disposition and no sentence.
+	if strings.TrimSpace(Inline(value)) == "" {
 		return violation(path, "%s", requirement)
 	}
 	if strings.ContainsAny(value, "\r\n") {

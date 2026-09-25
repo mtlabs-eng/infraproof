@@ -624,3 +624,47 @@ func TestABundleFromAnEarlierMinorVersionStillValidates(t *testing.T) {
 		}
 	})
 }
+
+// TestProseThatRendersToNothingIsEmpty closes the gap between what the contract
+// calls empty and what a reader sees.
+//
+// A control character is not a space, so a claim made only of them passed the
+// emptiness check -- and then the renderer collapsed each to a space and
+// trimmed them away, leaving a finding with a severity, a disposition and no
+// sentence. A field that renders to nothing is empty whatever its bytes say.
+func TestProseThatRendersToNothingIsEmpty(t *testing.T) {
+	for name, claim := range map[string]string{
+		"an escape":           "\x1b",
+		"a bell and a delete": "\a\x7f",
+		"a C1 introducer":     "\u009b",
+		"controls and spaces": " \x1b \a ",
+		"a tab, which is one": "	",
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := blockBundle()
+			b.Findings[0].Claim = claim
+			if err := b.Validate(); err == nil {
+				t.Errorf("a finding whose claim renders to nothing was accepted: %q", claim)
+			}
+		})
+	}
+
+	// An escape sequence is not empty: the escape becomes a space and the rest
+	// is text a reader sees, which is the whole point of collapsing rather than
+	// stripping.
+	t.Run("an escape sequence still says something", func(t *testing.T) {
+		b := blockBundle()
+		b.Findings[0].Claim = "\x1b[2K"
+		if err := b.Validate(); err != nil {
+			t.Errorf("a claim that renders as visible text was refused: %v", err)
+		}
+	})
+
+	t.Run("a claim with a control character in it is still a claim", func(t *testing.T) {
+		b := blockBundle()
+		b.Findings[0].Claim = "The change grants public access.\x1b"
+		if err := b.Validate(); err != nil {
+			t.Errorf("a readable claim was refused for one unreadable byte: %v", err)
+		}
+	})
+}

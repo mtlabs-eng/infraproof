@@ -55,10 +55,11 @@ type Governor interface {
 // Whether a resource this build may not use was a candidate for the same
 // question as one it did use is the whole of admissibility, and only the mapper
 // knows. Everything else is a proxy. The resource type is the proxy this took
-// four attempts to stop using, and it fails in both directions: two types can
-// answer one question -- ownership controls decide whether an ACL applies at
-// all -- and one type answers for one subject and not another, because an
-// account-wide block governs the buckets in its own account and no others.
+// four attempts to stop using, and it fails in both directions: one type
+// answers for one subject and not another, because an account-wide block
+// governs the buckets in its own account and no others, and two types can
+// answer one question -- the three GCP IAM resources are read together, so a
+// grant through any of them is the same grant.
 //
 // A mapper that does not implement this cannot have its choices checked, so
 // every source it may not use is treated as contesting. That is the safe
@@ -113,7 +114,7 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 
 	graph := model.Graph{Resources: make([]model.NormalizedResource, 0, len(present))}
 	for _, change := range present {
-		resource := normalizeOne(change, visible, edges, admissible, present, mappers)
+		resource := normalizeOne(change, visible, edges, admissible, present, byAddress, mappers)
 		withhold(&resource, change,
 			withheldCandidates(change, edges, reads, scopedReads),
 			byAddress, mapperFor(change, mappers))
@@ -178,8 +179,14 @@ func admissibleEdges(edges map[string][]terraformplan.ResourceChange) map[string
 // alone left out the one kind of control that reaches its subjects through the
 // scope: an account-wide block names no bucket, has no edges by construction,
 // and so was never found to govern anything at all.
+//
+// The governed addresses are resolved through an index rather than by scanning
+// the plan for each one. Scanning cost (controls × subjects × plan) and turned
+// a two-thousand-bucket plan with a hundred account-wide blocks from a tenth of
+// a second into nine.
 func governsOnlyReads(change terraformplan.ResourceChange,
-	related, scope []terraformplan.ResourceChange, mapper Mapper) bool {
+	related, scope []terraformplan.ResourceChange,
+	byAddress map[string]terraformplan.ResourceChange, mapper Mapper) bool {
 
 	governed := map[string]bool{}
 	for _, candidate := range related {
@@ -192,10 +199,8 @@ func governsOnlyReads(change terraformplan.ResourceChange,
 			if address == change.Address {
 				continue
 			}
-			for _, candidate := range scope {
-				if candidate.Address == address {
-					governed[address] = candidate.IsRead()
-				}
+			if candidate, ok := byAddress[address]; ok {
+				governed[address] = candidate.IsRead()
 			}
 		}
 	}
@@ -262,7 +267,7 @@ func withhold(resource *model.NormalizedResource, subject terraformplan.Resource
 		}
 	}
 
-	var contested, alongside []model.Provenance
+	var contested, alongside, suppressed []model.Provenance
 	for _, candidate := range withheld {
 		role := roleUnstated
 		if declares {
@@ -287,7 +292,10 @@ func withhold(resource *model.NormalizedResource, subject terraformplan.Resource
 		case answered[role] || !declares:
 			contested = append(contested, source)
 		case exposure.IsKnown() && !exposure.Get():
-			// Prevention proved by the change itself. Nothing here is open.
+			// Prevention proved by the change itself. Nothing here is open —
+			// unless something else in this loop withdraws that proof, which is
+			// what the list below is for.
+			suppressed = append(suppressed, source)
 		default:
 			alongside = append(alongside, source)
 		}
@@ -302,7 +310,9 @@ func withhold(resource *model.NormalizedResource, subject terraformplan.Resource
 			withheldControl(resource.Cloud, contested,
 				"A source this verdict may not rest on answers the same question as one it does rest on, "+
 					"so which of them governs here is not settled."))
-		return
+		// The proof those were dropped against no longer stands, so the
+		// assumption that nothing was open for them to bear on no longer holds.
+		alongside = append(alongside, suppressed...)
 	}
 
 	if len(alongside) > 0 {
@@ -461,7 +471,8 @@ func interpretedByScope(changes []terraformplan.ResourceChange, mappers []Mapper
 // at.
 func normalizeOne(change terraformplan.ResourceChange,
 	edges, every map[string][]terraformplan.ResourceChange,
-	scope, present []terraformplan.ResourceChange, mappers []Mapper) model.NormalizedResource {
+	scope, present []terraformplan.ResourceChange,
+	byAddress map[string]terraformplan.ResourceChange, mappers []Mapper) model.NormalizedResource {
 
 	if change.IsRead() {
 		// A data source is read, not changed. It is kept, because nothing in a
@@ -504,7 +515,7 @@ func normalizeOne(change terraformplan.ResourceChange,
 				UnrecognizedAction: change.HasUnrecognizedAction(),
 				Environment:        environmentOf(change, mapper),
 				DefersTo:           defersTo(change, edges[change.Address], scope, mapper),
-				GovernsWithheld:    governsOnlyReads(change, every[change.Address], present, mapper),
+				GovernsWithheld:    governsOnlyReads(change, every[change.Address], present, byAddress, mapper),
 			}
 		}
 		resource := mapper.Map(change, edges[change.Address], scope)
