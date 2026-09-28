@@ -46,16 +46,6 @@ const publicPlan = `{
   ]}}
 }`
 
-// mustResolve names a file as the filesystem reaches it.
-func mustResolve(t *testing.T, path string) string {
-	t.Helper()
-	real, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-	return real
-}
-
 // root builds a directory holding an intent and a plan, and a server over it.
 func root(t *testing.T, contract, plan string) (*mcp.Server, string, string) {
 	t.Helper()
@@ -115,13 +105,10 @@ func toolCall(t *testing.T, server *mcp.Server, name string, arguments map[strin
 // the verdict and differed on the evidence would still be telling an agent
 // something the command does not.
 //
-// The two subject paths are compared separately. The adapter resolves a path
-// through its links before reading, because the confinement is about which file
-// is read rather than how it was spelled, so it records the file it read where
-// a caller naming the same file through a link records that spelling. Those are
-// two names for one file, and the bundle is otherwise identical -- which is
-// what "for the same files" means. Comparing them literally would pin the
-// symbolic-link layout of whoever runs the tests.
+// Nothing is set aside. The report names the file the caller named, so the two
+// interfaces produce one document. An earlier form recorded the path after
+// resolving its links, which is more of the filesystem than the caller handed
+// over -- and everything here may be repeated by a model into a commit message.
 func TestTheAdapterReturnsWhatTheVerifierReturns(t *testing.T) {
 	server, intentPath, planPath := root(t, privateIntent, publicPlan)
 
@@ -136,31 +123,7 @@ func TestTheAdapterReturnsWhatTheVerifierReturns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromFiles: %v", err)
 	}
-	var returned evidence.Bundle
-	if err := json.Unmarshal([]byte(text), &returned); err != nil {
-		t.Fatalf("the tool returned something that is not a bundle: %v", err)
-	}
-	if returned.Decision != evidence.DecisionBlock {
-		t.Errorf("decision = %q, want BLOCK", returned.Decision)
-	}
-
-	// The file the adapter read, named as the filesystem reaches it.
-	real, err := filepath.EvalSymlinks(intentPath)
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-	if returned.Subject.IntentSource != real {
-		t.Errorf("the bundle does not name the file that was read.\n want %q\n  got %q",
-			real, returned.Subject.IntentSource)
-	}
-
-	// Everything else, byte for byte. Both sides are given the same spelling so
-	// that the one field that legitimately differs is the one already checked.
-	same, err := verify.FromFiles(real, mustResolve(t, planPath))
-	if err != nil {
-		t.Fatalf("FromFiles: %v", err)
-	}
-	want, err := render.JSON(same)
+	want, err := render.JSON(bundle)
 	if err != nil {
 		t.Fatalf("render.JSON: %v", err)
 	}
@@ -169,9 +132,53 @@ func TestTheAdapterReturnsWhatTheVerifierReturns(t *testing.T) {
 			text, want)
 	}
 
-	if bundle.Decision != returned.Decision {
-		t.Errorf("the same files reached two decisions: %q through the adapter, %q directly",
-			returned.Decision, bundle.Decision)
+	var returned evidence.Bundle
+	if err := json.Unmarshal([]byte(text), &returned); err != nil {
+		t.Fatalf("the tool returned something that is not a bundle: %v", err)
+	}
+	if returned.Decision != evidence.DecisionBlock {
+		t.Errorf("decision = %q, want BLOCK", returned.Decision)
+	}
+	if returned.Subject.IntentSource != intentPath {
+		t.Errorf("the report names a path the caller did not supply.\n want %q\n  got %q",
+			intentPath, returned.Subject.IntentSource)
+	}
+}
+
+// TestTheReportNamesNoMoreOfTheFilesystemThanWasGiven is the disclosure half of
+// the same decision. A caller that names a file relative to a root, or through
+// a link, learns nothing further about where that root is.
+func TestTheReportNamesNoMoreOfTheFilesystemThanWasGiven(t *testing.T) {
+	server, intentPath, planPath := root(t, privateIntent, publicPlan)
+
+	dir := filepath.Dir(intentPath)
+	link := filepath.Join(t.TempDir(), "through-a-link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skipf("this platform will not make a symlink: %v", err)
+	}
+	server, err := mcp.New(mcp.Options{Roots: []string{dir, link}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	spelled := filepath.Join(link, filepath.Base(intentPath))
+	text, failed := toolCall(t, server, "analyze_change", map[string]any{
+		"intent_path": spelled, "plan_path": planPath,
+	})
+	if failed {
+		t.Fatalf("the tool reported a failure: %s", text)
+	}
+
+	var returned evidence.Bundle
+	if err := json.Unmarshal([]byte(text), &returned); err != nil {
+		t.Fatalf("the tool returned something that is not a bundle: %v", err)
+	}
+	if returned.Subject.IntentSource != spelled {
+		t.Errorf("the report resolved the caller's path into another one.\n want %q\n  got %q",
+			spelled, returned.Subject.IntentSource)
+	}
+	if strings.Contains(text, dir) {
+		t.Errorf("the report names a directory the caller did not: %s", dir)
 	}
 }
 
@@ -224,8 +231,9 @@ func TestATooLargeFileIsRefusedRatherThanRead(t *testing.T) {
 		t.Fatalf("writing: %v", err)
 	}
 
-	// Sparse: the size is what is checked, and writing sixty-four megabytes to
-	// make a point would make this test the slowest in the repository.
+	// Sparse: the bound is on what is read, and writing sixty-four megabytes of
+	// content to make the point would make this the slowest test here. A sparse
+	// file reads as zeroes, which is more than the bound and not a plan either.
 	file, err := os.Create(planPath)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -248,7 +256,7 @@ func TestATooLargeFileIsRefusedRatherThanRead(t *testing.T) {
 	if !failed {
 		t.Fatalf("a file past the bound was read: %s", text)
 	}
-	if !strings.Contains(text, "at most") {
+	if !strings.Contains(text, "longer than") {
 		t.Errorf("the refusal does not say there is a bound: %s", text)
 	}
 }

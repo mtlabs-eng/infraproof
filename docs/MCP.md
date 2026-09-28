@@ -13,9 +13,12 @@ infraproof mcp --root /path/to/your/project
 ```
 
 `--root` is required and may be repeated. There is no default: a server told
-nowhere to read from would otherwise be told everywhere. Every path a tool is
-given is resolved through its symbolic links and must land inside one of the
-roots, so a link inside the project that points out of it is refused.
+nowhere to read from would otherwise be told everywhere.
+
+The server opens every file itself, through the directory it was given, so a
+symbolic link out of a root is refused — including one installed while the file
+is being opened. A path naming a parent directory is refused rather than
+cleaned, because cleaning it away would silently read a different file.
 
 ## Configuring Claude Code
 
@@ -95,7 +98,10 @@ OpenTofu works the same way with `tofu`.
   into a different change.
 - Anything that is not a regular file.
 - A verification that takes longer than thirty seconds. You are told it was
-  abandoned rather than left waiting.
+  abandoned rather than left waiting. A plan near the 64 MB bound needs longer
+  than that, so the two limits do not meet: see the residual risks.
+- A path naming a parent directory, such as `../plan.json`. Give the path as it
+  is, not as a route to it.
 - A YAML contract. This build reads JSON, and says so rather than failing as a
   puzzle.
 

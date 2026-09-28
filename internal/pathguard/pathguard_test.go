@@ -2,6 +2,7 @@ package pathguard_test
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,31 +36,23 @@ func TestAPathInsideARootIsAllowed(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// The root as the filesystem reaches it, not as the test spelled it. On
-	// macOS a temporary directory is under /var, which is a link to
-	// /private/var, so the resolved path is correct and does not begin with the
-	// name it was given.
-	real, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-
 	for name, path := range map[string]string{
-		"at the root":        filepath.Join(root, "plan.json"),
-		"nested":             filepath.Join(root, "nested/deep/plan.json"),
-		"through a dot":      filepath.Join(root, ".", "plan.json"),
-		"through a doubling": filepath.Join(root, "nested", "..", "plan.json"),
+		"at the root":   filepath.Join(root, "plan.json"),
+		"nested":        filepath.Join(root, "nested/deep/plan.json"),
+		"through a dot": filepath.Join(root, ".", "plan.json"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			resolved, err := guard.Resolve(path)
+			file, err := guard.Open(path)
 			if err != nil {
 				t.Fatalf("a path inside the root was refused: %v", err)
 			}
-			if !strings.HasPrefix(resolved, real+string(filepath.Separator)) {
-				t.Errorf("resolved outside the root: %q", resolved)
+			defer file.Close()
+			body, err := io.ReadAll(file)
+			if err != nil {
+				t.Fatalf("the file could not be read: %v", err)
 			}
-			if _, err := os.Stat(resolved); err != nil {
-				t.Errorf("the resolved path does not name the file: %v", err)
+			if string(body) != "{}" {
+				t.Errorf("read %q, want the file that was written", body)
 			}
 		})
 	}
@@ -92,8 +85,9 @@ func TestNothingOutsideARootIsReachable(t *testing.T) {
 		"the root's parent":          filepath.Dir(root),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if resolved, err := guard.Resolve(path); err == nil {
-				t.Errorf("a path outside every root was allowed: %q -> %q", path, resolved)
+			if file, err := guard.Open(path); err == nil {
+				_ = file.Close()
+				t.Errorf("a path outside every root was opened: %q", path)
 			}
 		})
 	}
@@ -128,8 +122,9 @@ func TestASymlinkIsNotADoorOutOfTheRoot(t *testing.T) {
 		"a link to a directory outside": filepath.Join(root, "door", "secret.json"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if resolved, err := guard.Resolve(path); err == nil {
-				t.Errorf("a symlink led out of the root: %q -> %q", path, resolved)
+			if file, err := guard.Open(path); err == nil {
+				_ = file.Close()
+				t.Errorf("a symlink led out of the root: %q", path)
 			}
 		})
 	}
@@ -161,9 +156,12 @@ func TestARootThatIsItselfASymlinkStillWorks(t *testing.T) {
 		"named directly":         filepath.Join(real, "plan.json"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := guard.Resolve(path); err != nil {
+			file, err := guard.Open(path)
+			if err != nil {
 				t.Errorf("a path inside the root was refused: %v", err)
+				return
 			}
+			_ = file.Close()
 		})
 	}
 }
@@ -212,8 +210,8 @@ func TestTheErrorNamesTheRuleAndNotTheFilesystem(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	_, existing := guard.Resolve(present)
-	_, absent := guard.Resolve(filepath.Join(outside, "absent.json"))
+	_, existing := guard.Open(present)
+	_, absent := guard.Open(filepath.Join(outside, "absent.json"))
 	if existing == nil || absent == nil {
 		t.Fatal("a path outside the root was allowed")
 	}
@@ -231,5 +229,135 @@ func TestTheErrorNamesTheRuleAndNotTheFilesystem(t *testing.T) {
 				t.Errorf("the refusal for the %s file reports the filesystem: %v", name, err)
 			}
 		}
+	}
+}
+
+// TestASymlinkInstalledWhileReadingIsNotFollowed is the gap between checking a
+// name and opening it.
+//
+// A guard that answers "this name is inside a root" has answered about the
+// filesystem as it was. The caller then opens that name, and between the two a
+// regular file can become a symlink pointing anywhere. The check passes, the
+// read escapes, and what comes back is a file the operator never allowed.
+//
+// So the guard opens the file itself and hands back the handle. There is no
+// name for anything to re-point in between.
+func TestASymlinkInstalledWhileReadingIsNotFollowed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege this test does not assume")
+	}
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.json"), []byte("OUTSIDE"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	target := filepath.Join(root, "plan.json")
+	if err := os.WriteFile(target, []byte("INSIDE"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	guard, err := pathguard.New([]string{root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// One goroutine swaps the file for a link to the file outside, and back.
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = os.Remove(target)
+			_ = os.Symlink(filepath.Join(outside, "secret.json"), target)
+			_ = os.Remove(target)
+			_ = os.WriteFile(target, []byte("INSIDE"), 0o600)
+		}
+	}()
+	defer func() { close(stop); <-done }()
+
+	for i := 0; i < 2000; i++ {
+		file, err := guard.Open(target)
+		if err != nil {
+			// A refusal is fine: the file may not exist at this instant, or it
+			// may be a link, and both are answers. Reading the outside file is
+			// not.
+			continue
+		}
+		body, err := io.ReadAll(file)
+		_ = file.Close()
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(body), "OUTSIDE") {
+			t.Fatalf("a symlink installed while opening led out of the root, on attempt %d", i)
+		}
+	}
+}
+
+// TestARootIsFoundHoweverItIsSpelled covers the filesystem this is developed
+// on. APFS folds case and Unicode form by default, so "Case" and "case" are one
+// directory -- and a guard comparing bytes refuses a file that is genuinely
+// inside its root. The refusal then says the file is outside every allowed
+// root, which is false and tells the caller nothing they can act on.
+func TestARootIsFoundHoweverItIsSpelled(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Case")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "plan.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	folded := filepath.Join(filepath.Dir(root), "case", "plan.json")
+	if _, err := os.Stat(folded); err != nil {
+		t.Skip("this filesystem distinguishes case, so there is nothing to fold")
+	}
+
+	guard, err := pathguard.New([]string{root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	file, err := guard.Open(folded)
+	if err != nil {
+		t.Fatalf("a file inside the root was refused for its spelling: %v", err)
+	}
+	_ = file.Close()
+}
+
+// TestAPathThatClimbsIsRefusedRatherThanCleaned covers a substitution nobody
+// asked for.
+//
+// Cleaning "root/link/../plan.json" lexically removes the link along with the
+// climb, so the path names one file and another is read. It lands inside a root,
+// so nothing escapes -- but reporting on a file the argument did not name is an
+// unstated fact matching another, which is the thing this build exists to
+// refuse.
+func TestAPathThatClimbsIsRefusedRatherThanCleaned(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "plan.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	guard, err := pathguard.New([]string{root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Built without filepath.Join, which cleans the climb away before the guard
+	// can see it -- which is the whole point: the cleaning is what substitutes
+	// one file for another, so a test that cleans first tests nothing.
+	climbing := root + string(filepath.Separator) + "nested" +
+		string(filepath.Separator) + ".." + string(filepath.Separator) + "plan.json"
+	if file, err := guard.Open(climbing); err == nil {
+		_ = file.Close()
+		t.Error("a path that climbs was cleaned into a different one and read")
 	}
 }

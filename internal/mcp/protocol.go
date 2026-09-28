@@ -177,9 +177,35 @@ var oversized = []byte("!")
 
 // handle answers one message, and reports whether there is anything to send.
 func (s *Server) handle(line []byte) (response, bool) {
+	// Two failures the specification separates and one decoding does not. A
+	// parse error is for input that is not JSON; everything that is JSON and is
+	// not a request object -- a bare null, a number, a batch -- is an invalid
+	// request, and is answered with a null id rather than left in silence. A
+	// bare null decodes into the zero request, which has no id, which read as a
+	// notification: the server said nothing to a client that was waiting.
+	var document json.RawMessage
+	if err := json.Unmarshal(line, &document); err != nil {
+		return failure(nil, codeParse, "the request is not JSON"), true
+	}
+	if !isObject(document) {
+		return failure(nil, codeInvalidRequest,
+			"the request must be a JSON object; this server does not accept batches"), true
+	}
+	if repeated := repeatedMember(document); repeated != "" {
+		// The same rule the plan parser applies, for the same reason: one name
+		// twice means only one of the two is read, and a reader seeing the
+		// first has been told something the server did not do.
+		return failure(nil, codeInvalidRequest,
+			fmt.Sprintf("the request names %s more than once", quote(repeated))), true
+	}
+
 	var message request
 	if err := json.Unmarshal(line, &message); err != nil {
 		return failure(nil, codeParse, "the request is not a JSON-RPC message"), true
+	}
+	if len(message.ID) != 0 && !isIdentifier(message.ID) {
+		return failure(nil, codeInvalidRequest,
+			"id must be a string, a number, or null"), true
 	}
 
 	// A notification expects no reply, so a malformed one is discarded rather
@@ -201,6 +227,10 @@ func (s *Server) handle(line []byte) (response, bool) {
 	switch message.Method {
 	case "initialize":
 		return result(message.ID, s.initialize()), true
+	case "ping":
+		// A client watching for liveness gets an answer rather than "no such
+		// method", which would read as a server that is broken.
+		return result(message.ID, map[string]any{}), true
 	case "tools/list":
 		return result(message.ID, map[string]any{"tools": tools()}), true
 	case "tools/call":
@@ -209,6 +239,61 @@ func (s *Server) handle(line []byte) (response, bool) {
 		return failure(message.ID, codeMethodNotFound,
 			fmt.Sprintf("method %s is not one this server implements", quote(message.Method))), true
 	}
+}
+
+// isObject reports whether a JSON document is an object.
+func isObject(document json.RawMessage) bool {
+	trimmed := strings.TrimLeft(string(document), " \t\r\n")
+	return strings.HasPrefix(trimmed, "{")
+}
+
+// isIdentifier reports whether a JSON-RPC id is one the specification allows: a
+// string, a number, or null. An object or an array would be echoed back as
+// itself, which a client cannot match against what it sent.
+func isIdentifier(id json.RawMessage) bool {
+	var value any
+	if err := json.Unmarshal(id, &value); err != nil {
+		return false
+	}
+	switch value.(type) {
+	case nil, string, float64:
+		return true
+	}
+	return false
+}
+
+// repeatedMember returns a member named more than once at the top level of a
+// request, or the empty string.
+//
+// encoding/json keeps the last of them, so a request naming two methods
+// dispatches as the second while a log read left to right shows the first.
+func repeatedMember(document json.RawMessage) string {
+	decoder := json.NewDecoder(strings.NewReader(string(document)))
+	if _, err := decoder.Token(); err != nil {
+		return ""
+	}
+
+	seen := map[string]bool{}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return ""
+		}
+		name, ok := key.(string)
+		if !ok {
+			return ""
+		}
+		if seen[name] {
+			return name
+		}
+		seen[name] = true
+
+		var skip json.RawMessage
+		if err := decoder.Decode(&skip); err != nil {
+			return ""
+		}
+	}
+	return ""
 }
 
 // initialize describes this server to a client.

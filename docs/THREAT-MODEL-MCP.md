@@ -61,10 +61,27 @@ A repository can contain a link. `git` will happily carry one, so a plan named
 `./plan.json` inside an allowed root can be a link to anything the process can
 read — and a check on the string would pass it.
 
-Answered by resolving the link before comparing. The check is about which file
-is opened, not about how it was spelled. The mirror case matters too: a root
-that is itself a link must keep working, or on macOS every temporary directory
-is refused.
+Answered by `os.Root`, which walks the path itself and refuses one that leaves
+the directory it was opened on. The check is about which file is opened, not
+about how it was spelled.
+
+### A symbolic link installed while the file is being opened
+
+The version of this document written before the adapter was reviewed said the
+link check answered this. It did not. The guard approved a *name* and the
+verifier opened that name afterwards, so a regular file could become a link in
+between: the check passed and the read left the root. Independent review did it
+eight times in twenty-five attempts, and the escaping read returned a resource
+address from a file outside every root.
+
+Answered by the guard opening the file and handing back the handle. The name
+never leaves the package that approved it, so there is nothing left to
+re-point — and the size and kind of the file are asked of the open handle for
+the same reason.
+
+The argument this file used to make about hard links does not cover this and
+should not have been read as covering it: writing the plan gives an attacker
+control of the plan, while this gave them a read over the whole filesystem.
 
 ### A hard link inside the project that points out of it
 
@@ -78,17 +95,30 @@ repository that an attacker can write into is a repository whose plan they can
 write instead, which is a larger problem than this one. Recorded rather than
 solved.
 
+### A path that names one file and reads another
+
+`root/link/../plan.json` cleaned lexically removes the climb and the link
+together, so the path names one file and a different one is read. It lands
+inside a root, so nothing escapes — but a report about a file the argument did
+not name is an unstated fact matching another.
+
+Answered by refusing a path that names a parent directory anywhere along it,
+rather than cleaning it.
+
 ### A path chosen to exhaust the machine
 
 `/dev/zero`, a named pipe, a sparse file of a terabyte. Reading it into memory
 to parse it is what the verifier does with every plan.
 
-Answered by a stat before the read: a file larger than sixty-four megabytes is
-refused rather than truncated, because half a plan parses into a different
-change. Anything that is not a regular file is refused outright, because the
-size a device or a pipe reports says nothing about how much reading it will
-produce — a named pipe with no writer would otherwise hold the server for as
-long as the caller cared to leave it there.
+Answered on the open file rather than on the path, because what a name referred
+to a moment ago is not what it refers to now. Anything that is not a regular
+file is refused, and the bound is on what is read rather than on a size reported
+beforehand: sixty-four megabytes, refused rather than truncated, because half a
+plan parses into a different change.
+
+The open itself does not wait. A named pipe with no writer blocks on open,
+before anything can look at what kind of file it is, so the check that refuses
+it would never run.
 
 ### A request that never ends
 
@@ -112,6 +142,16 @@ it inherits all of it. What the adapter adds is that the *caller* is now a model
 which makes a forged instruction inside a plan value more attractive than a
 forged heading — and the answer is the same, because the value never reaches the
 output in a form that can carry either.
+
+### A result that fills the caller's context
+
+Everything a tool returns is read into a context window and repeated from
+there. The loaders report one clause per offending entry, so a contract the
+caller can write inside a root produced an error of the same order as the file
+— ten megabytes of it, through a server whose inbound messages are bounded at
+one.
+
+Answered by bounding what a failed tool says back, and saying where it was cut.
 
 ### A sensitive value returned to a model
 
@@ -152,6 +192,11 @@ client, not of this server, and this server cannot enforce it.
 ## Residual risks, in one place
 
 1. A hard link inside an allowed root reaches a file outside it.
-2. An abandoned verification runs to its end and holds its memory until it does,
-   so a caller that retries in a loop accumulates them.
-3. The roots are only as narrow as the operator made them.
+2. An abandoned verification runs to its end and holds its memory until it does.
+   Measured at roughly half a gigabyte for a plan near the size bound, and
+   nothing caps how many may be in flight, so a caller that retries in a loop
+   accumulates them.
+3. A plan near the size bound needs more than the time bound allows, so the two
+   limits are not consistent with each other: there are files this server will
+   accept and never finish.
+4. The roots are only as narrow as the operator made them.

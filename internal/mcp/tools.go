@@ -114,9 +114,35 @@ func (s *Server) callTool(id json.RawMessage, raw json.RawMessage) response {
 		if errors.As(err, &invalid) {
 			return failure(id, codeInvalidParams, invalid.Error())
 		}
-		return result(id, toolText(err.Error(), true))
+		// Bounded, like every other thing this server says back. A tool result
+		// is read into a context window and repeated from there, and the
+		// loaders report one clause per offending entry -- so a contract the
+		// caller can write inside a root turns into an error of the same order
+		// as the file, through a server whose inbound messages are bounded at a
+		// megabyte.
+		return result(id, toolText(bounded(err.Error()), true))
 	}
 	return result(id, toolText(text, false))
+}
+
+// maxToolError bounds what a failed tool says back. Long enough for the first
+// few clauses of a validation failure, which is what a caller acts on, and
+// short of a result that fills a context window.
+const maxToolError = 2000
+
+// bounded cuts a message on a character boundary and says where.
+func bounded(text string) string {
+	if len(text) <= maxToolError {
+		return text
+	}
+	count := 0
+	for at := range text {
+		count++
+		if count > maxToolError {
+			return text[:at] + "… (truncated; the input reports more than this server will repeat)"
+		}
+	}
+	return text
 }
 
 // toolText is a tool result in the shape the protocol expects.
@@ -245,8 +271,18 @@ func reportedRules(bundle evidence.Bundle) []string {
 	return out
 }
 
-// bundle resolves both paths inside the allowed roots, checks their size, and
-// runs the one verification every interface runs.
+// bundle opens both files inside the allowed roots and runs the one
+// verification every interface runs.
+//
+// The guard hands back open files rather than approved names. A name checked
+// and then opened by someone else is a name that can be re-pointed in between,
+// and independent review of this milestone did exactly that: a regular file
+// became a symlink between the check and the read, and the read left the root.
+//
+// The paths recorded in the report are the ones the caller supplied. The
+// resolved path is a different spelling, of more of the filesystem than the
+// caller handed over, and everything this returns may be repeated by a model
+// into a commit message or a comment.
 func (s *Server) bundle(intentPath, planPath *string) (evidence.Bundle, error) {
 	intentArg, err := required("intent_path", intentPath)
 	if err != nil {
@@ -257,18 +293,55 @@ func (s *Server) bundle(intentPath, planPath *string) (evidence.Bundle, error) {
 		return evidence.Bundle{}, err
 	}
 
-	intentReal, err := s.readable(intentArg)
+	contract, err := s.open(intentArg)
 	if err != nil {
 		return evidence.Bundle{}, err
 	}
-	planReal, err := s.readable(planArg)
+	defer contract.Close()
+
+	plan, err := s.open(planArg)
 	if err != nil {
 		return evidence.Bundle{}, err
 	}
+	defer plan.Close()
 
 	return s.within(func() (evidence.Bundle, error) {
-		return verify.FromFiles(intentReal, planReal)
+		return verify.FromReaders(intentArg, contract, planArg, plan, MaxInputBytes)
 	})
+}
+
+// open returns a file inside the roots, refusing anything that is not a regular
+// file.
+//
+// The kind is asked of the open file rather than of the path, for the same
+// reason the path is never handed back: what a name referred to a moment ago is
+// not what it refers to now. A device or a named pipe is refused because the
+// size it reports says nothing about how much reading it will produce -- a pipe
+// with no writer would hold the server for as long as anyone cared to leave it.
+func (s *Server) open(path string) (*os.File, error) {
+	file, err := s.guard.Open(path)
+	if err != nil {
+		if errors.Is(err, pathguard.ErrOutsideRoots) {
+			return nil, fmt.Errorf("%s is outside every directory this server was given access to",
+				quote(path))
+		}
+		return nil, fmt.Errorf("%s could not be read", quote(path))
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("%s could not be read", quote(path))
+	}
+	if info.IsDir() {
+		_ = file.Close()
+		return nil, fmt.Errorf("%s is a directory", quote(path))
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("%s is not a regular file", quote(path))
+	}
+	return file, nil
 }
 
 // within runs one verification under the server's deadline.
@@ -303,41 +376,6 @@ func (s *Server) within(work func() (evidence.Bundle, error)) (evidence.Bundle, 
 			"this verification took longer than %s and was abandoned; "+
 				"the plan may be larger than this server will finish reading", s.timeout)
 	}
-}
-
-// readable resolves a path inside the roots and refuses a file too large to
-// read.
-//
-// The size is checked before the file is opened for reading, so a plan that
-// would not fit costs a stat rather than the memory it asked for.
-func (s *Server) readable(path string) (string, error) {
-	real, err := s.guard.Resolve(path)
-	if err != nil {
-		if errors.Is(err, pathguard.ErrOutsideRoots) {
-			return "", fmt.Errorf("%s is outside every directory this server was given access to",
-				quote(path))
-		}
-		return "", err
-	}
-
-	info, err := os.Stat(real)
-	if err != nil {
-		return "", fmt.Errorf("%s could not be read", quote(path))
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("%s is a directory", quote(path))
-	}
-	if !info.Mode().IsRegular() {
-		// A device or a named pipe reports a size that says nothing about how
-		// much reading it will produce, so the bound below would not hold. A
-		// plan is a file.
-		return "", fmt.Errorf("%s is not a regular file", quote(path))
-	}
-	if info.Size() > MaxInputBytes {
-		return "", fmt.Errorf("%s is %d bytes, and this server reads at most %d",
-			quote(path), info.Size(), MaxInputBytes)
-	}
-	return real, nil
 }
 
 func mustJSON(payload any) []byte {

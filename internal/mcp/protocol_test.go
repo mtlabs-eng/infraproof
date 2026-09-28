@@ -180,3 +180,91 @@ func TestEveryRequestIsAnsweredExactlyOnce(t *testing.T) {
 		t.Fatalf("four requests expected an answer and %d were written: %v", len(seen), seen)
 	}
 }
+
+// TestEveryValidJSONMessageIsAnswered covers the gap between "not JSON" and
+// "not a request".
+//
+// A bare null parses into the zero request, which has no id, which reads as a
+// notification -- so the server said nothing at all, to a client that was
+// waiting. The specification separates the two: a parse error is for input that
+// is not JSON, and everything that is JSON and is not a request object is an
+// invalid request, answered with a null id.
+func TestEveryValidJSONMessageIsAnswered(t *testing.T) {
+	cases := map[string]struct {
+		request string
+		code    float64
+	}{
+		"a bare null":             {`null`, -32600},
+		"a bare number":           {`42`, -32600},
+		"a bare string":           {`"tools/list"`, -32600},
+		"a bare boolean":          {`true`, -32600},
+		"an empty array":          {`[]`, -32600},
+		"a batch":                 {`[{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}]`, -32600},
+		"not JSON at all":         {`{"jsonrpc":`, -32700},
+		"an id that is an object": {`{"jsonrpc": "2.0", "id": {"a": 1}, "method": "tools/list"}`, -32600},
+		"an id that is an array":  {`{"jsonrpc": "2.0", "id": [1], "method": "tools/list"}`, -32600},
+		"an id that is a boolean": {`{"jsonrpc": "2.0", "id": true, "method": "tools/list"}`, -32600},
+		"a repeated member":       {`{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "method": "tools/call"}`, -32600},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			response, answered := call(t, testServer(t), tc.request)
+			if !answered {
+				t.Fatal("a message that is valid JSON went unanswered")
+			}
+			failure, ok := response["error"].(map[string]any)
+			if !ok {
+				t.Fatalf("the message was accepted: %v", response)
+			}
+			if code, _ := failure["code"].(float64); code != tc.code {
+				t.Errorf("code = %v, want %v: %v", code, tc.code, failure["message"])
+			}
+		})
+	}
+}
+
+// TestPingIsAnswered covers the one method a client may use to ask whether this
+// server is still there. Answering it with "no such method" tells a client
+// watching for liveness that the server is broken.
+func TestPingIsAnswered(t *testing.T) {
+	response, answered := call(t, testServer(t), `{"jsonrpc": "2.0", "id": 9, "method": "ping"}`)
+	if !answered {
+		t.Fatal("ping went unanswered")
+	}
+	if _, failed := response["error"]; failed {
+		t.Errorf("ping was refused: %v", response["error"])
+	}
+	if _, ok := response["result"].(map[string]any); !ok {
+		t.Errorf("ping produced no result: %v", response)
+	}
+}
+
+// TestAToolErrorDoesNotGrowWithItsInput bounds what goes back to a model.
+//
+// A tool result is read into a context window and repeated from there. The
+// contract loader reports one clause per repeated resource, so a contract the
+// caller can write inside a root turns into an error of the same order as the
+// file -- ten megabytes of it, through a server whose inbound messages are
+// bounded at one.
+func TestAToolErrorDoesNotGrowWithItsInput(t *testing.T) {
+	var resources []string
+	for i := 0; i < 4000; i++ {
+		resources = append(resources, `{"family": "object_storage", "exposure": "private"}`)
+	}
+	contract := `{"schema_version": "1.0", "change_id": "c", "environment": "staging",
+	  "allowed_clouds": ["aws"], "destructive_changes": "forbidden",
+	  "resources": [` + strings.Join(resources, ",") + `]}`
+
+	server, intentPath, planPath := root(t, contract, publicPlan)
+	text, failed := toolCall(t, server, "analyze_change", map[string]any{
+		"intent_path": intentPath, "plan_path": planPath,
+	})
+	if !failed {
+		t.Fatalf("a contract repeating one family four thousand times was accepted")
+	}
+	if len(text) > 4096 {
+		t.Errorf("the tool returned %d bytes of error for a %d byte contract; it repeats its "+
+			"input rather than describing it", len(text), len(contract))
+	}
+}

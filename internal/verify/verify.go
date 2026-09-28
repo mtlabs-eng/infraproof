@@ -10,6 +10,7 @@ package verify
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
@@ -47,6 +48,62 @@ func FromFiles(intentPath, planPath string) (evidence.Bundle, error) {
 	}
 
 	return Plan(contract, plan), nil
+}
+
+// FromReaders verifies a contract and a plan the caller has already opened.
+//
+// A caller that must constrain where it reads from cannot hand over a path and
+// expect it to still mean the same file: between approving a name and opening
+// it, a regular file can become a symlink pointing anywhere. So it opens the
+// files itself and passes them here, and the name it approved never leaves the
+// package that approved it.
+//
+// Each source is named only so that a report can say what it was compared
+// against. The name is the caller's, and this function never opens it.
+func FromReaders(intentName string, contract io.Reader, planName string, plan io.Reader,
+	limit int64) (evidence.Bundle, error) {
+
+	contractRaw, err := readAtMost(contract, limit)
+	if err != nil {
+		return evidence.Bundle{}, fmt.Errorf("reading intent contract %s: %w", intentName, err)
+	}
+	loaded, err := intent.Parse(contractRaw, intentName)
+	if err != nil {
+		return evidence.Bundle{}, err
+	}
+
+	planRaw, err := readAtMost(plan, limit)
+	if err != nil {
+		return evidence.Bundle{}, fmt.Errorf("reading plan %s: %w", planName, err)
+	}
+	parsed, err := terraformplan.Parse(planRaw)
+	if err != nil {
+		return evidence.Bundle{}, fmt.Errorf("reading plan %s: %w", planName, err)
+	}
+
+	return Plan(loaded, parsed), nil
+}
+
+// readAtMost reads up to limit bytes and refuses anything longer.
+//
+// The bound is on the read rather than on a size reported beforehand, because
+// what a file says about its length is another fact that can change between
+// being asked and being used -- and a device or a pipe never said anything
+// truthful about it in the first place. A limit of zero or less reads
+// everything, which is what a caller with its own bound wants.
+func readAtMost(source io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return io.ReadAll(source)
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(source, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("is longer than the %d bytes this build reads", limit)
+	}
+	return raw, nil
 }
 
 // Plan evaluates a contract against a plan that has already been read.
