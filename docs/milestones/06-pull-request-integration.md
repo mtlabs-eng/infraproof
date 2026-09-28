@@ -69,7 +69,9 @@ this build has no credentials is the same reason it has no network.
 - The rendering is stable: the same bundle produces the same bytes.
 - The marker identifies one comment per subject and is documented.
 - A repository can adopt it by copying one workflow file, and that file is in
-  this repository and is tested for shape.
+  this repository and is tested for shape. It is a template rather than a live
+  workflow: this repository has no Terraform to verify, and a template that
+  fails on every pull request teaches a reader the wrong thing.
 - Exit codes continue to gate the check: a `BLOCK` fails the job, an `UNKNOWN`
   fails it, and a `WARN` does not.
 - No package involved imports a network, a process, or a credential.

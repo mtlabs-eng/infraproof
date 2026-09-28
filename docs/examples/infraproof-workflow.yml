@@ -7,7 +7,13 @@
 # point: a verifier holding a token to write on a pull request is a verifier
 # that can be made to write something else.
 #
-# Copy this file into .github/workflows/ and adjust the two paths under "env".
+# This is a template for your repository, not a workflow this one runs: copy it
+# to .github/workflows/infraproof.yml and adjust the two paths under "env".
+#
+# It lives here rather than under .github/workflows/ because a file there is a
+# workflow GitHub tries to run, and this repository has no Terraform to verify.
+# A template that runs against nothing and fails on every pull request teaches a
+# reader the wrong thing about what the tool does.
 
 name: InfraProof
 

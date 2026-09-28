@@ -85,7 +85,7 @@ go run ./cmd/infraproof check --intent infra/intent.json --plan tfplan.json --fo
 A short verdict shaped for a diff view, carrying a marker so one comment is updated rather than
 repeated. InfraProof writes it; your own CI posts it, with your own token. See
 [docs/PULL-REQUESTS.md](docs/PULL-REQUESTS.md) and the workflow in
-[.github/workflows/infraproof.yml](.github/workflows/infraproof.yml).
+[docs/examples/infraproof-workflow.yml](docs/examples/infraproof-workflow.yml).
 
 ## From a coding agent
 

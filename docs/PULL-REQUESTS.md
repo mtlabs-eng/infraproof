@@ -11,8 +11,8 @@ it has no network.
 
 ## Adopting it
 
-Copy [`.github/workflows/infraproof.yml`](../.github/workflows/infraproof.yml)
-into your repository and set the two paths at the top:
+Copy [`docs/examples/infraproof-workflow.yml`](examples/infraproof-workflow.yml) to
+`.github/workflows/infraproof.yml` in your repository and set the two paths at the top:
 
 ```yaml
 env:

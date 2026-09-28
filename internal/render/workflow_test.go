@@ -12,7 +12,12 @@ import (
 // workflowPath is the file a repository copies. It is in this repository so
 // that the contract between the rendering and the workflow is one thing rather
 // than two that agree until one of them changes.
-var workflowPath = filepath.Join("..", "..", ".github", "workflows", "infraproof.yml")
+//
+// It sits under docs/examples rather than under .github/workflows, because a
+// file there is a workflow GitHub tries to run and this repository has no
+// Terraform to verify. It is still tested: a template nobody checks is a
+// template that stops matching the tool it drives.
+var workflowPath = filepath.Join("..", "..", "docs", "examples", "infraproof-workflow.yml")
 
 func workflow(t *testing.T) string {
 	t.Helper()
