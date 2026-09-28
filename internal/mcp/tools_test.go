@@ -2,10 +2,13 @@ package mcp_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
 	"github.com/mtlabs-eng/infraproof/internal/mcp"
@@ -325,4 +328,95 @@ func TestExplainFindingAnswersFromThePlanAsItIsNow(t *testing.T) {
 	if !strings.Contains(after, "no finding under that rule") {
 		t.Errorf("the tool does not say that the rule reported nothing: %s", after)
 	}
+}
+
+// TestOnlyARegularFileIsRead closes the gap a size check leaves open. A device
+// or a named pipe reports a size that says nothing about how much reading it
+// will produce, and /dev/zero linked into a root would be read until something
+// else stopped it.
+func TestOnlyARegularFileIsRead(t *testing.T) {
+	dir := t.TempDir()
+	intentPath := filepath.Join(dir, "intent.json")
+	if err := os.WriteFile(intentPath, []byte(privateIntent), 0o600); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+
+	pipe := filepath.Join(dir, "plan.json")
+	if err := syscall.Mkfifo(pipe, 0o600); err != nil {
+		t.Skipf("this platform will not make a named pipe: %v", err)
+	}
+
+	server, err := mcp.New(mcp.Options{Roots: []string{dir}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		text, failed := toolCall(t, server, "analyze_change", map[string]any{
+			"intent_path": intentPath, "plan_path": pipe,
+		})
+		if !failed {
+			t.Errorf("a named pipe was read as a plan: %s", text)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading a named pipe did not return; the server is waiting on a writer that " +
+			"will never come")
+	}
+}
+
+// TestAVerificationThatWillNotFinishIsAbandoned is the other half of the
+// milestone's bound. Input size bounds the bytes and not the work: normalization
+// grows faster than the plan does, so a file well inside the size limit can ask
+// for more time than a caller has.
+//
+// The answer is an answer, not a hang: the caller is told the verification was
+// abandoned, and gets to decide what to do about it.
+func TestAVerificationThatWillNotFinishIsAbandoned(t *testing.T) {
+	dir := t.TempDir()
+	intentPath := filepath.Join(dir, "intent.json")
+	planPath := filepath.Join(dir, "plan.json")
+	if err := os.WriteFile(intentPath, []byte(privateIntent), 0o600); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+	if err := os.WriteFile(planPath, []byte(wideplan(2000)), 0o600); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+
+	server, err := mcp.New(mcp.Options{Roots: []string{dir}, Timeout: time.Nanosecond})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	text, failed := toolCall(t, server, "analyze_change", map[string]any{
+		"intent_path": intentPath, "plan_path": planPath,
+	})
+	if !failed {
+		t.Fatalf("a verification past its deadline returned a verdict: %.200s", text)
+	}
+	if !strings.Contains(text, "longer than") {
+		t.Errorf("the refusal does not say what happened: %s", text)
+	}
+}
+
+// wideplan builds a plan of n buckets, which is enough work to outlast a
+// deadline measured in nanoseconds without being slow to run.
+func wideplan(buckets int) string {
+	var changes, resources []string
+	for i := range buckets {
+		address := fmt.Sprintf("aws_s3_bucket.b%d", i)
+		changes = append(changes, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_bucket", "name": "b%d", "provider_name": "p",
+		  "change": {"actions": ["create"], "before": null, "after": {"bucket": "b%d"}}}`,
+			address, i, i))
+		resources = append(resources, fmt.Sprintf(`{"address": %q, "mode": "managed",
+		  "type": "aws_s3_bucket", "name": "b%d", "expressions": {}}`, address, i))
+	}
+	return `{"format_version": "1.2", "resource_changes": [` + strings.Join(changes, ",") +
+		`], "configuration": {"root_module": {"resources": [` + strings.Join(resources, ",") + `]}}}`
 }

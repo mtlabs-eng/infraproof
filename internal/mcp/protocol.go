@@ -20,6 +20,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mtlabs-eng/infraproof/internal/pathguard"
 )
@@ -52,7 +53,21 @@ type Options struct {
 	// Roots are the directories the server may read from. There is no default:
 	// a server with no root is refused rather than built.
 	Roots []string
+	// Timeout bounds one verification. Zero means DefaultTimeout.
+	//
+	// Input size bounds the bytes and not the work: normalization grows faster
+	// than the plan does, so a file well inside the size limit can ask for more
+	// time than a caller has. Milestone 05 asks for bounded execution time and
+	// this is it.
+	Timeout time.Duration
 }
+
+// DefaultTimeout bounds one verification when none is configured.
+//
+// The slowest plan measured while building this took under a second. Thirty is
+// far past any real one and short of a wait an agent would sit through without
+// concluding the server is gone.
+const DefaultTimeout = 30 * time.Second
 
 // Server answers Model Context Protocol requests over one pair of streams.
 //
@@ -61,7 +76,8 @@ type Options struct {
 // result is, and the plan it was reached from is a file that may have changed
 // since -- a contract milestone 05 defers rather than guesses at.
 type Server struct {
-	guard *pathguard.Guard
+	guard   *pathguard.Guard
+	timeout time.Duration
 }
 
 // New builds a server.
@@ -70,7 +86,11 @@ func New(options Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{guard: guard}, nil
+	timeout := options.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	return &Server{guard: guard, timeout: timeout}, nil
 }
 
 // request is one JSON-RPC message as it arrived.

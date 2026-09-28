@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
 	"github.com/mtlabs-eng/infraproof/internal/pathguard"
@@ -265,7 +266,43 @@ func (s *Server) bundle(intentPath, planPath *string) (evidence.Bundle, error) {
 		return evidence.Bundle{}, err
 	}
 
-	return verify.FromFiles(intentReal, planReal)
+	return s.within(func() (evidence.Bundle, error) {
+		return verify.FromFiles(intentReal, planReal)
+	})
+}
+
+// within runs one verification under the server's deadline.
+//
+// A verification past its deadline is abandoned rather than waited for, and the
+// caller is told. The goroutine is left to finish on its own: there is nothing
+// to cancel, because the work is a computation over values already in memory
+// rather than anything that takes a context, and stopping it half way would
+// leave the question of what a half-normalized graph means. It holds no locks
+// and touches nothing the next request reads, so what it costs is memory until
+// it returns.
+func (s *Server) within(work func() (evidence.Bundle, error)) (evidence.Bundle, error) {
+	type outcome struct {
+		bundle evidence.Bundle
+		err    error
+	}
+
+	done := make(chan outcome, 1)
+	go func() {
+		bundle, err := work()
+		done <- outcome{bundle, err}
+	}()
+
+	timer := time.NewTimer(s.timeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-done:
+		return result.bundle, result.err
+	case <-timer.C:
+		return evidence.Bundle{}, fmt.Errorf(
+			"this verification took longer than %s and was abandoned; "+
+				"the plan may be larger than this server will finish reading", s.timeout)
+	}
 }
 
 // readable resolves a path inside the roots and refuses a file too large to
@@ -289,6 +326,12 @@ func (s *Server) readable(path string) (string, error) {
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", quote(path))
+	}
+	if !info.Mode().IsRegular() {
+		// A device or a named pipe reports a size that says nothing about how
+		// much reading it will produce, so the bound below would not hold. A
+		// plan is a file.
+		return "", fmt.Errorf("%s is not a regular file", quote(path))
 	}
 	if info.Size() > MaxInputBytes {
 		return "", fmt.Errorf("%s is %d bytes, and this server reads at most %d",
