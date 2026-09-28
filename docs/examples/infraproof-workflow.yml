@@ -1,0 +1,174 @@
+# Verify a Terraform or OpenTofu change against a declared intent contract, and
+# say so on the pull request.
+#
+# InfraProof reaches no network and holds no credential. It reads two files and
+# writes a verdict to standard output; posting that verdict is this workflow's
+# job, done with the token GitHub already gives the run. That division is the
+# point: a verifier holding a token to write on a pull request is a verifier
+# that can be made to write something else.
+#
+# This is a template for your repository, not a workflow this one runs: copy it
+# to .github/workflows/infraproof.yml and adjust the two paths under "env".
+#
+# It lives here rather than under .github/workflows/ because a file there is a
+# workflow GitHub tries to run, and this repository has no Terraform to verify.
+# A template that runs against nothing and fails on every pull request teaches a
+# reader the wrong thing about what the tool does.
+
+name: InfraProof
+
+on:
+  pull_request:
+    paths:
+      - "**.tf"
+      - "**.tfvars"
+      # The contract too. A change that only weakens what the plan is verified
+      # against is the one most worth verifying.
+      - "**/intent.json"
+
+# One run per pull request. Two pushes in quick succession would otherwise both
+# find no existing comment and both post one.
+concurrency:
+  group: infraproof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  # To read the code being verified.
+  contents: read
+  # To write one comment carrying the verdict. Nothing else here needs it, and
+  # nothing else is granted.
+  pull-requests: write
+
+env:
+  # The directory holding the Terraform or OpenTofu configuration.
+  WORKING_DIRECTORY: infra
+  # The intent contract this change is verified against.
+  INTENT_CONTRACT: infra/intent.json
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      # InfraProof does not run Terraform, so the workflow does. A plan needs
+      # whatever credentials your providers need; InfraProof never sees them.
+      - name: Produce the plan
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -out=tfplan.binary
+          terraform show -json tfplan.binary > tfplan.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      # InfraProof is not in your repository, so it is obtained here.
+      #
+      # While the InfraProof repository is private this is a checkout and a
+      # build, and it needs a token that can read that repository -- which means
+      # adopting this is copying one file *and* adding one secret. Once the
+      # module is published the whole block collapses to one line:
+      #
+      #   - run: go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v1.2.3
+      #
+      # and the two invocations below become plain "infraproof", because go
+      # install writes to GOPATH/bin and that is on the path.
+      #
+      # Either way, pin it. A verifier that changes under you is a verdict you
+      # cannot reproduce; "main" is what this says because there is no release
+      # to name yet, and it is the first thing to change when there is.
+      - uses: actions/checkout@v4
+        with:
+          repository: mtlabs-eng/infraproof
+          ref: main
+          path: .infraproof
+          token: ${{ secrets.INFRAPROOF_READ_TOKEN }}
+
+      # -C, because go resolves the module from the working directory rather
+      # than from the package argument, and the working directory here is the
+      # adopting repository -- which has no go.mod, or has its own.
+      - name: Build InfraProof
+        run: go build -C ./.infraproof -o "$RUNNER_TEMP/infraproof" ./cmd/infraproof
+
+      # The verdict, twice: once shaped for a comment, once as the Evidence
+      # Bundle, which carries everything the comment leaves out.
+      #
+      # continue-on-error so that the comment is posted before the job fails on
+      # the verdict. The exit code is kept and applied at the end, so a BLOCK
+      # still fails the check.
+      - name: Verify
+        id: verify
+        continue-on-error: true
+        run: |
+          set +e
+          "$RUNNER_TEMP/infraproof" check \
+            --intent "${INTENT_CONTRACT}" \
+            --plan "${WORKING_DIRECTORY}/tfplan.json" \
+            --format review > review.md
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          "$RUNNER_TEMP/infraproof" check \
+            --intent "${INTENT_CONTRACT}" \
+            --plan "${WORKING_DIRECTORY}/tfplan.json" \
+            --format json > evidence-bundle.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infraproof-evidence-bundle
+          path: evidence-bundle.json
+
+      # One comment, updated rather than repeated.
+      #
+      # The comment is found by the marker InfraProof writes on the first line.
+      # Only its prefix is matched: the rest of the marker names the plan, and a
+      # plan JSON carries a timestamp, so its digest -- and the whole marker --
+      # differs on every run even when nothing changed. Matching the prefix
+      # finds the comment this workflow left last time, which is what "one
+      # comment" means.
+      #
+      # An empty review is not a marker. The check writes nothing to standard
+      # output when it cannot read its inputs, and an empty prefix matches every
+      # comment on the pull request -- including somebody else's.
+      - name: Say so on the pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ ! -s review.md ]; then
+            echo "The verifier produced no review; there is nothing to post."
+            exit 0
+          fi
+          marker="$(head -n 1 review.md)"
+          case "$marker" in
+            "<!-- infraproof:"*) ;;
+            *) echo "The first line is not an InfraProof marker; not posting."; exit 0 ;;
+          esac
+
+          # --slurp, because --paginate runs the filter once per page and would
+          # otherwise return one answer per page rather than one answer.
+          existing="$(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp \
+            --jq '[.[][] | select(.body | startswith("<!-- infraproof:")) | .id] | first')"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
+              -F body=@review.md > /dev/null
+          else
+            gh pr comment "$PR" --body-file review.md
+          fi
+
+      # The verdict decides the check. 0 PASS, 2 WARN, 3 BLOCK, 4 UNKNOWN,
+      # 10 invalid input, 11 internal failure.
+      - name: Apply the verdict
+        run: |
+          case "${{ steps.verify.outputs.exit }}" in
+            0) echo "PASS" ;;
+            2) echo "WARN: a human needs to look at this" ;;
+            *) echo "InfraProof exited ${{ steps.verify.outputs.exit }}"; exit 1 ;;
+          esac

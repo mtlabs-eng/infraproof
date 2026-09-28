@@ -23,7 +23,7 @@ const version = "0.1.0"
 const usage = `InfraProof verifies Terraform and OpenTofu changes against declared intent.
 
 Usage:
-  infraproof check --intent <path> --plan <path> [--format json|markdown]
+  infraproof check --intent <path> --plan <path> [--format json|markdown|review]
   infraproof inspect --plan <path>
   infraproof mcp --root <dir> [--root <dir> ...]
   infraproof --version

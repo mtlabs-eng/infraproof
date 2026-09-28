@@ -11,9 +11,10 @@ import (
 )
 
 // TestTheAdapterCanReachNoNetworkAndRunNoCommand is the machine-checkable form
-// of four of the milestone's security requirements: no arbitrary command
+// of the security requirements two milestones state: no arbitrary command
 // execution, no terraform execution, no network access, and no cloud
-// credentials.
+// credentials -- for the MCP adapter, and for the pull-request rendering, which
+// produces an artifact that something else publishes.
 //
 // Written as a rule about imports rather than as a promise in a comment. A
 // package that imports none of these cannot do any of them, whatever a later
@@ -30,6 +31,7 @@ func TestTheAdapterCanReachNoNetworkAndRunNoCommand(t *testing.T) {
 		"database/sql":     "is not needed to read two local files",
 		"crypto/tls":       "would only be needed to reach a network",
 		"golang.org/x/net": "would let this server reach a network",
+		"os/user":          "is not needed to read two local files",
 	}
 
 	// Every package the adapter is built from, including what it verifies with.
