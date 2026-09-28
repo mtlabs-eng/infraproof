@@ -205,3 +205,12 @@ client, not of this server, and this server cannot enforce it.
    what removes the window a resolved name leaves open, and it judges a link by
    the target as written. Accepted rather than worked around, because the
    workaround is the defect.
+6. A root that is removed and recreated under a running server is refused
+   thereafter, because the server holds the directory it was given rather than
+   the name. That is the safe answer, and the refusal says the path is outside
+   every allowed root, which is not why.
+7. A path with a trailing slash is accepted for a regular file rather than
+   refused as the standard would have it.
+8. Tool inputs are declared as a schema a client can validate against. Results
+   are not: they are checked against the Evidence Bundle contract before being
+   returned, so a client cannot check them independently.

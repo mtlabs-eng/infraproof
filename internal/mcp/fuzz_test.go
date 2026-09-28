@@ -24,6 +24,16 @@ func FuzzRequest(f *testing.F) {
 	f.Add(`{"jsonrpc": "2.0", "id": null, "method": "tools/call", "params": {"name": "explain_finding", "arguments": {}}}`)
 	f.Add(`{"jsonrpc":`)
 	f.Add(`[]`)
+	// Valid JSON that is not a request object. Each of these decodes into the
+	// zero request, which carries no id, which read as a notification -- so the
+	// server answered a waiting client with silence. Seeds, because an oracle
+	// nothing exercises is an oracle that proves nothing.
+	f.Add(`null`)
+	f.Add(`42`)
+	f.Add(`"tools/list"`)
+	f.Add(`true`)
+	f.Add(`[{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}]`)
+	f.Add(`{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "method": "tools/call"}`)
 	f.Add(`{"jsonrpc": "2.0", "id": {"deep": {"deeper": 1}}, "method": "tools/list"}`)
 	f.Add(`{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "analyze_change", "arguments": {"intent_path": "../../../etc/passwd", "plan_path": "p"}}}`)
 
@@ -47,21 +57,26 @@ func FuzzRequest(f *testing.F) {
 		written := strings.TrimSpace(out.String())
 		if written == "" {
 			// Silence is the protocol for a blank line, which is framing and
-			// not a message, and for a notification: a message that parses,
-			// speaks the protocol, and carries no id. It is a defect anywhere
-			// else, because a client is waiting.
+			// not a message, and for a notification: an object that speaks the
+			// protocol and carries no id. It is a defect anywhere else, because
+			// a client is waiting.
+			//
+			// The object test is the part that matters. Decoding into a struct
+			// accepts a bare null and leaves the id empty, so an oracle that
+			// asked only about the id would call silence correct for exactly
+			// the input that made this boundary silent in the first place.
 			if strings.TrimSpace(line) == "" {
 				return
 			}
-			var message struct {
-				JSONRPC string          `json:"jsonrpc"`
-				ID      json.RawMessage `json:"id"`
-				Method  string          `json:"method"`
-			}
-			if err := json.Unmarshal([]byte(line), &message); err != nil {
+			var document any
+			if err := json.Unmarshal([]byte(line), &document); err != nil {
 				t.Fatalf("an unreadable request went unanswered: %q", line)
 			}
-			if len(message.ID) != 0 {
+			object, isObject := document.(map[string]any)
+			if !isObject {
+				t.Fatalf("a message that is valid JSON and not a request went unanswered: %q", line)
+			}
+			if _, carriesID := object["id"]; carriesID {
 				t.Fatalf("a request carrying an id went unanswered: %q", line)
 			}
 			return

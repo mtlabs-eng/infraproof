@@ -321,7 +321,19 @@ func (s *Server) bundle(intentPath, planPath *string) (evidence.Bundle, error) {
 func (s *Server) open(path string) (*os.File, error) {
 	file, err := s.guard.Open(path)
 	if err != nil {
-		if errors.Is(err, pathguard.ErrOutsideRoots) {
+		// Which rule refused it, because a caller acts on them differently. A
+		// path outside the roots needs a different root or a different file; a
+		// path that names a parent directory needs only to be written
+		// differently, and telling that caller it is outside the roots sends
+		// them to widen the root instead.
+		switch {
+		case errors.Is(err, pathguard.ErrNamesAParent):
+			return nil, fmt.Errorf("%s names a parent directory; give the path to the file "+
+				"rather than a route to it", quote(path))
+		case errors.Is(err, pathguard.ErrTooDeep):
+			return nil, fmt.Errorf("%s names more directories than this server will walk",
+				quote(path))
+		case errors.Is(err, pathguard.ErrOutsideRoots):
 			return nil, fmt.Errorf("%s is outside every directory this server was given access to",
 				quote(path))
 		}

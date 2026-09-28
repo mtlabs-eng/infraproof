@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mtlabs-eng/infraproof/internal/mcp"
 )
@@ -248,23 +249,39 @@ func TestPingIsAnswered(t *testing.T) {
 // file -- ten megabytes of it, through a server whose inbound messages are
 // bounded at one.
 func TestAToolErrorDoesNotGrowWithItsInput(t *testing.T) {
-	var resources []string
-	for i := 0; i < 4000; i++ {
-		resources = append(resources, `{"family": "object_storage", "exposure": "private"}`)
-	}
-	contract := `{"schema_version": "1.0", "change_id": "c", "environment": "staging",
-	  "allowed_clouds": ["aws"], "destructive_changes": "forbidden",
-	  "resources": [` + strings.Join(resources, ",") + `]}`
+	// Two payloads, because the bound is on characters and a test that counts
+	// bytes over ASCII cannot tell the two apart. The second repeats a
+	// character that takes four bytes, so a bound counting bytes would cut it
+	// four times shorter, and one counting characters produces four times the
+	// bytes -- which is the number worth stating.
+	for name, family := range map[string]string{
+		"plain":                  "object_storage",
+		"four bytes a character": strings.Repeat("\U0001F600", 8),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var resources []string
+			for i := 0; i < 4000; i++ {
+				resources = append(resources, `{"family": "`+family+`", "exposure": "private"}`)
+			}
+			contract := `{"schema_version": "1.0", "change_id": "c", "environment": "staging",
+			  "allowed_clouds": ["aws"], "destructive_changes": "forbidden",
+			  "resources": [` + strings.Join(resources, ",") + `]}`
 
-	server, intentPath, planPath := root(t, contract, publicPlan)
-	text, failed := toolCall(t, server, "analyze_change", map[string]any{
-		"intent_path": intentPath, "plan_path": planPath,
-	})
-	if !failed {
-		t.Fatalf("a contract repeating one family four thousand times was accepted")
-	}
-	if len(text) > 4096 {
-		t.Errorf("the tool returned %d bytes of error for a %d byte contract; it repeats its "+
-			"input rather than describing it", len(text), len(contract))
+			server, intentPath, planPath := root(t, contract, publicPlan)
+			text, failed := toolCall(t, server, "analyze_change", map[string]any{
+				"intent_path": intentPath, "plan_path": planPath,
+			})
+			if !failed {
+				t.Fatal("a contract repeating one family four thousand times was accepted")
+			}
+
+			if characters := utf8.RuneCountInString(text); characters > 2100 {
+				t.Errorf("the tool returned %d characters of error for a %d byte contract; "+
+					"it repeats its input rather than describing it", characters, len(contract))
+			}
+			if !utf8.ValidString(text) {
+				t.Error("the error was cut inside a character")
+			}
+		})
 	}
 }

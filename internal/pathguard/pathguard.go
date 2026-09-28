@@ -52,6 +52,33 @@ type root struct {
 // caller was not given.
 var ErrOutsideRoots = errors.New("is outside every allowed root")
 
+// ErrNamesAParent reports a path that names a parent directory.
+//
+// Separate from ErrOutsideRoots because a caller acts on the two differently.
+// One message for every refusal is right about existence -- saying whether a
+// file outside the roots is there answers a question about a directory the
+// caller was not given -- and wrong about a path the caller wrote: telling them
+// a climbing path is outside every root is false when the file is inside one,
+// and a reader concludes the root is too narrow and asks for a wider one, which
+// is the opposite of the fix. The path is theirs; repeating the rule discloses
+// nothing.
+var ErrNamesAParent = errors.New(
+	"names a parent directory; give the path to the file rather than a route to it")
+
+// ErrTooDeep reports a path with more components than the guard will walk.
+//
+// Deciding which root holds a path walks up from the path, asking the
+// filesystem about each ancestor, and the number of ancestors is the caller's
+// to choose. A hundred thousand components cost thirty seconds of stat calls
+// for a path that was never going to open -- and it happens before the
+// verification deadline, which is the only other bound the server has.
+var ErrTooDeep = errors.New("names more directories than this build will walk")
+
+// maxComponents bounds how deep a path may be. A deeply nested project is tens
+// of directories; this is past any of them and short of what an unbounded walk
+// costs.
+const maxComponents = 256
+
 // New builds a guard over the given roots.
 //
 // A guard with no roots is refused rather than built, because the only thing
@@ -116,7 +143,12 @@ func (g *Guard) Open(path string) (*os.File, error) {
 		return nil, refuse(path)
 	}
 	if climbs(path) {
-		return nil, refuse(path)
+		return nil, fmt.Errorf("%s %w", path, ErrNamesAParent)
+	}
+	// Counted against the text, in one pass, before anything asks the
+	// filesystem about any of it.
+	if strings.Count(filepath.ToSlash(absolute), "/") > maxComponents {
+		return nil, fmt.Errorf("%s %w", path, ErrTooDeep)
 	}
 
 	for _, r := range g.roots {

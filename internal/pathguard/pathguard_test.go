@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mtlabs-eng/infraproof/internal/pathguard"
 )
@@ -262,26 +264,34 @@ func TestASymlinkInstalledWhileReadingIsNotFollowed(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// One goroutine swaps the file for a link to the file outside, and back.
+	// Several goroutines swap the file for a link to the file outside, and
+	// back. One of them, over two thousand attempts, caught a reintroduced
+	// check-then-open race in only fourteen runs out of twenty -- so three CI
+	// runs in ten would have gone green on the defect this test exists to
+	// prevent. The window is narrow and the sampling has to be dense enough to
+	// land in it.
 	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
+	var swappers sync.WaitGroup
+	for range 4 {
+		swappers.Add(1)
+		go func() {
+			defer swappers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = os.Remove(target)
+				_ = os.Symlink(filepath.Join(outside, "secret.json"), target)
+				_ = os.Remove(target)
+				_ = os.WriteFile(target, []byte("INSIDE"), 0o600)
 			}
-			_ = os.Remove(target)
-			_ = os.Symlink(filepath.Join(outside, "secret.json"), target)
-			_ = os.Remove(target)
-			_ = os.WriteFile(target, []byte("INSIDE"), 0o600)
-		}
-	}()
-	defer func() { close(stop); <-done }()
+		}()
+	}
+	defer func() { close(stop); swappers.Wait() }()
 
-	for i := 0; i < 2000; i++ {
+	for i := 0; i < 20000; i++ {
 		file, err := guard.Open(target)
 		if err != nil {
 			// A refusal is fine: the file may not exist at this instant, or it
@@ -413,5 +423,112 @@ func TestWhichSymlinksInsideARootStillWork(t *testing.T) {
 		_ = file.Close()
 		t.Error("a link written as an absolute path was followed; if that is now allowed, " +
 			"the documentation and this test should say so")
+	}
+}
+
+// TestAPathIsRefusedBeforeItIsWalked bounds what a caller can make the guard
+// spend.
+//
+// Deciding which root holds a path walks up from the path, asking the
+// filesystem about each ancestor. The number of ancestors is the caller's to
+// choose: a hundred thousand components cost thirty seconds of stat calls for a
+// path that was never going to open, and it happens before the verification
+// deadline, which is the only bound the server has. The count is checked first,
+// against the string, which costs one pass.
+func TestAPathIsRefusedBeforeItIsWalked(t *testing.T) {
+	root := t.TempDir()
+	guard, err := pathguard.New([]string{root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Built in one allocation. Joining a hundred thousand times is quadratic in
+	// the test itself, which would make this measure the wrong thing.
+	deep := root + strings.Repeat(string(filepath.Separator)+"a", 100000)
+
+	done := make(chan error, 1)
+	go func() {
+		file, err := guard.Open(filepath.Join(deep, "plan.json"))
+		if err == nil {
+			_ = file.Close()
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a path a hundred thousand components deep was opened")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a path a hundred thousand components deep took more than two seconds to refuse; " +
+			"the cost of deciding is the caller's to choose, and nothing else bounds it")
+	}
+}
+
+// TestAnOrdinaryDepthIsStillAllowed keeps the bound off paths people write. A
+// deeply nested project is a project, not an attack.
+func TestAnOrdinaryDepthIsStillAllowed(t *testing.T) {
+	root := t.TempDir()
+
+	nested := root
+	for range 40 {
+		nested = filepath.Join(nested, "module")
+	}
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(nested, "plan.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	guard, err := pathguard.New([]string{root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	file, err := guard.Open(path)
+	if err != nil {
+		t.Fatalf("a path forty directories deep was refused: %v", err)
+	}
+	_ = file.Close()
+}
+
+// TestARefusalSaysWhichRuleItIs separates two refusals a caller acts on
+// differently.
+//
+// One message for every refusal is right about existence: saying whether a file
+// outside the roots is there answers a question about a directory the caller
+// was not given. It is wrong about a path the caller wrote: telling them a
+// climbing path is "outside every allowed root" is false when the file is
+// inside one, and a model reading it concludes the root is wrong and asks for a
+// wider one -- the opposite of the fix.
+func TestARefusalSaysWhichRuleItIs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "plan.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	guard, err := pathguard.New([]string{root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	climbing := root + string(filepath.Separator) + "nested" +
+		string(filepath.Separator) + ".." + string(filepath.Separator) + "plan.json"
+	_, climbErr := guard.Open(climbing)
+	if climbErr == nil {
+		t.Fatal("a climbing path was opened")
+	}
+	if !errors.Is(climbErr, pathguard.ErrNamesAParent) {
+		t.Errorf("a climbing path was refused as something else: %v", climbErr)
+	}
+	if errors.Is(climbErr, pathguard.ErrOutsideRoots) {
+		t.Error("a path inside the root was reported as outside it, which is false and sends " +
+			"a caller to widen the root")
+	}
+
+	_, outsideErr := guard.Open(filepath.Join(t.TempDir(), "plan.json"))
+	if !errors.Is(outsideErr, pathguard.ErrOutsideRoots) {
+		t.Errorf("a path outside every root was refused as something else: %v", outsideErr)
 	}
 }
