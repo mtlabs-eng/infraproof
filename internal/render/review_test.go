@@ -186,3 +186,128 @@ func TestAReviewRefusesABundleTheContractRefuses(t *testing.T) {
 		t.Error("the review rendered a bundle the contract refuses")
 	}
 }
+
+// TestAPassSaysWhatItCouldNotCheck is the milestone's criterion read as
+// written: the review carries the same decision, findings and unknowns as the
+// bundle.
+//
+// The implementation narrowed that to required unknowns, and the test was
+// written to the narrowed version. So a bundle with a dozen checks that could
+// not conclude rendered as "PASS" and a summary and nothing else -- twelve
+// unstated facts as silence, and silence reads as coverage. That is this
+// project's own rule inverted at the last boundary before a human.
+func TestAPassSaysWhatItCouldNotCheck(t *testing.T) {
+	bundle := passBundle()
+	for i := range 12 {
+		bundle.Unknowns = append(bundle.Unknowns, evidence.Unknown{
+			CheckID:  "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK",
+			Required: false,
+			Reason:   "The account-level block is not part of this plan.",
+			Evidence: []evidence.EvidenceRef{},
+		})
+		_ = i
+	}
+
+	out, err := render.Review(bundle)
+	if err != nil {
+		t.Fatalf("render.Review: %v", err)
+	}
+	text := string(out)
+
+	if !strings.Contains(text, "12") {
+		t.Errorf("a pass over twelve checks that could not conclude says nothing about them:\n%s",
+			text)
+	}
+	if !strings.Contains(text, "could not") {
+		t.Errorf("the review does not say what the twelve are:\n%s", text)
+	}
+}
+
+// TestTruncationKeepsTheWorstFindings covers what a reviewer loses first.
+//
+// The row loop skipped a row that did not fit and kept looking, so a short
+// low-severity finding could be printed while a long critical one was counted
+// as omitted. Canonical order puts the severe first; the rendering has to stop
+// at the first row that does not fit rather than step over it.
+func TestTruncationKeepsTheWorstFindings(t *testing.T) {
+	bundle := contractBundle()
+	critical := bundle.Findings[0]
+	critical.Claim = strings.Repeat("This claim is long enough to crowd out what follows. ", 20)
+
+	bundle.Findings = nil
+	for range 400 {
+		bundle.Findings = append(bundle.Findings, critical)
+	}
+	low := critical
+	low.Severity = evidence.SeverityLow
+	low.RuleID = "TINY_LOW_FINDING"
+	low.Claim = "Short."
+	low.Resource = &evidence.Resource{Address: "a.b", Cloud: evidence.CloudAWS, Provider: "p"}
+	bundle.Findings = append(bundle.Findings, low)
+
+	out, err := render.Review(bundle)
+	if err != nil {
+		t.Fatalf("render.Review: %v", err)
+	}
+	if strings.Contains(string(out), "TINY_LOW_FINDING") {
+		t.Error("a low finding was printed while critical ones were counted as omitted; " +
+			"the reader sees the least of what was found")
+	}
+}
+
+// TestTheReviewIsBoundedByWhateverItIsGiven keeps the bound a bound.
+//
+// The closing line prints the contract's path, and the bundle contract puts no
+// length on it -- so a long one carried the rendering past the limit it says it
+// keeps, and a comment no platform accepts fails the step that posts it.
+func TestTheReviewIsBoundedByWhateverItIsGiven(t *testing.T) {
+	for name, source := range map[string]string{
+		"a long path":       "/" + strings.Repeat("directory/", 400) + "intent.json",
+		"expanding escapes": strings.Repeat("&", 4000) + ".json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle := contractBundle()
+			bundle.Subject.IntentSource = source
+
+			out, err := render.Review(bundle)
+			if err != nil {
+				t.Fatalf("render.Review: %v", err)
+			}
+			if len(out) > render.MaxReviewBytes {
+				t.Errorf("the review is %d bytes, past the %d it bounds itself to",
+					len(out), render.MaxReviewBytes)
+			}
+			if !strings.Contains(string(out), string(bundle.Decision)) {
+				t.Error("the decision was lost")
+			}
+		})
+	}
+}
+
+// TestTheReviewPrintsNoEvidenceLocation replaces an assertion that could not
+// fail. The previous one looked for a path followed by " =", which the review
+// never writes in any form, so it passed for a renderer that printed anything
+// at all.
+func TestTheReviewPrintsNoEvidenceLocation(t *testing.T) {
+	bundle := redactedBundle()
+
+	out, err := render.Review(bundle)
+	if err != nil {
+		t.Fatalf("render.Review: %v", err)
+	}
+	text := string(out)
+
+	var located int
+	for _, finding := range evidence.Canonical(bundle).Findings {
+		for _, ref := range finding.Evidence {
+			located++
+			if ref.Path != "" && strings.Contains(text, ref.Path) {
+				t.Errorf("the review prints the location of a value rather than the finding: %q",
+					ref.Path)
+			}
+		}
+	}
+	if located == 0 {
+		t.Fatal("the bundle carries no evidence reference, so this test asserts nothing")
+	}
+}

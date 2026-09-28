@@ -22,6 +22,15 @@ on:
     paths:
       - "**.tf"
       - "**.tfvars"
+      # The contract too. A change that only weakens what the plan is verified
+      # against is the one most worth verifying.
+      - "**/intent.json"
+
+# One run per pull request. Two pushes in quick succession would otherwise both
+# find no existing comment and both post one.
+concurrency:
+  group: infraproof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   # To read the code being verified.
@@ -59,8 +68,11 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Build InfraProof
-        run: go build -o infraproof ./cmd/infraproof
+      # InfraProof is not in your repository, so it is fetched and built here.
+      # Pin the version: a verifier that changes under you is a verdict you
+      # cannot reproduce.
+      - name: Install InfraProof
+        run: go install github.com/mtlabs-eng/infraproof/cmd/infraproof@main
 
       # The verdict, twice: once shaped for a comment, once as the Evidence
       # Bundle, which carries everything the comment leaves out.
@@ -73,12 +85,12 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          ./infraproof check \
+          infraproof check \
             --intent "${INTENT_CONTRACT}" \
             --plan "${WORKING_DIRECTORY}/tfplan.json" \
             --format review > review.md
           echo "exit=$?" >> "$GITHUB_OUTPUT"
-          ./infraproof check \
+          infraproof check \
             --intent "${INTENT_CONTRACT}" \
             --plan "${WORKING_DIRECTORY}/tfplan.json" \
             --format json > evidence-bundle.json
@@ -88,23 +100,40 @@ jobs:
           name: infraproof-evidence-bundle
           path: evidence-bundle.json
 
-      # One comment per plan, updated rather than repeated. The marker is the
-      # first line of the review and identifies the plan and the contract, so a
-      # second push to the same change edits the same comment.
-      # One comment per plan, updated rather than repeated. The marker is the
-      # first line of the review and identifies the plan and the contract, so a
-      # second push to the same change edits the same comment instead of adding
-      # another.
+      # One comment, updated rather than repeated.
+      #
+      # The comment is found by the marker InfraProof writes on the first line.
+      # Only its prefix is matched: the rest of the marker names the plan, and a
+      # plan JSON carries a timestamp, so its digest -- and the whole marker --
+      # differs on every run even when nothing changed. Matching the prefix
+      # finds the comment this workflow left last time, which is what "one
+      # comment" means.
+      #
+      # An empty review is not a marker. The check writes nothing to standard
+      # output when it cannot read its inputs, and an empty prefix matches every
+      # comment on the pull request -- including somebody else's.
       - name: Say so on the pull request
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ ! -s review.md ]; then
+            echo "The verifier produced no review; there is nothing to post."
+            exit 0
+          fi
           marker="$(head -n 1 review.md)"
-          existing="$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-            --jq "[.[] | select(.body | startswith(\"$marker\")) | .id] | first")"
+          case "$marker" in
+            "<!-- infraproof:"*) ;;
+            *) echo "The first line is not an InfraProof marker; not posting."; exit 0 ;;
+          esac
+
+          # --slurp, because --paginate runs the filter once per page and would
+          # otherwise return one answer per page rather than one answer.
+          existing="$(gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp \
+            --jq '[.[][] | select(.body | startswith("<!-- infraproof:")) | .id] | first')"
           if [ -n "$existing" ] && [ "$existing" != "null" ]; then
             gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
               -F body=@review.md > /dev/null

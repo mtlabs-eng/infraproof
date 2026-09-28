@@ -84,7 +84,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 // flag package so that the two places a reader can ask — this and the top-level
 // --help — say the same thing.
 const checkUsage = `Usage:
-  infraproof check --intent <path> --plan <path> [--format json|markdown]
+  infraproof check --intent <path> --plan <path> [--format json|markdown|review]
 
   --intent   path to an intent contract JSON file
   --plan     path to a Terraform or OpenTofu plan JSON file

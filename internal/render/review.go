@@ -42,31 +42,36 @@ func Review(b evidence.Bundle) ([]byte, error) {
 	if len(c.Findings) > 0 {
 		out.WriteString("\n| | Rule | Resource | Claim |\n| --- | --- | --- | --- |\n")
 	}
-	written, omitted := 0, 0
-	for _, finding := range c.Findings {
+	// Bounded as it is built. Rendering everything and cutting the result would
+	// cut a row in half, and half a row is a claim about a resource that is not
+	// there.
+	//
+	// It stops at the first row that does not fit rather than stepping over it.
+	// Canonical order puts the severe first, and skipping onwards printed a
+	// short low finding while a long critical one was counted as omitted --
+	// which shows a reader the least of what was found.
+	var omitted int
+	for i, finding := range c.Findings {
 		row := reviewRow(finding)
-		// Bounded as it is built. Rendering everything and cutting the result
-		// would cut a row in half, and half a row is a claim about a resource
-		// that is not there.
-		if out.Len()+len(row)+reviewTail > MaxReviewBytes {
-			omitted++
-			continue
+		if out.Len()+len(row)+tailFor(c) > MaxReviewBytes {
+			omitted = len(c.Findings) - i
+			break
 		}
 		out.WriteString(row)
-		written++
 	}
 
-	var headed bool
-	for _, unknown := range requiredUnknowns(c.Unknowns) {
+	required := requiredUnknowns(c.Unknowns)
+	for i, unknown := range required {
 		line := fmt.Sprintf("- %s: %s\n", code(unknown.CheckID), prose(unknown.Reason))
-		if out.Len()+len(line)+reviewTail > MaxReviewBytes {
-			omitted++
-			continue
+		heading := ""
+		if i == 0 {
+			heading = "\n**Not determined, and required:**\n\n"
 		}
-		if !headed {
-			out.WriteString("\n**Not determined, and required:**\n\n")
-			headed = true
+		if out.Len()+len(heading)+len(line)+tailFor(c) > MaxReviewBytes {
+			omitted += len(required) - i
+			break
 		}
+		out.WriteString(heading)
 		out.WriteString(line)
 	}
 
@@ -74,16 +79,51 @@ func Review(b evidence.Bundle) ([]byte, error) {
 		fmt.Fprintf(&out, "\n_%d further %s not shown here; the attached Evidence Bundle "+
 			"carries all of them._\n", omitted, plural(omitted, "entry is", "entries are"))
 	}
-	fmt.Fprintf(&out, "\nPlan `%s`, verified offline against `%s`.\n",
-		short(c.Subject.PlanDigest), inlineText(c.Subject.IntentSource))
 
+	// What could not be concluded but did not prevent a pass. The long report
+	// lists these; a reviewer with a diff open needs to know there are some,
+	// because a verdict with a dozen unanswered checks behind it is not the
+	// same as one with none, and printing neither reads as coverage.
+	if bounding := len(c.Unknowns) - len(required); bounding > 0 {
+		fmt.Fprintf(&out, "\n_%d further %s could not be determined; %s not prevent a pass, "+
+			"and the Evidence Bundle names %s._\n",
+			bounding, plural(bounding, "check", "checks"), plural(bounding, "it does", "they do"),
+			plural(bounding, "it", "them"))
+	}
+
+	out.WriteString(closing(c))
 	return out.Bytes(), nil
 }
 
-// reviewTail is room kept for what is written after the rows: the omission
-// notice and the closing line. Bounding the rows alone would let the tail take
-// the comment past its limit.
-const reviewTail = 400
+// closing is the last line: which plan was read, and what it was compared
+// against. The contract puts no length on the source, and inlineText expands
+// some characters fivefold, so the one field a caller controls is cut here
+// rather than allowed to carry the comment past its bound.
+func closing(c evidence.Bundle) string {
+	source := inlineText(c.Subject.IntentSource)
+	if len(source) > maxSourceInReview {
+		source = source[:maxSourceInReview] + "…"
+	}
+	return fmt.Sprintf("\nPlan `%s`, verified offline against `%s`.\n",
+		short(c.Subject.PlanDigest), source)
+}
+
+// tailFor is the room the rest of the rendering needs, measured rather than
+// guessed. A fixed reserve was wrong in the one direction that matters: the
+// closing line grows with a field nobody bounds.
+func tailFor(c evidence.Bundle) int {
+	return len(closing(c)) + maxNoticeBytes
+}
+
+const (
+	// maxSourceInReview bounds the contract path the closing line prints. Long
+	// enough for any path a person types, short of one written to break the
+	// bound.
+	maxSourceInReview = 200
+	// maxNoticeBytes is room for the two notices: what was omitted, and what
+	// could not be determined without preventing a pass.
+	maxNoticeBytes = 400
+)
 
 // Marker identifies the inputs a review is about, so a workflow can update one
 // comment instead of appending one per push.

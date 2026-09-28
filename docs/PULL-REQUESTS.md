@@ -26,7 +26,8 @@ fails if that block ever widens.
 
 ## What appears on the pull request
 
-One comment, replaced on each push rather than repeated:
+One comment, replaced on each push rather than repeated — the workflow finds the
+one it left last time by the marker prefix on the first line:
 
 ```markdown
 <!-- infraproof:6627bf87e11348bd -->
@@ -42,10 +43,16 @@ The requested private storage change enables public access.
 Plan `000000000000`, verified offline against `infra/intent.json`.
 ```
 
-The first line is a marker naming the plan and the contract. The workflow reads
-it to decide whether to edit the comment it left last time or write a new one,
-so a pull request carries one comment per plan rather than one per push. Two
-different plans get two comments; the same plan verified twice gets one.
+The first line is a marker. Its prefix, `<!-- infraproof:`, is what the workflow
+matches on to find its own comment; the rest is a fingerprint of the plan and
+the contract, for a person or a tool comparing two verdicts.
+
+The workflow matches the prefix rather than the whole marker, because
+`terraform show -json` writes a timestamp into the plan and the fingerprint is
+taken over the exact bytes — so the same change verified twice produces two
+different fingerprints. Matching the prefix gives one comment per pull request,
+which is what a reviewer wants; matching the fingerprint would give one per
+run, which is what this is written to avoid.
 
 The comment is short on purpose: a reviewer has a diff open and thirty seconds.
 Everything it leaves out is in the Evidence Bundle, which the workflow attaches
