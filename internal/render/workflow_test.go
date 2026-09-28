@@ -74,34 +74,113 @@ func TestTheWorkflowFindsTheMarkerWhereTheReviewPutsIt(t *testing.T) {
 }
 
 // TestTheWorkflowCanObtainTheThingItRuns covers the step that made the whole
-// template fail on its first run in any repository: it built a package that
-// exists in this repository and not in the one the file is copied into.
+// template fail on its first run, three times, for three different reasons: it
+// built a package that is not in the adopting repository, then installed a
+// module that does not resolve, then built from a working directory where go
+// cannot find the module at all.
+//
+// So the question is asked of the steps rather than of the text. A comment
+// showing what the block will look like once the module is published contains
+// the same words as the step it describes, and a check over the whole file
+// passes for a workflow with no obtaining step left in it.
 func TestTheWorkflowCanObtainTheThingItRuns(t *testing.T) {
 	text := workflow(t)
+	steps := withoutComments(text)
 
-	if strings.Contains(text, "go build -o infraproof ./cmd/infraproof") {
+	if strings.Contains(steps, "go build -o infraproof ./cmd/infraproof") {
 		t.Error("the workflow builds a package that is not in the repository it runs in")
 	}
-	if strings.Contains(text, "./infraproof check") {
-		t.Error("the workflow runs a binary from the working directory, which is the user's " +
-			"repository rather than this one")
-	}
 
-	// It has to obtain the tool from somewhere that exists, and say which
-	// version. An unpinned install is a verdict nobody can reproduce, and a
-	// pin naming something that does not resolve is a step that never runs --
-	// which is how this failed twice, for two different reasons.
-	obtains := strings.Contains(text, "repository: mtlabs-eng/infraproof") ||
-		strings.Contains(text, "go install github.com/mtlabs-eng/infraproof/cmd/infraproof@")
-	if !obtains {
-		t.Error("the workflow does not obtain the tool it then runs")
+	checkout := strings.Contains(steps, "repository: mtlabs-eng/infraproof")
+	install := strings.Contains(steps, "go install github.com/mtlabs-eng/infraproof/cmd/infraproof@")
+	if !checkout && !install {
+		t.Fatal("no step obtains the tool the later steps run")
 	}
-	if strings.Contains(text, "repository: mtlabs-eng/infraproof") && !strings.Contains(text, "ref:") {
-		t.Error("the workflow checks out the tool without naming a version")
-	}
-	if strings.Contains(text, "cmd/infraproof@main") {
+	if install && strings.Contains(steps, "cmd/infraproof@main") {
 		t.Error("the workflow installs a floating branch; the comment beside it says to pin")
 	}
+
+	if !checkout {
+		return
+	}
+
+	// A checkout has three things that have to agree, and nothing else here
+	// notices when they stop agreeing.
+	if !strings.Contains(steps, "ref:") {
+		t.Error("the workflow checks the tool out without naming a version")
+	}
+	if !strings.Contains(steps, "token:") {
+		t.Error("the workflow checks out a private repository with no token, which cannot work")
+	}
+
+	path := valueOf(t, steps, "path:")
+	built := buildOutput(t, steps)
+	if !strings.Contains(steps, "go build -C ./"+path) {
+		t.Errorf("the build does not run in the checkout at %q; go resolves the module from "+
+			"the working directory, not from the package argument, and the working directory "+
+			"is the adopting repository", path)
+	}
+	for _, invocation := range invocations(steps) {
+		if invocation != built {
+			t.Errorf("the workflow builds %q and runs %q", built, invocation)
+		}
+	}
+}
+
+// withoutComments returns the workflow with its comment lines removed, so a
+// question about what the steps do is not answered by what a comment says.
+func withoutComments(text string) string {
+	var kept []string
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// valueOf returns the value of the first "key: value" line.
+func valueOf(t *testing.T, text, key string) string {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if after, found := strings.CutPrefix(trimmed, key); found {
+			return strings.TrimSpace(after)
+		}
+	}
+	t.Fatalf("the workflow has no %q", key)
+	return ""
+}
+
+// buildOutput returns the path the build writes its binary to.
+func buildOutput(t *testing.T, text string) string {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.Contains(line, "go build") {
+			continue
+		}
+		fields := strings.Fields(line)
+		for i, field := range fields {
+			if field == "-o" && i+1 < len(fields) {
+				return strings.Trim(fields[i+1], `"`)
+			}
+		}
+	}
+	t.Fatal("the workflow has no build step writing a binary")
+	return ""
+}
+
+// invocations returns every path the workflow runs the verifier from.
+func invocations(text string) []string {
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasSuffix(trimmed, "check \\") {
+			continue
+		}
+		out = append(out, strings.Trim(strings.TrimSuffix(trimmed, " check \\"), `"`))
+	}
+	return out
 }
 
 // TestTheVerdictDecidesTheCheck is the milestone's criterion, asserted against

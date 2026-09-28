@@ -77,6 +77,9 @@ jobs:
       #
       #   - run: go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v1.2.3
       #
+      # and the two invocations below become plain "infraproof", because go
+      # install writes to GOPATH/bin and that is on the path.
+      #
       # Either way, pin it. A verifier that changes under you is a verdict you
       # cannot reproduce; "main" is what this says because there is no release
       # to name yet, and it is the first thing to change when there is.
@@ -87,8 +90,11 @@ jobs:
           path: .infraproof
           token: ${{ secrets.INFRAPROOF_READ_TOKEN }}
 
+      # -C, because go resolves the module from the working directory rather
+      # than from the package argument, and the working directory here is the
+      # adopting repository -- which has no go.mod, or has its own.
       - name: Build InfraProof
-        run: go build -o "$RUNNER_TEMP/infraproof" ./.infraproof/cmd/infraproof
+        run: go build -C ./.infraproof -o "$RUNNER_TEMP/infraproof" ./cmd/infraproof
 
       # The verdict, twice: once shaped for a comment, once as the Evidence
       # Bundle, which carries everything the comment leaves out.

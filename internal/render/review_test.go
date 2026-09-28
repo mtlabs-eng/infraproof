@@ -3,6 +3,7 @@ package render_test
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
 	"github.com/mtlabs-eng/infraproof/internal/render"
@@ -279,5 +280,122 @@ func TestTheReviewPrintsNoEvidenceLocation(t *testing.T) {
 	}
 	if located == 0 {
 		t.Fatal("the bundle carries no evidence reference, so this test asserts nothing")
+	}
+}
+
+// TestTheReviewNamesTheContractTheReportNames is the one field both renderings
+// answer, and they disagreed about it.
+//
+// The closing line escaped the path as prose and then set it in a code span,
+// where CommonMark does no entity or backslash processing -- so "a&b[1]" was
+// shown as "a&amp;b\[1]", a file that does not exist and one the long report
+// spelled correctly. The behaviour was fixed and nothing held it: reverting the
+// line left the suite green.
+func TestTheReviewNamesTheContractTheReportNames(t *testing.T) {
+	for name, source := range map[string]string{
+		"an ampersand":        "/infra/a&b/intent.json",
+		"a bracket":           "/infra/a[1]/intent.json",
+		"an angle bracket":    "/infra/a<b>/intent.json",
+		"a backslash":         `C:\infra\intent.json`,
+		"a backtick":          "/infra/a`b/intent.json",
+		"a pipe":              "/infra/a|b/intent.json",
+		"multi-byte":          "/infra/ふぁいる/intent.json",
+		"all of them at once": "/infra/a&b[1]<c>`d`|e/intent.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle := contractBundle()
+			bundle.Subject.IntentSource = source
+
+			review, err := render.Review(bundle)
+			if err != nil {
+				t.Fatalf("render.Review: %v", err)
+			}
+			report, err := render.Markdown(bundle)
+			if err != nil {
+				t.Fatalf("render.Markdown: %v", err)
+			}
+
+			inReview := spanAfter(t, string(review), "verified offline against ")
+			inReport := spanAfter(t, string(report), "- Intent source: ")
+			if inReview != inReport {
+				t.Errorf("the two renderings name different files.\n review: %s\n report: %s",
+					inReview, inReport)
+			}
+			if !strings.Contains(inReview, source) {
+				t.Errorf("the review does not name the file it read.\n want %q inside %s",
+					source, inReview)
+			}
+		})
+	}
+}
+
+// spanAfter returns the code span following a marker, fence and all.
+func spanAfter(t *testing.T, text, marker string) string {
+	t.Helper()
+	at := strings.Index(text, marker)
+	if at < 0 {
+		t.Fatalf("the rendering has no %q", marker)
+	}
+	rest := text[at+len(marker):]
+	end := strings.IndexAny(rest, "\n")
+	if end < 0 {
+		end = len(rest)
+	}
+	return strings.TrimSuffix(strings.TrimSpace(rest[:end]), ".")
+}
+
+// TestAReviewIsAlwaysValidUTF8 covers where the bounds cut.
+//
+// A comment is posted as the body of an HTTP request and read by everything
+// downstream. Cutting a field at a byte offset put half a character in it: the
+// contract path and the summary are both bounded, both are the caller's, and
+// both can be written to land a multi-byte character on the boundary.
+func TestAReviewIsAlwaysValidUTF8(t *testing.T) {
+	for name, build := range map[string]func(*evidence.Bundle){
+		"a long path of three-byte characters": func(b *evidence.Bundle) {
+			b.Subject.IntentSource = "/" + strings.Repeat("あ", 400) + "/intent.json"
+		},
+		"a long path of four-byte characters": func(b *evidence.Bundle) {
+			b.Subject.IntentSource = "/" + strings.Repeat("\U0001F600", 400) + "/intent.json"
+		},
+		"a long summary of three-byte characters": func(b *evidence.Bundle) {
+			b.Summary = strings.Repeat("あ", 4000)
+		},
+		"a long summary of four-byte characters": func(b *evidence.Bundle) {
+			b.Summary = strings.Repeat("\U0001F600", 4000)
+		},
+		"both at once": func(b *evidence.Bundle) {
+			b.Subject.IntentSource = "/" + strings.Repeat("あ", 400) + "/intent.json"
+			b.Summary = strings.Repeat("\U0001F600", 4000)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundle := contractBundle()
+			build(&bundle)
+
+			out, err := render.Review(bundle)
+			if err != nil {
+				t.Fatalf("render.Review: %v", err)
+			}
+			if !utf8.Valid(out) {
+				t.Error("the review is not valid UTF-8; a bound cut inside a character")
+			}
+			// Validity alone cannot see the defect: everything this renders
+			// passes through a map that replaces an invalid byte with U+FFFD,
+			// so a cut inside a character comes out valid and wrong. What a
+			// reader sees is a corruption glyph where a character was, and the
+			// input held no such thing.
+			if strings.ContainsRune(string(out), '\uFFFD') {
+				t.Error("a bound cut inside a character and the byte was replaced; the review " +
+					"shows a corruption glyph for a path that holds none")
+			}
+			if len(out) > render.MaxReviewBytes {
+				t.Errorf("the review is %d bytes, past the %d it bounds itself to",
+					len(out), render.MaxReviewBytes)
+			}
+			if !strings.Contains(string(out), string(bundle.Decision)) {
+				t.Error("the decision was lost")
+			}
+		})
 	}
 }

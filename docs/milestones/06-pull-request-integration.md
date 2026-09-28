@@ -73,13 +73,17 @@ this build has no credentials is the same reason it has no network.
   workflow: this repository has no Terraform to verify, and a template that
   fails on every pull request teaches a reader the wrong thing.
 
-  **Not met as stated, and here is why.** This repository is private, so the
-  module does not resolve from the Go proxy and no one can install the tool by
-  naming it. The template checks the repository out and builds it, which needs a
-  token that can read it — so adopting this is copying one file *and* adding one
-  secret. Publishing the module collapses that to a single `go install` line and
-  meets the criterion as written; until then the criterion is met with a
-  footnote, which is not the same thing.
+  **Met with a footnote, and the footnote is the repository being private.**
+  The module does not resolve from the Go proxy, so no one can install the tool
+  by naming it. The template checks the repository out and builds it, which
+  needs a token that can read it — so adopting this is copying one file *and*
+  adding one secret.
+
+  That is the whole of the shortfall. It is not cover for a step that does not
+  run: the build failed twice for reasons that had nothing to do with
+  publication, and both are closed and tested. Publishing the module collapses
+  the block to one `go install` line, removes the secret, and meets the
+  criterion as written.
 - Exit codes continue to gate the check: a `BLOCK` fails the job, an `UNKNOWN`
   fails it, and a `WARN` does not.
 - No package involved imports a network, a process, or a credential.
