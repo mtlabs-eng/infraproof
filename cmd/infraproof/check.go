@@ -5,14 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
-	"github.com/mtlabs-eng/infraproof/internal/intent"
-	"github.com/mtlabs-eng/infraproof/internal/policy"
-	"github.com/mtlabs-eng/infraproof/internal/providers"
 	"github.com/mtlabs-eng/infraproof/internal/render"
-	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
+	"github.com/mtlabs-eng/infraproof/internal/verify"
 )
 
 // runCheck compares a plan with an intent contract and reports the verdict.
@@ -61,24 +57,10 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		return usageError(stderr, fmt.Sprintf("--format is %q, want json or markdown", *format))
 	}
 
-	contract, err := intent.Load(*intentPath)
+	bundle, err := verify.FromFiles(*intentPath, *planPath)
 	if err != nil {
 		return inputError(stderr, err)
 	}
-
-	raw, err := os.ReadFile(*planPath)
-	if err != nil {
-		return inputError(stderr, fmt.Errorf("reading plan %s: %w", *planPath, err))
-	}
-	plan, err := terraformplan.Parse(raw)
-	if err != nil {
-		return inputError(stderr, fmt.Errorf("reading plan %s: %w", *planPath, err))
-	}
-
-	bundle := policy.Evaluate(contract, providers.Normalize(plan, providers.Default()), policy.Subject{
-		PlanFormatVersion: plan.FormatVersion,
-		PlanDigest:        plan.Digest,
-	})
 
 	out, err := renderer(bundle)
 	if err != nil {
