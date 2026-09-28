@@ -204,7 +204,9 @@ client, not of this server, and this server cannot enforce it.
    refused, even where it names a file in the same root. Walking the path is
    what removes the window a resolved name leaves open, and it judges a link by
    the target as written. Accepted rather than worked around, because the
-   workaround is the defect.
+   workaround is the defect. The refusal says the path is outside every allowed
+   root, which is not why: the guard cannot tell this case from a link that
+   leaves the root without resolving it, which is the thing it does not do.
 6. A root that is removed and recreated under a running server is refused
    thereafter, because the server holds the directory it was given rather than
    the name. That is the safe answer, and the refusal says the path is outside

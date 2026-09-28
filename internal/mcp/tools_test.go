@@ -425,3 +425,48 @@ func wideplan(buckets int) string {
 	return `{"format_version": "1.2", "resource_changes": [` + strings.Join(changes, ",") +
 		`], "configuration": {"root_module": {"resources": [` + strings.Join(resources, ",") + `]}}}`
 }
+
+// TestARefusalTellsTheCallerWhichRuleItIs covers the layer a model reads.
+//
+// The guard distinguishes its refusals and the adapter turns them into
+// sentences, and the whole switch could be replaced by the single old message
+// with the suite still green -- so the thing a caller acts on was free to be
+// deleted silently. Each message has to say something a caller can do
+// differently, and none may say whether a file exists.
+func TestARefusalTellsTheCallerWhichRuleItIs(t *testing.T) {
+	server, intentPath, planPath := root(t, privateIntent, publicPlan)
+	dir := filepath.Dir(planPath)
+	outside := t.TempDir()
+
+	cases := map[string]struct {
+		path string
+		says string
+	}{
+		"outside every root": {filepath.Join(outside, "plan.json"), "outside every directory"},
+		"names a parent": {dir + string(filepath.Separator) + "nested" +
+			string(filepath.Separator) + ".." + string(filepath.Separator) + "plan.json",
+			"names a parent directory"},
+		"a directory": {dir, "names a directory"},
+		"too deep":    {dir + strings.Repeat(string(filepath.Separator)+"a", 300) + "/plan.json", "more directories"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			text, failed := toolCall(t, server, "analyze_change", map[string]any{
+				"intent_path": intentPath, "plan_path": tc.path,
+			})
+			if !failed {
+				t.Fatalf("the path was accepted: %s", text)
+			}
+			if !strings.Contains(text, tc.says) {
+				t.Errorf("the refusal does not say which rule it is.\n want it to contain %q\n  got %s",
+					tc.says, text)
+			}
+			for _, leak := range []string{"no such file", "does not exist", "not found"} {
+				if strings.Contains(strings.ToLower(text), leak) {
+					t.Errorf("the refusal reports the filesystem: %s", text)
+				}
+			}
+		})
+	}
+}

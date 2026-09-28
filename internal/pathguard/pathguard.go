@@ -74,9 +74,18 @@ var ErrNamesAParent = errors.New(
 // verification deadline, which is the only other bound the server has.
 var ErrTooDeep = errors.New("names more directories than this build will walk")
 
-// maxComponents bounds how deep a path may be. A deeply nested project is tens
-// of directories; this is past any of them and short of what an unbounded walk
-// costs.
+// ErrIsADirectory reports a path that names a directory rather than a file.
+//
+// Separate for the reason ErrNamesAParent is: a root is inside the roots, and
+// telling a caller it is outside them sends them to widen a root that already
+// holds what they named.
+var ErrIsADirectory = errors.New("names a directory rather than a file")
+
+// maxComponents bounds how many directories a path may name, counted from the
+// filesystem root rather than from the allowed root -- which is what the check
+// measures, and is the smaller number of the two. A deeply nested project is
+// tens of directories and sits some way down the disk; this is past both and
+// short of what an unbounded walk costs.
 const maxComponents = 256
 
 // New builds a guard over the given roots.
@@ -156,6 +165,9 @@ func (g *Guard) Open(path string) (*os.File, error) {
 		if !inside {
 			continue
 		}
+		if relative == "" {
+			return nil, fmt.Errorf("%s %w", path, ErrIsADirectory)
+		}
 		file, err := r.open.OpenFile(relative, os.O_RDONLY|nonBlocking, 0)
 		if err != nil {
 			// Either the operating system refused the path as an escape, or
@@ -197,9 +209,9 @@ func beneath(r root, absolute string) (string, bool) {
 	for {
 		if info, err := os.Stat(current); err == nil && os.SameFile(info, r.info) {
 			if len(elements) == 0 {
-				// The path is the root itself, which is a directory and not
+				// The path is the root itself: inside the roots, and not
 				// something to read.
-				return "", false
+				return "", true
 			}
 			return filepath.Join(elements...), true
 		}

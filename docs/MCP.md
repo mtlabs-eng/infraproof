@@ -112,7 +112,15 @@ OpenTofu works the same way with `tofu`.
   puzzle.
 
 A refused tool call returns a result marked as an error with a sentence saying
-what happened, not a protocol error — the model should see it and act on it.
+what happened, so the model sees it and acts on it. The sentence says which rule
+refused, because the fixes differ: a path outside the roots needs a different
+root or a different file, and one naming a parent directory needs only to be
+written differently.
+
+Arguments that do not match a tool's declared schema are a protocol error
+instead — a missing argument, one of the wrong type, one this server does not
+know. The client sent something its own schema said it would not, which is a
+fault in the request rather than an answer about a change.
 
 ## What it will not do
 

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -264,32 +263,38 @@ func TestASymlinkInstalledWhileReadingIsNotFollowed(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// Several goroutines swap the file for a link to the file outside, and
-	// back. One of them, over two thousand attempts, caught a reintroduced
-	// check-then-open race in only fourteen runs out of twenty -- so three CI
-	// runs in ten would have gone green on the defect this test exists to
-	// prevent. The window is narrow and the sampling has to be dense enough to
-	// land in it.
+	// One swapper that dwells in each state, rather than several racing as fast
+	// as they can.
+	//
+	// The fast version was worse than the slow one it replaced: four goroutines
+	// removing and recreating the file keep it absent most of the time, so the
+	// open almost never reaches the moment between the check and the read with
+	// a regular file in place. Measured against a reintroduced check-then-open
+	// race, the tight loop caught it once in twenty runs and the shape it
+	// replaced caught it fourteen times. Density is not the property; being in
+	// the window when the reader arrives is.
 	stop := make(chan struct{})
-	var swappers sync.WaitGroup
-	for range 4 {
-		swappers.Add(1)
-		go func() {
-			defer swappers.Done()
-			for {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			for _, asLink := range []bool{false, true} {
 				select {
 				case <-stop:
 					return
 				default:
 				}
 				_ = os.Remove(target)
-				_ = os.Symlink(filepath.Join(outside, "secret.json"), target)
-				_ = os.Remove(target)
-				_ = os.WriteFile(target, []byte("INSIDE"), 0o600)
+				if asLink {
+					_ = os.Symlink(filepath.Join(outside, "secret.json"), target)
+				} else {
+					_ = os.WriteFile(target, []byte("INSIDE"), 0o600)
+				}
+				time.Sleep(200 * time.Microsecond)
 			}
-		}()
-	}
-	defer func() { close(stop); swappers.Wait() }()
+		}
+	}()
+	defer func() { close(stop); <-done }()
 
 	for i := 0; i < 20000; i++ {
 		file, err := guard.Open(target)
@@ -459,6 +464,9 @@ func TestAPathIsRefusedBeforeItIsWalked(t *testing.T) {
 	case err := <-done:
 		if err == nil {
 			t.Error("a path a hundred thousand components deep was opened")
+		} else if !errors.Is(err, pathguard.ErrTooDeep) {
+			t.Errorf("refused for some other reason, which would pass this test while the "+
+				"bound did nothing: %v", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("a path a hundred thousand components deep took more than two seconds to refuse; " +
@@ -530,5 +538,19 @@ func TestARefusalSaysWhichRuleItIs(t *testing.T) {
 	_, outsideErr := guard.Open(filepath.Join(t.TempDir(), "plan.json"))
 	if !errors.Is(outsideErr, pathguard.ErrOutsideRoots) {
 		t.Errorf("a path outside every root was refused as something else: %v", outsideErr)
+	}
+
+	// The root itself is inside the roots and is not a file. Saying it is
+	// outside them is the same false sentence, and sends a caller to widen a
+	// root that already contains what they named.
+	_, rootErr := guard.Open(root)
+	if rootErr == nil {
+		t.Fatal("the root directory was opened as a file")
+	}
+	if errors.Is(rootErr, pathguard.ErrOutsideRoots) {
+		t.Errorf("the root was reported as outside itself: %v", rootErr)
+	}
+	if !errors.Is(rootErr, pathguard.ErrIsADirectory) {
+		t.Errorf("the root was refused as something other than a directory: %v", rootErr)
 	}
 }

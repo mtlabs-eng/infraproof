@@ -330,6 +330,8 @@ func (s *Server) open(path string) (*os.File, error) {
 		case errors.Is(err, pathguard.ErrNamesAParent):
 			return nil, fmt.Errorf("%s names a parent directory; give the path to the file "+
 				"rather than a route to it", quote(path))
+		case errors.Is(err, pathguard.ErrIsADirectory):
+			return nil, fmt.Errorf("%s names a directory rather than a file", quote(path))
 		case errors.Is(err, pathguard.ErrTooDeep):
 			return nil, fmt.Errorf("%s names more directories than this server will walk",
 				quote(path))
