@@ -118,3 +118,7 @@ go run ./cmd/infraproof inspect --plan internal/terraformplan/testdata/nested-se
 
 `inspect` is a development aid: it reports addresses, actions, and which fields are unknown or
 redacted, and reaches no verdict.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
