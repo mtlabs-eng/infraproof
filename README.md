@@ -20,13 +20,14 @@ The initial product is an offline CLI. It consumes a structured intent contract 
 - [Evidence Bundle](docs/EVIDENCE-BUNDLE.md)
 - [Intent Contract](docs/INTENT-CONTRACT.md)
 - [Using it from a coding agent](docs/MCP.md)
+- [Verifying a change on a pull request](docs/PULL-REQUESTS.md)
 - [Threat model: the MCP adapter](docs/THREAT-MODEL-MCP.md)
 - [Milestones](docs/milestones/)
 - [Claude Code handoff](docs/CLAUDE-CODE-HANDOFF.md)
 
 ## Status
 
-Five milestones are implemented.
+Six milestones are implemented.
 
 **Evidence Bundle** — modelled, validated, ordered canonically, and rendered as stable JSON and
 Markdown, with an exit-code contract.
@@ -74,6 +75,17 @@ applies anything.
 | 4 | `UNKNOWN` — evidence required for a safe conclusion was unavailable |
 | 10 | invalid input or usage — not a verdict |
 | 11 | internal failure — not a verdict |
+
+## On a pull request
+
+```sh
+go run ./cmd/infraproof check --intent infra/intent.json --plan tfplan.json --format review
+```
+
+A short verdict shaped for a diff view, carrying a marker so one comment is updated rather than
+repeated. InfraProof writes it; your own CI posts it, with your own token. See
+[docs/PULL-REQUESTS.md](docs/PULL-REQUESTS.md) and the workflow in
+[.github/workflows/infraproof.yml](.github/workflows/infraproof.yml).
 
 ## From a coding agent
 

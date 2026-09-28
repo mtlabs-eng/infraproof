@@ -29,7 +29,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	flags.Usage = func() {}
 	intentPath := flags.String("intent", "", "path to an intent contract JSON file")
 	planPath := flags.String("plan", "", "path to a Terraform or OpenTofu plan JSON file")
-	format := flags.String("format", "json", "output format: json or markdown")
+	format := flags.String("format", "json", "output format: json, markdown or review")
 
 	if err := flags.Parse(args); err != nil {
 		// Asking a command to describe itself is not a usage error, and the
@@ -54,7 +54,8 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 
 	renderer, ok := renderers[*format]
 	if !ok {
-		return usageError(stderr, fmt.Sprintf("--format is %q, want json or markdown", *format))
+		return usageError(stderr,
+			fmt.Sprintf("--format is %q, want json, markdown or review", *format))
 	}
 
 	bundle, err := verify.FromFiles(*intentPath, *planPath)
@@ -87,7 +88,12 @@ const checkUsage = `Usage:
 
   --intent   path to an intent contract JSON file
   --plan     path to a Terraform or OpenTofu plan JSON file
-  --format   output format: json (default) or markdown
+  --format   output format: json (default), markdown, or review
+
+             review is shaped for a pull request comment: the decision, what it
+             violates, and what could not be determined, short enough to read in
+             a diff. It carries a marker so a workflow can update one comment
+             rather than append one per push.
 
 Both files are read locally. The command reaches no network, needs no cloud
 account, and never applies anything. The intent contract must be JSON; YAML is
@@ -107,6 +113,7 @@ Exit codes:
 var renderers = map[string]func(evidence.Bundle) ([]byte, error){
 	"json":     render.JSON,
 	"markdown": render.Markdown,
+	"review":   render.Review,
 }
 
 // inputError reports unusable input.

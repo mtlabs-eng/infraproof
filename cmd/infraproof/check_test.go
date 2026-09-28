@@ -761,3 +761,76 @@ func TestTwoContractsAtOnePathAreTellableApart(t *testing.T) {
 		t.Errorf("intent digest = %q, want a sha256 digest", bundle.Subject.IntentDigest)
 	}
 }
+
+// TestEveryFormatReachesOneVerdict keeps a third output from becoming a third
+// answer.
+//
+// Each format is a different reader -- a pipeline, a person, a reviewer with a
+// diff open -- and the one nobody diffs against the others is the one that
+// drifts. The exit code is the decision, so it must not depend on how the
+// answer was printed.
+func TestEveryFormatReachesOneVerdict(t *testing.T) {
+	plans := map[string]string{
+		"a blocked plan": blockedPlan,
+		"a passing plan": passingPlan,
+	}
+
+	for name, plan := range plans {
+		t.Run(name, func(t *testing.T) {
+			intentPath := write(t, "intent.json", privateIntent)
+			planPath := write(t, "plan.json", plan)
+
+			codes := map[string]int{}
+			outputs := map[string]string{}
+			for _, format := range []string{"json", "markdown", "review"} {
+				code, stdout, stderr := check(t,
+					"--intent", intentPath, "--plan", planPath, "--format", format)
+				if stdout == "" {
+					t.Fatalf("%s produced nothing: %s", format, stderr)
+				}
+				codes[format] = code
+				outputs[format] = stdout
+			}
+
+			if codes["json"] != codes["markdown"] || codes["json"] != codes["review"] {
+				t.Errorf("three formats, three exit codes: %v", codes)
+			}
+
+			var bundle evidence.Bundle
+			if err := json.Unmarshal([]byte(outputs["json"]), &bundle); err != nil {
+				t.Fatalf("the JSON is not a bundle: %v", err)
+			}
+			for _, format := range []string{"markdown", "review"} {
+				if !strings.Contains(outputs[format], string(bundle.Decision)) {
+					t.Errorf("%s does not say the decision %q", format, bundle.Decision)
+				}
+				for _, finding := range bundle.Findings {
+					if !strings.Contains(outputs[format], finding.RuleID) {
+						t.Errorf("%s omits the finding %q", format, finding.RuleID)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestAnUnknownFormatIsRefusedByName keeps the list in the error and the list
+// in the code the same one.
+func TestAnUnknownFormatIsRefusedByName(t *testing.T) {
+	code, stdout, stderr := check(t,
+		"--intent", write(t, "intent.json", privateIntent),
+		"--plan", write(t, "plan.json", passingPlan),
+		"--format", "yaml")
+
+	if code != evidence.ExitInvalidInput {
+		t.Fatalf("exit = %d, want %d", code, evidence.ExitInvalidInput)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing", stdout)
+	}
+	for _, format := range []string{"json", "markdown", "review"} {
+		if !strings.Contains(stderr, format) {
+			t.Errorf("the error does not name the %q format: %s", format, stderr)
+		}
+	}
+}

@@ -1,0 +1,117 @@
+# Verify a Terraform or OpenTofu change against a declared intent contract, and
+# say so on the pull request.
+#
+# InfraProof reaches no network and holds no credential. It reads two files and
+# writes a verdict to standard output; posting that verdict is this workflow's
+# job, done with the token GitHub already gives the run. That division is the
+# point: a verifier holding a token to write on a pull request is a verifier
+# that can be made to write something else.
+#
+# Copy this file into .github/workflows/ and adjust the two paths under "env".
+
+name: InfraProof
+
+on:
+  pull_request:
+    paths:
+      - "**.tf"
+      - "**.tfvars"
+
+permissions:
+  # To read the code being verified.
+  contents: read
+  # To write one comment carrying the verdict. Nothing else here needs it, and
+  # nothing else is granted.
+  pull-requests: write
+
+env:
+  # The directory holding the Terraform or OpenTofu configuration.
+  WORKING_DIRECTORY: infra
+  # The intent contract this change is verified against.
+  INTENT_CONTRACT: infra/intent.json
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      # InfraProof does not run Terraform, so the workflow does. A plan needs
+      # whatever credentials your providers need; InfraProof never sees them.
+      - name: Produce the plan
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -out=tfplan.binary
+          terraform show -json tfplan.binary > tfplan.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build InfraProof
+        run: go build -o infraproof ./cmd/infraproof
+
+      # The verdict, twice: once shaped for a comment, once as the Evidence
+      # Bundle, which carries everything the comment leaves out.
+      #
+      # continue-on-error so that the comment is posted before the job fails on
+      # the verdict. The exit code is kept and applied at the end, so a BLOCK
+      # still fails the check.
+      - name: Verify
+        id: verify
+        continue-on-error: true
+        run: |
+          set +e
+          ./infraproof check \
+            --intent "${INTENT_CONTRACT}" \
+            --plan "${WORKING_DIRECTORY}/tfplan.json" \
+            --format review > review.md
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          ./infraproof check \
+            --intent "${INTENT_CONTRACT}" \
+            --plan "${WORKING_DIRECTORY}/tfplan.json" \
+            --format json > evidence-bundle.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infraproof-evidence-bundle
+          path: evidence-bundle.json
+
+      # One comment per plan, updated rather than repeated. The marker is the
+      # first line of the review and identifies the plan and the contract, so a
+      # second push to the same change edits the same comment.
+      # One comment per plan, updated rather than repeated. The marker is the
+      # first line of the review and identifies the plan and the contract, so a
+      # second push to the same change edits the same comment instead of adding
+      # another.
+      - name: Say so on the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          marker="$(head -n 1 review.md)"
+          existing="$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"$marker\")) | .id] | first")"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$existing" \
+              -F body=@review.md > /dev/null
+          else
+            gh pr comment "$PR" --body-file review.md
+          fi
+
+      # The verdict decides the check. 0 PASS, 2 WARN, 3 BLOCK, 4 UNKNOWN,
+      # 10 invalid input, 11 internal failure.
+      - name: Apply the verdict
+        run: |
+          case "${{ steps.verify.outputs.exit }}" in
+            0) echo "PASS" ;;
+            2) echo "WARN: a human needs to look at this" ;;
+            *) echo "InfraProof exited ${{ steps.verify.outputs.exit }}"; exit 1 ;;
+          esac
