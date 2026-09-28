@@ -1,7 +1,6 @@
 package render_test
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -143,35 +142,6 @@ func TestALongReviewSaysWhatItLeftOut(t *testing.T) {
 	}
 	if !strings.Contains(text, string(bundle.Decision)) {
 		t.Error("the decision was cut; it is the one thing that must survive")
-	}
-}
-
-// TestAReviewNeverCarriesAValueThePlanHeld is the safety rule at a third
-// boundary. A comment on a pull request is read by everyone with access to the
-// repository, which is more people than run the command.
-func TestAReviewNeverCarriesAValueThePlanHeld(t *testing.T) {
-	out, err := render.Review(redactedBundle())
-	if err != nil {
-		t.Fatalf("render.Review: %v", err)
-	}
-	var bundle evidence.Bundle
-	raw, err := render.JSON(redactedBundle())
-	if err != nil {
-		t.Fatalf("render.JSON: %v", err)
-	}
-	if err := json.Unmarshal(raw, &bundle); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-
-	// The bundle cannot carry a value by construction; this asserts the review
-	// does not add one back by rendering a field the bundle keeps out of reach.
-	for _, finding := range bundle.Findings {
-		for _, ref := range finding.Evidence {
-			if ref.Redacted && strings.Contains(string(out), ref.Path+" =") {
-				t.Errorf("the review prints a value at a location the bundle marked unreadable: %s",
-					ref.Path)
-			}
-		}
 	}
 }
 

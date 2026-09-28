@@ -82,12 +82,25 @@ func TestTheWorkflowCanObtainTheThingItRuns(t *testing.T) {
 	if strings.Contains(text, "go build -o infraproof ./cmd/infraproof") {
 		t.Error("the workflow builds a package that is not in the repository it runs in")
 	}
-	if !strings.Contains(text, "go install github.com/mtlabs-eng/infraproof/cmd/infraproof@") {
-		t.Error("the workflow does not fetch the tool it then runs")
-	}
 	if strings.Contains(text, "./infraproof check") {
 		t.Error("the workflow runs a binary from the working directory, which is the user's " +
 			"repository rather than this one")
+	}
+
+	// It has to obtain the tool from somewhere that exists, and say which
+	// version. An unpinned install is a verdict nobody can reproduce, and a
+	// pin naming something that does not resolve is a step that never runs --
+	// which is how this failed twice, for two different reasons.
+	obtains := strings.Contains(text, "repository: mtlabs-eng/infraproof") ||
+		strings.Contains(text, "go install github.com/mtlabs-eng/infraproof/cmd/infraproof@")
+	if !obtains {
+		t.Error("the workflow does not obtain the tool it then runs")
+	}
+	if strings.Contains(text, "repository: mtlabs-eng/infraproof") && !strings.Contains(text, "ref:") {
+		t.Error("the workflow checks out the tool without naming a version")
+	}
+	if strings.Contains(text, "cmd/infraproof@main") {
+		t.Error("the workflow installs a floating branch; the comment beside it says to pin")
 	}
 }
 
@@ -157,11 +170,24 @@ func TestTheWorkflowAsksForNoMoreThanItNeeds(t *testing.T) {
 		}
 	}
 
-	// The only secret it may name is the token the run is given. Anything else
-	// is a credential this build has no reason to be near.
-	if strings.Contains(text, "secrets.") {
-		t.Error("the workflow reads a secret; the verifier needs none and the comment needs " +
-			"only the token the run already has")
+	// One secret, and only to fetch the tool while its repository is private.
+	// The verifier needs none, the comment needs only the token the run already
+	// has, and a second secret here would be a credential this build has no
+	// reason to be near -- which is asserted per step below as well as by
+	// counting.
+	var secrets int
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "secrets.") && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			secrets++
+			if !strings.Contains(line, "secrets.INFRAPROOF_READ_TOKEN") {
+				t.Errorf("the workflow reads a secret other than the one that fetches the "+
+					"tool: %s", strings.TrimSpace(line))
+			}
+		}
+	}
+	if secrets > 1 {
+		t.Errorf("the workflow reads %d secrets; fetching the tool needs one and nothing "+
+			"else needs any", secrets)
 	}
 }
 

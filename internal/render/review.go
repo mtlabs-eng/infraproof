@@ -37,7 +37,10 @@ func Review(b evidence.Bundle) ([]byte, error) {
 	var out bytes.Buffer
 	// First, so a workflow can find it by reading the start of a comment.
 	fmt.Fprintf(&out, "<!-- %s -->\n\n", Marker(c.Subject))
-	fmt.Fprintf(&out, "### InfraProof: %s\n\n%s\n", c.Decision, prose(c.Summary))
+	// The summary is prose the contract bounds only to one line, so it is cut
+	// here: a bound that holds for every field but one is not a bound, and the
+	// one it does not hold for is the field printed before anything else.
+	fmt.Fprintf(&out, "### InfraProof: %s\n\n%s\n", c.Decision, prose(cut(c.Summary, maxSummaryInReview)))
 
 	if len(c.Findings) > 0 {
 		out.WriteString("\n| | Rule | Resource | Claim |\n| --- | --- | --- | --- |\n")
@@ -100,12 +103,29 @@ func Review(b evidence.Bundle) ([]byte, error) {
 // some characters fivefold, so the one field a caller controls is cut here
 // rather than allowed to carry the comment past its bound.
 func closing(c evidence.Bundle) string {
-	source := inlineText(c.Subject.IntentSource)
-	if len(source) > maxSourceInReview {
-		source = source[:maxSourceInReview] + "…"
+	// Bounded first, on a character boundary, and set in code afterwards.
+	//
+	// Escaping it as prose was wrong twice over: a code span does no entity or
+	// backslash processing, so "a&b[1]" was shown as "a&amp;b\[1]" -- a path
+	// that does not exist, and one the long report spells correctly. And the
+	// bound was measured over the escaped text, so the cut landed in a
+	// different place than it reads, and on a byte rather than a character: a
+	// three-byte rune split across it left the comment invalid UTF-8.
+	return fmt.Sprintf("\nPlan %s, verified offline against %s.\n",
+		code(short(c.Subject.PlanDigest)), code(cut(c.Subject.IntentSource, maxSourceInReview)))
+}
+
+// cut shortens a value to at most n characters, on a character boundary, and
+// says that it did.
+func cut(text string, n int) string {
+	count := 0
+	for at := range text {
+		count++
+		if count > n {
+			return text[:at] + "…"
+		}
 	}
-	return fmt.Sprintf("\nPlan `%s`, verified offline against `%s`.\n",
-		short(c.Subject.PlanDigest), source)
+	return text
 }
 
 // tailFor is the room the rest of the rendering needs, measured rather than
@@ -116,10 +136,12 @@ func tailFor(c evidence.Bundle) int {
 }
 
 const (
-	// maxSourceInReview bounds the contract path the closing line prints. Long
-	// enough for any path a person types, short of one written to break the
-	// bound.
-	maxSourceInReview = 200
+	// maxSourceInReview bounds the contract path the closing line prints, and
+	// maxSummaryInReview the sentence above it. Both are fields nothing else
+	// bounds: the bundle contract asks a summary to be one line and a source to
+	// be non-empty, and neither to be short.
+	maxSourceInReview  = 200
+	maxSummaryInReview = 2000
 	// maxNoticeBytes is room for the two notices: what was omitted, and what
 	// could not be determined without preventing a pass.
 	maxNoticeBytes = 400

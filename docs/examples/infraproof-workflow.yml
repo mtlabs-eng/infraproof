@@ -68,11 +68,27 @@ jobs:
         with:
           go-version: "1.26"
 
-      # InfraProof is not in your repository, so it is fetched and built here.
-      # Pin the version: a verifier that changes under you is a verdict you
-      # cannot reproduce.
-      - name: Install InfraProof
-        run: go install github.com/mtlabs-eng/infraproof/cmd/infraproof@main
+      # InfraProof is not in your repository, so it is obtained here.
+      #
+      # While the InfraProof repository is private this is a checkout and a
+      # build, and it needs a token that can read that repository -- which means
+      # adopting this is copying one file *and* adding one secret. Once the
+      # module is published the whole block collapses to one line:
+      #
+      #   - run: go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v1.2.3
+      #
+      # Either way, pin it. A verifier that changes under you is a verdict you
+      # cannot reproduce; "main" is what this says because there is no release
+      # to name yet, and it is the first thing to change when there is.
+      - uses: actions/checkout@v4
+        with:
+          repository: mtlabs-eng/infraproof
+          ref: main
+          path: .infraproof
+          token: ${{ secrets.INFRAPROOF_READ_TOKEN }}
+
+      - name: Build InfraProof
+        run: go build -o "$RUNNER_TEMP/infraproof" ./.infraproof/cmd/infraproof
 
       # The verdict, twice: once shaped for a comment, once as the Evidence
       # Bundle, which carries everything the comment leaves out.
@@ -85,12 +101,12 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          infraproof check \
+          "$RUNNER_TEMP/infraproof" check \
             --intent "${INTENT_CONTRACT}" \
             --plan "${WORKING_DIRECTORY}/tfplan.json" \
             --format review > review.md
           echo "exit=$?" >> "$GITHUB_OUTPUT"
-          infraproof check \
+          "$RUNNER_TEMP/infraproof" check \
             --intent "${INTENT_CONTRACT}" \
             --plan "${WORKING_DIRECTORY}/tfplan.json" \
             --format json > evidence-bundle.json

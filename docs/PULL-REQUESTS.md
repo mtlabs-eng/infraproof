@@ -24,6 +24,17 @@ The workflow needs `contents: read` to see the change and `pull-requests: write`
 to leave one comment. It asks for nothing else, and a test in this repository
 fails if that block ever widens.
 
+It also needs one secret, `INFRAPROOF_READ_TOKEN`, with read access to the
+InfraProof repository — because that repository is private, so there is nothing
+to `go install`. The token fetches the tool and nothing else: the step that runs
+the verifier is given no credential at all, and a test asserts that. When the
+module is published, the checkout and build become one `go install` line and the
+secret goes away.
+
+Pin the version. The template says `ref: main` because there is no release to
+name yet; a verifier that changes under you is a verdict you cannot reproduce,
+and nothing here can check that the version you name resolves.
+
 ## What appears on the pull request
 
 One comment, replaced on each push rather than repeated — the workflow finds the
@@ -84,6 +95,14 @@ that too.
 
 If you already produce a plan JSON somewhere in your pipeline, drop the
 Terraform steps and point `--plan` at it.
+
+## One workflow per repository
+
+The workflow finds its own comment by the marker prefix, which is the same for
+every InfraProof run. Two workflows in one repository — one per environment, say
+— will therefore overwrite each other's comment and cancel each other through
+the shared concurrency group. Run one, or give each its own marker and
+concurrency group by editing both.
 
 ## Other platforms
 
