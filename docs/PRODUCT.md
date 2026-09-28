@@ -117,7 +117,8 @@ The MVP succeeds when it can:
 
 ## Future direction
 
-After the verifier proves useful, expand in this order:
+Where the product grows after the verifier proves useful, in rough order of
+dependence rather than of scheduling:
 
 1. additional storage semantics and organizational policies;
 2. databases, IAM, networking, and managed Kubernetes;
@@ -125,3 +126,10 @@ After the verifier proves useful, expand in this order:
 4. optional natural-language-to-intent conversion with human confirmation;
 5. optional customer-side live-state collectors;
 6. remediation and generation only after independent verification is trusted.
+
+The order work is actually done in is the milestone files under
+`docs/milestones/`, each of which states its own prerequisites. The two
+disagreed: this list put the MCP adapter behind two layers of resource
+semantics, while milestone 05 made it the next piece of work with milestones 01
+through 04 as its prerequisite. The milestone files govern, and this list says
+what the product becomes rather than in which order it is built.

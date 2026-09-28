@@ -19,12 +19,14 @@ The initial product is an offline CLI. It consumes a structured intent contract 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Evidence Bundle](docs/EVIDENCE-BUNDLE.md)
 - [Intent Contract](docs/INTENT-CONTRACT.md)
+- [Using it from a coding agent](docs/MCP.md)
+- [Threat model: the MCP adapter](docs/THREAT-MODEL-MCP.md)
 - [Milestones](docs/milestones/)
 - [Claude Code handoff](docs/CLAUDE-CODE-HANDOFF.md)
 
 ## Status
 
-Four milestones are implemented.
+Five milestones are implemented.
 
 **Evidence Bundle** — modelled, validated, ordered canonically, and rendered as stable JSON and
 Markdown, with an exit-code contract.
@@ -72,6 +74,18 @@ applies anything.
 | 4 | `UNKNOWN` — evidence required for a safe conclusion was unavailable |
 | 10 | invalid input or usage — not a verdict |
 | 11 | internal failure — not a verdict |
+
+## From a coding agent
+
+```sh
+go run ./cmd/infraproof mcp --root .
+```
+
+The same verification over the Model Context Protocol, on standard input and output. The server
+reads only files inside the roots it is given, and there is no default root. See
+[docs/MCP.md](docs/MCP.md) for the two tools and the Claude Code configuration, and
+[docs/THREAT-MODEL-MCP.md](docs/THREAT-MODEL-MCP.md) for what it defends against and what it does
+not.
 
 An operational failure is never a decision: a missing file or a malformed contract exits 10 and
 prints no report, because a verdict reached from inputs that could not be read would be a verdict

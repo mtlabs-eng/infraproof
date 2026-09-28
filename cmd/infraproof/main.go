@@ -2,7 +2,8 @@
 //
 // The check command compares a plan with a declared intent contract and reports
 // an Evidence Bundle. The inspect command reports what the parser understood and
-// decides nothing.
+// decides nothing. The mcp command serves the same verification to a coding
+// agent over the Model Context Protocol.
 //
 // This is the only place in the program that terminates the process.
 package main
@@ -24,6 +25,7 @@ const usage = `InfraProof verifies Terraform and OpenTofu changes against declar
 Usage:
   infraproof check --intent <path> --plan <path> [--format json|markdown]
   infraproof inspect --plan <path>
+  infraproof mcp --root <dir> [--root <dir> ...]
   infraproof --version
   infraproof --help
 
@@ -35,6 +37,10 @@ not supported in this build.
 inspect parses a plan and reports what was understood — addresses, actions, and
 which fields are unknown or redacted. It is a development aid, it reaches no
 verdict, and it never prints a value the plan marked sensitive.
+
+mcp serves the same verification to a coding agent over the Model Context
+Protocol on standard input and output. It reads only files inside the roots it
+is given and has no default root.
 
 Exit codes:
   0   PASS
@@ -74,6 +80,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runCheck(args[1:], stdout, stderr)
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
+	case "mcp":
+		return runMCP(args[1:], stdout, stderr)
 	default:
 		return usageError(stderr, fmt.Sprintf("unrecognized command or flag %q", args[0]))
 	}
