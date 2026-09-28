@@ -200,3 +200,8 @@ client, not of this server, and this server cannot enforce it.
    limits are not consistent with each other: there are files this server will
    accept and never finish.
 4. The roots are only as narrow as the operator made them.
+5. A symbolic link inside a root whose target is written as an absolute path is
+   refused, even where it names a file in the same root. Walking the path is
+   what removes the window a resolved name leaves open, and it judges a link by
+   the target as written. Accepted rather than worked around, because the
+   workaround is the defect.

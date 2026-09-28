@@ -361,3 +361,57 @@ func TestAPathThatClimbsIsRefusedRatherThanCleaned(t *testing.T) {
 		t.Error("a path that climbs was cleaned into a different one and read")
 	}
 }
+
+// TestWhichSymlinksInsideARootStillWork states a restriction rather than
+// leaving it to be discovered.
+//
+// The confinement walks the path itself instead of approving a name, which is
+// what closes the window between the two. The cost is that it judges a link by
+// the target as written: one written relative to where it sits resolves inside
+// the root and opens, and one written as an absolute path does not, even when
+// it names a file in the same root.
+//
+// That is a real refusal of a real arrangement -- a repository can hold either
+// kind. It is accepted rather than worked around, because working around it
+// means resolving the link here and handing back a name, which is the defect
+// this design exists to remove. It is documented in docs/MCP.md so a caller
+// meets it as a rule and not as a puzzle.
+func TestWhichSymlinksInsideARootStillWork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege this test does not assume")
+	}
+
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "plan.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(root, "relative")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if err := os.Symlink(real, filepath.Join(root, "absolute")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	guard, err := pathguard.New([]string{root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	file, err := guard.Open(filepath.Join(root, "relative", "plan.json"))
+	if err != nil {
+		t.Errorf("a link written relative to where it sits, naming a file in the same root, "+
+			"was refused: %v", err)
+	} else {
+		_ = file.Close()
+	}
+
+	if file, err := guard.Open(filepath.Join(root, "absolute", "plan.json")); err == nil {
+		_ = file.Close()
+		t.Error("a link written as an absolute path was followed; if that is now allowed, " +
+			"the documentation and this test should say so")
+	}
+}

@@ -102,6 +102,12 @@ OpenTofu works the same way with `tofu`.
   than that, so the two limits do not meet: see the residual risks.
 - A path naming a parent directory, such as `../plan.json`. Give the path as it
   is, not as a route to it.
+- A path through a symbolic link whose target is written as an absolute path,
+  even when that target is inside the same root. A link written relative to
+  where it sits works. This falls out of how the confinement is built: it walks
+  the path rather than resolving it and handing back a name, which is what
+  closes the window in which a file can be swapped for a link. Replacing the
+  link with a relative one, or naming the file directly, both work.
 - A YAML contract. This build reads JSON, and says so rather than failing as a
   puzzle.
 
