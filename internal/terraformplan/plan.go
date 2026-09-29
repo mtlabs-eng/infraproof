@@ -20,6 +20,27 @@ type Plan struct {
 	// config key such as "aws.west". Empty when the plan omits its
 	// configuration block, which sanitized plans often do.
 	ProviderConfigs map[string]ProviderConfig
+	// ModuleCalls holds every module call the configuration declares, keyed by
+	// its configuration address such as "module.storage.module.inner". Empty
+	// when the plan omits its configuration block.
+	//
+	// It is the only thing a plan says about where a declaration is written. A
+	// plan carries no source positions at all, so a resource inside
+	// module.storage can be found only by following that call's source; without
+	// it an address is a name and nothing more.
+	ModuleCalls map[string]ModuleCall
+}
+
+// ModuleCall is one module call the configuration declares.
+type ModuleCall struct {
+	// Address is the call's configuration address, module-qualified and without
+	// repetition keys: "module.storage", "module.storage.module.inner".
+	Address string
+	// Source is the source string exactly as the configuration wrote it. It is
+	// not interpreted here: whether it names a local directory, a registry
+	// module or a remote archive is a question for whoever resolves it, and
+	// normalizing it would be this package deciding what it means.
+	Source string
 }
 
 // ProviderConfig is one declared provider instance.
@@ -177,6 +198,20 @@ type ExpressionReference struct {
 // is what lets all of them correlate to the same referenced resource.
 func (c ResourceChange) ConfigAddress() string {
 	return stripIndexKeys(c.Address)
+}
+
+// ConfigModuleAddress returns the containing module's address as the
+// configuration block keys it: module-qualified, without count or for_each
+// keys. Empty for a resource in the root module.
+//
+// resource_changes spells a module instance module.storage["eu"], and
+// configuration keys the one call module.storage. Joining the two halves of a
+// plan therefore means dropping the keys, and it is done here rather than by
+// the caller for the reason every address operation is: a caller that wrote its
+// own would be writing a second grammar that is almost this one, and almost is
+// where the defects live.
+func (c ResourceChange) ConfigModuleAddress() string {
+	return stripIndexKeys(c.ModuleAddress)
 }
 
 // ModuleKeys returns the repetition keys of the modules containing this

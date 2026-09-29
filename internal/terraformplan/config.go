@@ -14,28 +14,32 @@ import (
 // are indistinguishable without this walk. Sanitized plans routinely omit the
 // block entirely; that loses alias information and is not an error.
 //
-// It returns the declared provider instances and, for every configured
-// resource, its provider config key and the references its arguments make.
-func parseConfiguration(document map[string]any, errs *[]error) (map[string]ProviderConfig, map[string]configResource) {
+// It returns the declared provider instances, the module calls, and for every
+// configured resource its provider config key and the references its arguments
+// make.
+func parseConfiguration(document map[string]any, errs *[]error) (map[string]ProviderConfig,
+	map[string]configResource, map[string]ModuleCall) {
+
 	raw, present := document["configuration"]
 	if !present || raw == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	configuration, ok := raw.(map[string]any)
 	if !ok {
 		*errs = append(*errs, invalid("configuration", "must be an object"))
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	configs := parseProviderConfigs(configuration, errs)
 
 	byAddress := map[string]configResource{}
+	calls := map[string]ModuleCall{}
 	if rootRaw, present := configuration["root_module"]; present && rootRaw != nil {
 		root, ok := rootRaw.(map[string]any)
 		if !ok {
 			*errs = append(*errs, invalid("configuration.root_module", "must be an object"))
 		} else {
-			walkModule("configuration.root_module", "", root, byAddress, errs)
+			walkModule("configuration.root_module", "", root, byAddress, calls, errs)
 		}
 	}
 	// A reference is only an address if the configuration declares a resource
@@ -46,7 +50,7 @@ func parseConfiguration(document map[string]any, errs *[]error) (map[string]Prov
 		resource.references = resolveReferences(resource.references, byAddress)
 		byAddress[address] = resource
 	}
-	return configs, byAddress
+	return configs, byAddress, calls
 }
 
 // configResource is what the configuration block says about one resource.
@@ -121,7 +125,9 @@ func parseProviderConfigs(configuration map[string]any, errs *[]error) map[strin
 // walkModule records the provider config key of every resource in a module and
 // descends into its module calls. Configuration addresses are module-relative,
 // so the qualified address is rebuilt on the way down.
-func walkModule(path, addressPrefix string, module map[string]any, byAddress map[string]configResource, errs *[]error) {
+func walkModule(path, addressPrefix string, module map[string]any, byAddress map[string]configResource,
+	calls map[string]ModuleCall, errs *[]error) {
+
 	if resourcesRaw, present := module["resources"]; present && resourcesRaw != nil {
 		resources, ok := resourcesRaw.([]any)
 		if !ok {
@@ -170,18 +176,27 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 	if !present || callsRaw == nil {
 		return
 	}
-	calls, ok := callsRaw.(map[string]any)
+	moduleCalls, ok := callsRaw.(map[string]any)
 	if !ok {
 		*errs = append(*errs, invalid(path+".module_calls", "must be an object"))
 		return
 	}
-	for name, callRaw := range calls {
+	for name, callRaw := range moduleCalls {
 		callPath := path + ".module_calls." + name
 		call, ok := callRaw.(map[string]any)
 		if !ok {
 			*errs = append(*errs, invalid(callPath, "must be an object"))
 			continue
 		}
+		address := joinAddress(addressPrefix, "module."+name)
+		// A call with no source is not a call with an empty source: the empty
+		// string joined onto a parent directory resolves to the parent, which
+		// would hand this module the declarations of the module that calls it.
+		// Absent stays absent.
+		if source := optionalString(call, "source", callPath+".source", errs); source != "" {
+			calls[address] = ModuleCall{Address: address, Source: source}
+		}
+
 		innerRaw, present := call["module"]
 		if !present || innerRaw == nil {
 			continue
@@ -191,7 +206,7 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 			*errs = append(*errs, invalid(callPath+".module", "must be an object"))
 			continue
 		}
-		walkModule(callPath+".module", joinAddress(addressPrefix, "module."+name), inner, byAddress, errs)
+		walkModule(callPath+".module", address, inner, byAddress, calls, errs)
 	}
 }
 
