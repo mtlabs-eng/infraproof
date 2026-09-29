@@ -96,11 +96,23 @@ func TestTheWorkflowCanObtainTheThingItRuns(t *testing.T) {
 	if !checkout && !install {
 		t.Fatal("no step obtains the tool the later steps run")
 	}
-	if install && strings.Contains(steps, "cmd/infraproof@main") {
-		t.Error("the workflow installs a floating branch; the comment beside it says to pin")
-	}
-
-	if !checkout {
+	if install {
+		// The version has to be a version. A branch or @latest is a verifier
+		// that changes under the adopter, which is a verdict nobody can
+		// reproduce -- and the comment beside the line says to pin.
+		version := after(steps, "cmd/infraproof@")
+		if !strings.HasPrefix(version, "v") || strings.Contains(version, "latest") ||
+			strings.Contains(version, "main") {
+			t.Errorf("the workflow installs %q rather than a released version", version)
+		}
+		// And what it installs is what it runs. go install writes to GOPATH/bin
+		// and puts the command's own name on the path, so an invocation naming
+		// anything else runs something nothing installed.
+		for _, invocation := range invocations(steps) {
+			if invocation != "infraproof" {
+				t.Errorf("the workflow installs the tool and runs %q", invocation)
+			}
+		}
 		return
 	}
 
@@ -125,6 +137,19 @@ func TestTheWorkflowCanObtainTheThingItRuns(t *testing.T) {
 			t.Errorf("the workflow builds %q and runs %q", built, invocation)
 		}
 	}
+}
+
+// after returns the rest of the line following the first occurrence of marker.
+func after(text, marker string) string {
+	at := strings.Index(text, marker)
+	if at < 0 {
+		return ""
+	}
+	rest := text[at+len(marker):]
+	if end := strings.IndexAny(rest, " \t\n"); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
 }
 
 // withoutComments returns the workflow with its comment lines removed, so a

@@ -79,7 +79,8 @@ applies anything.
 ## On a pull request
 
 ```sh
-go run ./cmd/infraproof check --intent infra/intent.json --plan tfplan.json --format review
+go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.1.0
+infraproof check --intent infra/intent.json --plan tfplan.json --format review
 ```
 
 A short verdict shaped for a diff view, carrying a marker so one comment is updated rather than
