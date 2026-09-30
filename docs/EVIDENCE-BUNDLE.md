@@ -8,7 +8,7 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "decision": "BLOCK",
   "summary": "The requested private storage change enables public access.",
   "subject": {
@@ -38,7 +38,11 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
       "resource": {
         "address": "aws_s3_bucket.assets",
         "provider": "registry.terraform.io/hashicorp/aws",
-        "cloud": "aws"
+        "cloud": "aws",
+        "location": {
+          "file": "main.tf",
+          "line": 6
+        }
       },
       "expected": {
         "path": "object_storage.public_access",
@@ -54,7 +58,11 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
           "source": "terraform_plan",
           "resource_address": "aws_s3_bucket.assets",
           "path": "resource_changes[].change.after",
-          "redacted": false
+          "redacted": false,
+          "location": {
+            "file": "main.tf",
+            "line": 7
+          }
         }
       ],
       "remediation": "Disable public access using the provider-supported controls."
@@ -85,6 +93,10 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
 - Raw sensitive values never appear.
 - Free-text prose is a single line. `summary`, `claim`, `remediation`, and `reason` must not contain a line break. Prose is rendered into documents whose structure is expressed by line breaks and leading characters, so a break in prose would let a claim forge a heading, a list item, or a table row in a report a human is expected to trust. Constraining it here rather than in one renderer keeps the guarantee for every present and future output format.
 - A value marked `REDACTED`, `UNKNOWN`, or `ABSENT` carries no value. Only a `KNOWN` fact has a value at all, so an unavailable or sensitive field cannot be presented as one.
+- A `location` is optional everywhere it appears, and says where a declaration is written: a path relative to the configuration directory the caller supplied, and a 1-based line. It is present only when a configuration directory was given and the declaration found there matches the address the finding is about. A plan carries no source positions, and nothing ties a plan to the files that produced it, so a location that was merely plausible is worse than none.
+- A `location` is never load-bearing. No decision, disposition or exit code may depend on whether one was found, or a verdict would change when a file moved.
+- A `location` carries a path and a line and no text from the file. A `.tf` file holds secrets more often than a plan does.
+- A location path is relative, uses forward slashes, has no parent segment and is already in cleaned form. An absolute path would describe the machine the tool ran on rather than the change.
 - Evidence records a location, never a value. An evidence reference has no value field, so raw source data cannot travel through evidence.
 - `plan_digest` is calculated over the exact input bytes and allows correlation without embedding the plan.
 - `intent_digest` is the same over the intent contract. A path names where a contract was read from, not which contract it was, so without it two different contracts at one path produce identical evidence.
@@ -152,7 +164,7 @@ Exact codes are part of the public interface and require tests before release.
 
 ## Compatibility
 
-- Minor `1.x` additions must be backward-compatible. `intent_digest` arrived in `1.1`: a bundle declaring an earlier minor version predates the field and is valid without it, and one carrying the field must carry a well-formed one whatever version it declares.
+- Minor `1.x` additions must be backward-compatible. `location` arrived in `1.2`, on `resource` and on each evidence reference; a bundle of any version is valid without it. `intent_digest` arrived in `1.1`: a bundle declaring an earlier minor version predates the field and is valid without it, and one carrying the field must carry a well-formed one whatever version it declares.
 - Consumers must ignore unknown fields within the same major version.
 - Breaking field or semantic changes require a new major version.
 

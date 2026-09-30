@@ -217,6 +217,15 @@ func canonicalEvidence(refs []EvidenceRef) []EvidenceRef {
 	if out == nil {
 		out = []EvidenceRef{}
 	}
+	// Clone is shallow, and a reference carries a pointer. Two bundles sharing
+	// one location is a copy a caller can change through.
+	for i := range out {
+		out[i].Location = cloneLocation(out[i].Location)
+	}
+	// Location is deliberately not an ordering key. References alike but for
+	// where they are written keep the order they arrived in, which is the order
+	// a previous canonical form put them in: locating a reference must not move
+	// it.
 	slices.SortStableFunc(out, compareEvidence)
 	return out
 }
@@ -263,6 +272,15 @@ func cloneResource(r *Resource) *Resource {
 		return nil
 	}
 	v := *r
+	v.Location = cloneLocation(r.Location)
+	return &v
+}
+
+func cloneLocation(l *Location) *Location {
+	if l == nil {
+		return nil
+	}
+	v := *l
 	return &v
 }
 

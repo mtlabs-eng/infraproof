@@ -109,3 +109,20 @@ func TestModuleCallSourceIsValidatedAtTheBoundary(t *testing.T) {
 		t.Fatalf("error %q should name the field", err.Error())
 	}
 }
+
+// TestModuleCallsRecordTheirCaller covers what resolving a module to a directory
+// needs and an address cannot give without being parsed. module.storage.module
+// .inner is reached by following module.storage first, and the walk that read
+// the calls already knew which one that was.
+func TestModuleCallsRecordTheirCaller(t *testing.T) {
+	plan := parseFixture(t, "real-terraform-1.14")
+
+	outer, present := plan.ModuleCalls["module.storage"]
+	if !present || outer.Parent != "" {
+		t.Fatalf("module.storage parent = %q, want the root", outer.Parent)
+	}
+	inner, present := plan.ModuleCalls["module.storage.module.inner"]
+	if !present || inner.Parent != "module.storage" {
+		t.Fatalf("module.storage.module.inner parent = %q, want module.storage", inner.Parent)
+	}
+}

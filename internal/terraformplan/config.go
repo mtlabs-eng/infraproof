@@ -194,7 +194,7 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 		// would hand this module the declarations of the module that calls it.
 		// Absent stays absent.
 		if source := optionalString(call, "source", callPath+".source", errs); source != "" {
-			calls[address] = ModuleCall{Address: address, Source: source}
+			calls[address] = ModuleCall{Address: address, Parent: addressPrefix, Source: source}
 		}
 
 		innerRaw, present := call["module"]

@@ -3,6 +3,7 @@ package evidence
 import (
 	"errors"
 	"fmt"
+	gopath "path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -280,6 +281,7 @@ func validateFinding(path string, f Finding) []error {
 		if !f.Resource.Cloud.Valid() {
 			errs = append(errs, violation(path+".resource.cloud", "unrecognized cloud %q", string(f.Resource.Cloud)))
 		}
+		errs = append(errs, validateLocation(path+".resource.location", f.Resource.Location)...)
 	}
 
 	if f.Expected != nil {
@@ -361,6 +363,7 @@ func validateEvidence(parent string, refs []EvidenceRef) []error {
 				errs = append(errs, err)
 			}
 		}
+		errs = append(errs, validateLocation(path+".location", ref.Location)...)
 	}
 
 	return errs
@@ -517,6 +520,52 @@ func isPlainNumber(s string) bool {
 	}
 	for _, r := range s {
 		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// validateLocation holds a location to what it claims to be: somewhere inside
+// the configuration directory the caller supplied.
+//
+// An absolute path says where that directory is on the machine the tool ran on,
+// which is a fact about the runner and not about the change. A parent segment
+// says the declaration is outside the directory, which nothing in this build
+// reads. Both are refused rather than normalized: a location is a claim, and one
+// that has to be repaired before it can be read was not the claim that was made.
+func validateLocation(path string, l *Location) []error {
+	if l == nil {
+		return nil
+	}
+
+	var errs []error
+	if !relativeFilePath(l.File) {
+		errs = append(errs, violation(path+".file",
+			"must be a path inside the configuration directory, written with forward slashes and no parent segment, got %q", l.File))
+	}
+	if err := validateSingleLine(path+".file", l.File); err != nil {
+		errs = append(errs, err)
+	}
+	if l.Line < 1 {
+		errs = append(errs, violation(path+".line", "must be a 1-based line number, got %d", l.Line))
+	}
+	return errs
+}
+
+// relativeFilePath reports whether a path names a file inside the directory it
+// is relative to, in the one spelling this contract emits.
+//
+// Requiring the cleaned form rather than cleaning it is what makes the check one
+// question: "a//b", "./a" and "a/b/../c" are all refused as written, so there is
+// no second spelling for a consumer to have to handle, and nothing here has to
+// decide what an unusual one meant.
+func relativeFilePath(file string) bool {
+	if strings.ContainsRune(file, '\\') || strings.HasPrefix(file, "/") || file != gopath.Clean(file) || file == "." {
+		return false
+	}
+	for _, segment := range strings.Split(file, "/") {
+		if segment == ".." {
 			return false
 		}
 	}

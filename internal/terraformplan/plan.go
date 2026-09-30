@@ -36,6 +36,14 @@ type ModuleCall struct {
 	// Address is the call's configuration address, module-qualified and without
 	// repetition keys: "module.storage", "module.storage.module.inner".
 	Address string
+	// Parent is the address of the module that makes this call, empty when the
+	// root module does.
+	//
+	// It is recorded rather than derived, because deriving it means taking
+	// "module.storage" off the front of "module.storage.module.inner" -- and a
+	// module name is a repetition key away from being a string that no prefix
+	// rule reads correctly. The walk that found the call already knew.
+	Parent string
 	// Source is the source string exactly as the configuration wrote it. It is
 	// not interpreted here: whether it names a local directory, a registry
 	// module or a remote archive is a question for whoever resolves it, and

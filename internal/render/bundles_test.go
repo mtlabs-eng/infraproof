@@ -30,6 +30,7 @@ func contractBundle() evidence.Bundle {
 					Address:  "aws_s3_bucket.assets",
 					Provider: "registry.terraform.io/hashicorp/aws",
 					Cloud:    evidence.CloudAWS,
+					Location: &evidence.Location{File: "main.tf", Line: 6},
 				},
 				Expected: &evidence.ExpectedFact{
 					Path:  "object_storage.public_access",
@@ -40,6 +41,7 @@ func contractBundle() evidence.Bundle {
 					Source:          "terraform_plan",
 					ResourceAddress: "aws_s3_bucket.assets",
 					Path:            "resource_changes[].change.after",
+					Location:        &evidence.Location{File: "main.tf", Line: 7},
 				}},
 				Remediation: "Disable public access using the provider-supported controls.",
 			},
