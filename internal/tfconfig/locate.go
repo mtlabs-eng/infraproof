@@ -151,9 +151,20 @@ func (l *locator) evidenceAt(ref evidence.EvidenceRef) *evidence.Location {
 }
 
 // at builds a location from a directory relative to the configuration root, a
-// file name inside it, and a line.
+// file name inside it, and a line -- and reports none when the contract cannot
+// carry the result.
+//
+// The names come from a filesystem, and the contract holds a location to a path
+// it can spell. Composing one it refuses makes the bundle invalid after the
+// verdict has been reached, which turns a file called "we\\ird.tf" into an
+// internal failure and no report at all for a change that blocks. The rule is
+// asked of the package that owns it rather than restated here.
 func at(dir, file string, line int) *evidence.Location {
-	return &evidence.Location{File: path.Join(dir, file), Line: line}
+	location := &evidence.Location{File: path.Join(dir, file), Line: line}
+	if !location.Valid() {
+		return nil
+	}
+	return location
 }
 
 // find returns the one declaration matching a plan address.

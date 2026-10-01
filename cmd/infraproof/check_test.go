@@ -1014,3 +1014,45 @@ func documentedArgumentsAfter(t *testing.T, flag string) []string {
 		return arguments
 	}
 }
+
+// TestAFileNameCannotCostTheVerdict covers through the whole command what a
+// location must never do. The configuration directory's file names belong to
+// whoever wrote the repository being verified; a name this build cannot put in
+// an Evidence Bundle has to cost the location and nothing else.
+func TestAFileNameCannotCostTheVerdict(t *testing.T) {
+	_, plan := configuredFixture(t)
+	declaration := "resource \"aws_s3_bucket\" \"assets\" {\n  bucket = \"assets\"\n}\n\n" +
+		"resource \"aws_s3_bucket_acl\" \"assets\" {\n  bucket = aws_s3_bucket.assets.id\n  acl    = \"public-read\"\n}\n"
+
+	for _, name := range []string{`we\ird.tf`, "we\nird.tf"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, name), []byte(declaration), 0o600); err != nil {
+				t.Skipf("this filesystem refuses the name: %v", err)
+			}
+
+			code, stdout, stderr := check(t,
+				"--intent", write(t, "intent.json", privateIntent),
+				"--plan", plan,
+				"--config", root)
+
+			if code != evidence.ExitBlock {
+				t.Fatalf("exit = %d, want %d (a file name decided the verdict)\nstderr: %s",
+					code, evidence.ExitBlock, stderr)
+			}
+			if stdout == "" {
+				t.Fatal("a blocking change produced no report")
+			}
+			var bundle evidence.Bundle
+			if err := json.Unmarshal([]byte(stdout), &bundle); err != nil {
+				t.Fatalf("output is not a bundle: %v", err)
+			}
+			if err := bundle.Validate(); err != nil {
+				t.Fatalf("the report does not satisfy its own contract: %v", err)
+			}
+			if location := bundle.Findings[0].Resource.Location; location != nil {
+				t.Fatalf("a name the contract refuses was reported as %+v", location)
+			}
+		})
+	}
+}

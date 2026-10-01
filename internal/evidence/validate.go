@@ -571,3 +571,21 @@ func relativeFilePath(file string) bool {
 	}
 	return true
 }
+
+// Valid reports whether this location is one the contract can carry.
+//
+// It exists for the producer rather than for the validation above, which has to
+// say which rule a location broke. A producer composes a location out of a
+// directory entry's name and a module's source, and the file names in a
+// configuration directory belong to whoever wrote that repository: a name this
+// contract refuses has to cost the location and nothing else.
+//
+// It was not here at first, and the cost of that was exactly what the shape of
+// this build is meant to prevent. A file called "we\\ird.tf" was composed into a
+// location anyway, the bundle became invalid after the verdict had been reached,
+// the renderer refused it, and a change that blocks produced an internal failure
+// and no report. A rule a producer cannot ask about is a rule a producer will
+// restate, or ignore.
+func (l Location) Valid() bool {
+	return relativeFilePath(l.File) && !strings.ContainsAny(l.File, "\r\n") && l.Line >= 1
+}

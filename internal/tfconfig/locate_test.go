@@ -556,3 +556,84 @@ func TestAcceptsAConfigurationDirectoryNamedThroughAParent(t *testing.T) {
 
 	at(t, finding.Resource.Location, "main.tf", 11)
 }
+
+// hostileNames are file names a filesystem accepts and the Evidence Bundle
+// contract does not. A backslash is an ordinary byte in a name on Unix, and so
+// is a line break.
+func hostileNames() map[string]string {
+	return map[string]string{
+		"backslash":       `we\ird.tf`,
+		"line feed":       "we\nird.tf",
+		"carriage return": "we\rird.tf",
+	}
+}
+
+// TestAFileNameTheContractRefusesIsNotALocation covers the one promise this
+// milestone cannot break: a location may not change a verdict.
+//
+// A location is composed from a directory entry's name, and the contract holds
+// that field to a path it can spell. A name the contract refuses used to be
+// composed anyway, which made the bundle invalid after the verdict was decided --
+// so a renderer refused it, the command reported an internal failure, and a
+// change that blocks produced no report at all. The file names in a
+// configuration directory are not this build's to choose.
+func TestAFileNameTheContractRefusesIsNotALocation(t *testing.T) {
+	plan := loadPlan(t, "testdata", "generated", "plan.json")
+	declaration := "resource \"terraform_data\" \"root\" {\n  input = \"x\"\n}\n"
+
+	for name, file := range hostileNames() {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, file), []byte(declaration), 0o600); err != nil {
+				t.Skipf("this filesystem refuses the name: %v", err)
+			}
+
+			// annotate validates the bundle it gets back, which is the assertion
+			// that matters: an unspellable location must not be composed.
+			finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
+
+			if finding.Resource.Location != nil {
+				t.Fatalf("a name the contract refuses was reported as %+v", finding.Resource.Location)
+			}
+		})
+	}
+}
+
+// TestADirectoryNameTheContractRefusesIsNotALocation covers the same thing one
+// level up: the path is composed from the module directory as well, and a module
+// source naming a directory with a line break in it is a path the contract
+// refuses just as firmly.
+func TestADirectoryNameTheContractRefusesIsNotALocation(t *testing.T) {
+	root := t.TempDir()
+	module := "mod\nule"
+	if err := os.MkdirAll(filepath.Join(root, module), 0o700); err != nil {
+		t.Skipf("this filesystem refuses the name: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, module, "main.tf"),
+		[]byte("resource \"terraform_data\" \"x\" {\n  input = \"x\"\n}\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	plan := terraformplan.Plan{
+		FormatVersion: "1.2",
+		ResourceChanges: []terraformplan.ResourceChange{{
+			Address:       "module.shared.terraform_data.x",
+			ModuleAddress: "module.shared",
+			Mode:          terraformplan.ModeManaged,
+			Type:          "terraform_data",
+			Name:          "x",
+		}},
+		ModuleCalls: map[string]terraformplan.ModuleCall{
+			"module.shared": {Address: "module.shared", Source: "./" + module},
+		},
+	}
+
+	finding := annotate(t, about(
+		"module.shared.terraform_data.x",
+		"module.shared.terraform_data.x",
+		"input"), plan, root)
+
+	if finding.Resource.Location != nil {
+		t.Fatalf("a directory name the contract refuses was reported as %+v", finding.Resource.Location)
+	}
+}
