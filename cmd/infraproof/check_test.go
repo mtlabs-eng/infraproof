@@ -961,3 +961,56 @@ func TestHelpDescribesConfig(t *testing.T) {
 		t.Fatalf("help does not mention --config:\n%s", stdout.String())
 	}
 }
+
+// TestTheDocumentedConfigFlowWorks keeps the second documented command runnable,
+// for the reason the first one is: a README that cannot be copied is a README
+// that is wrong, and this one points at a directory that has to exist.
+func TestTheDocumentedConfigFlowWorks(t *testing.T) {
+	arguments := documentedArgumentsAfter(t, "--config")
+
+	var stdout, stderr strings.Builder
+	code := run(append([]string{"check"}, arguments...), &stdout, &stderr)
+
+	if code == evidence.ExitInvalidInput || code == evidence.ExitInternal {
+		t.Fatalf("the documented command failed with exit %d\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "main.tf") {
+		t.Fatalf("the documented --config run located nothing:\n%s", stdout.String())
+	}
+}
+
+// documentedArgumentsAfter reads the arguments of the first documented check
+// command that uses a flag.
+func documentedArgumentsAfter(t *testing.T, flag string) []string {
+	t.Helper()
+
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatalf("reading the README: %v", err)
+	}
+	rest := string(readme)
+	for {
+		_, block, found := strings.Cut(rest, "go run ./cmd/infraproof check")
+		if !found {
+			t.Fatalf("the README documents no check command using %s", flag)
+		}
+		block, rest, found = strings.Cut(block, "```")
+		if !found {
+			t.Fatal("the documented command is not in a fenced block")
+		}
+		if !strings.Contains(block, flag) {
+			continue
+		}
+		var arguments []string
+		for _, field := range strings.Fields(block) {
+			if field == "\\" {
+				continue
+			}
+			if strings.HasPrefix(field, "examples/") {
+				field = filepath.Join("..", "..", field)
+			}
+			arguments = append(arguments, field)
+		}
+		return arguments
+	}
+}

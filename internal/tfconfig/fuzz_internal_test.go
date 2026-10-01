@@ -44,6 +44,11 @@ func FuzzScan(f *testing.F) {
 		"<<\n",
 		"\"\\\n",
 		"resource \"a\" \"b\" {\r\n  x = 1\r\n}\r\n",
+		// The one the fuzzer found: a backslash before a newline swallowed the
+		// newline without counting it, and the declaration after it was reported
+		// a line early. A seed only the corpus holds is a seed the next reader
+		// loses.
+		"{\"\\\n\"}resource\"\"\"\"{}",
 	}
 	for _, seed := range seeds {
 		f.Add([]byte(seed))

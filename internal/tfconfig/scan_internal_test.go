@@ -168,6 +168,10 @@ func TestScanFailsClosed(t *testing.T) {
   bucket = "${join("
 }
 `,
+		// A backslash before a newline. HCL has no line continuation in a
+		// quoted template, and reading one as an escape consumes a newline
+		// without counting it, so every line after it is reported one too low.
+		"backslash before a newline": "{\"\\\n\"}resource \"aws_s3_bucket\" \"a\" {\n}\n",
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {

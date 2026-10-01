@@ -103,3 +103,27 @@ one.
 - No configuration file content appears in any rendering.
 - The locator is exercised against a configuration this repository ships, so the
   scan is tested against real HCL rather than against strings in a test.
+
+## Limitations of this milestone, as built
+
+- **`.tf.json` is not read.** A configuration written in JSON is a different
+  grammar, and lexing HCL while claiming to cover both is how a wrong line gets
+  reported. A declaration written there has no location.
+- **An argument is located only at the top level of its block.** An evidence
+  path's first segment is looked for — `tags` of `tags.environment` — and what is
+  inside it is not, because finding that out means evaluating the expression that
+  produced it.
+- **A nested block is located only when it carries no label.** `grant {` is an
+  attribute path a plan can name; `dynamic "grant" {` and
+  `provisioner "local-exec" {` are not, so no line is offered for them.
+- **Only the configuration directory is an error.** A module whose source this
+  build cannot resolve, a directory that is not there, a file past the size
+  bound, a declaration that does not match: each produces no location and says
+  nothing further. The bundle is not told that a scan was refused, so a reader
+  who expected a line and sees none cannot tell "not written here" from "not
+  read". That is the cost of keeping the addition unable to change a verdict.
+- **MCP is unchanged.** `verify_plan` takes a contract and a plan, as before. Its
+  guard confines the paths it is handed, and handing it a directory is a wider
+  grant than this milestone examined.
+- **Reading is bounded at 512 KiB per file and 8 MiB per run.** Past either,
+  nothing more is read and nothing more is located.

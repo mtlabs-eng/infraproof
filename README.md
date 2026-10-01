@@ -64,8 +64,33 @@ go run ./cmd/infraproof check \
   --format markdown
 ```
 
-Both files are read locally. The command reaches no network, needs no cloud account, and never
+Every file is read locally. The command reaches no network, needs no cloud account, and never
 applies anything.
+
+### Saying where
+
+A finding names `aws_s3_bucket_acl.assets["prod"]`; you wrote `main.tf`. Add the configuration
+directory and it also says which file and line:
+
+```sh
+go run ./cmd/infraproof check \
+  --intent examples/intent.json \
+  --plan examples/tfplan.json \
+  --config examples/infra \
+  --format markdown
+```
+
+A plan carries no source positions at all, so the line is found in the `.tf` files — and nothing ties
+a plan to the files that produced it. So a line is reported only when the declaration found there is
+the one the plan names, by kind, type and name, in the directory that plan's own module calls resolve
+to. A declaration renamed, moved or deleted since the plan was made carries no line rather than the
+nearest one, because a line that is merely plausible sends you to the wrong code with the tool's
+authority behind it.
+
+There is no default directory: guessing it would be a guess, and a wrong guess is wrong lines.
+Without the flag nothing is read and no output changes. Nothing a location says can change a verdict,
+and no content from a configuration file appears anywhere in the output — a location is a path and a
+line.
 
 | Exit | Meaning |
 | --- | --- |

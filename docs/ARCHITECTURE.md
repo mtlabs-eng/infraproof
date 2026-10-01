@@ -157,6 +157,7 @@ Planned Go packages:
 cmd/infraproof
 internal/intent
 internal/terraformplan
+internal/tfconfig
 internal/model
 internal/providers/aws
 internal/providers/azure
@@ -168,6 +169,8 @@ internal/render
 ```
 
 Provider packages may depend on `model`. The policy engine depends on `model` and intent types. Core packages must not import provider packages, CLI packages, MCP code, or LLM clients.
+
+`internal/tfconfig` reads Terraform configuration to say where a declaration is written. It is the only package that reads a `.tf` file, it reads nothing outside the directory the caller supplies, and neither `policy` nor `model` may import it: a rule that could reach the filesystem would be a rule whose verdict changed when a file moved. It depends on `terraformplan` for the identity of each declaration, because deriving one from an address text would be a second grammar almost the same as the first.
 
 ## Testing strategy
 

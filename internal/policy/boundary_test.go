@@ -302,3 +302,52 @@ func subpackagesOf(t *testing.T, pkg string) map[string]bool {
 	}
 	return found
 }
+
+// TestNoRuleReachesTheFilesystem keeps the layer that decides away from the
+// layer that reads configuration.
+//
+// internal/tfconfig reads .tf files to say where a declaration is written. A
+// rule that could reach it would be a rule whose verdict could depend on what a
+// file says now, and the milestone that added locations turns on them never being
+// load-bearing: a verdict that changed when a file moved would not be a verdict
+// about the plan. The check is transitive, for the reason the provider one is.
+func TestNoRuleReachesTheFilesystem(t *testing.T) {
+	const forbidden = "github.com/mtlabs-eng/infraproof/internal/tfconfig"
+
+	for _, pkg := range []string{
+		"github.com/mtlabs-eng/infraproof/internal/policy",
+		"github.com/mtlabs-eng/infraproof/internal/model",
+		"github.com/mtlabs-eng/infraproof/internal/evidence",
+		"github.com/mtlabs-eng/infraproof/internal/render",
+		"github.com/mtlabs-eng/infraproof/internal/providers",
+	} {
+		t.Run(pkg, func(t *testing.T) {
+			out, err := exec.Command("go", "list", "-deps", pkg).Output()
+			if err != nil {
+				t.Fatalf("go list -deps %s: %v", pkg, err)
+			}
+			for _, dependency := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if strings.HasPrefix(dependency, forbidden) {
+					t.Fatalf("%s depends on %s", pkg, dependency)
+				}
+			}
+		})
+	}
+}
+
+// TestLocatingDependsOnNoProvider holds the new package to the same rule as the
+// rest of the core. Where a declaration is written is a question about Terraform
+// and about a filesystem; no cloud comes into it.
+func TestLocatingDependsOnNoProvider(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps",
+		"github.com/mtlabs-eng/infraproof/internal/tfconfig").Output()
+	if err != nil {
+		t.Fatalf("go list -deps: %v", err)
+	}
+	for _, dependency := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.HasPrefix(dependency, "github.com/mtlabs-eng/infraproof/internal/providers") ||
+			strings.HasPrefix(dependency, "github.com/mtlabs-eng/infraproof/internal/policy") {
+			t.Fatalf("internal/tfconfig depends on %s", dependency)
+		}
+	}
+}

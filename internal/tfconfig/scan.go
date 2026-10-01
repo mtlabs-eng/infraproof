@@ -214,6 +214,14 @@ func quoted(source []byte, i, line, depth int) (int, int, string, bool) {
 			if j >= len(source) {
 				return 0, 0, "", false
 			}
+			if source[j] == '\n' {
+				// HCL has no line continuation in a quoted template. Reading one
+				// as an escape accepts a string HCL refuses and, worse, consumes
+				// a newline without counting it -- so every line after it is
+				// reported one too low. The fuzzer found this by comparing a
+				// reported line against the text actually on it.
+				return 0, 0, "", false
+			}
 		case '\n':
 			if interpolation == 0 {
 				return 0, 0, "", false
