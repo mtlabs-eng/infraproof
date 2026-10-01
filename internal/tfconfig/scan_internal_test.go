@@ -1,6 +1,7 @@
 package tfconfig
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,28 @@ func attributeLine(d declaration, name string) int {
 	return 0
 }
 
+// read scans a file that must be readable, and fails if it is not. It keeps the
+// two answers apart at every call site: a file with nothing in it is not a file
+// this build could not read.
+func read(t *testing.T, source []byte) []declaration {
+	t.Helper()
+	declarations, readable := scan(source)
+	if !readable {
+		t.Fatalf("this file should be readable and was refused:\n%s", source)
+	}
+	return declarations
+}
+
+// refused asserts that a file could not be read at all, which is the safe answer
+// and the one every position in it depends on not being given.
+func refused(t *testing.T, source []byte) {
+	t.Helper()
+	declarations, readable := scan(source)
+	if readable {
+		t.Fatalf("this file should be refused and was read as %v:\n%s", declarations, source)
+	}
+}
+
 // found returns the one declaration of a type and name, and fails if the file
 // holds none or several.
 func found(t *testing.T, declarations []declaration, kind, resourceType, name string) declaration {
@@ -48,7 +71,7 @@ func found(t *testing.T, declarations []declaration, kind, resourceType, name st
 // Terraform itself turned into the fixture plan. Every line here can be checked
 // by opening the file, which is the point of generating it.
 func TestScanFindsDeclarationsInGeneratedConfiguration(t *testing.T) {
-	declarations := scan(fixtureSource(t, "generated", "main.tf"))
+	declarations := read(t, fixtureSource(t, "generated", "main.tf"))
 
 	if len(declarations) != 3 {
 		t.Fatalf("found %d declarations, want 3: %v", len(declarations), declarations)
@@ -80,7 +103,7 @@ func TestScanFindsDeclarationsInGeneratedConfiguration(t *testing.T) {
 // like a resource block; a scanner that misses heredocs reports the decoy and
 // shifts every line after it.
 func TestScanIgnoresADeclarationInsideAHeredoc(t *testing.T) {
-	declarations := scan(fixtureSource(t, "generated", "main.tf"))
+	declarations := read(t, fixtureSource(t, "generated", "main.tf"))
 
 	for _, d := range declarations {
 		if d.Name == "decoy" {
@@ -97,7 +120,7 @@ func TestScanIgnoresADeclarationInsideAHeredoc(t *testing.T) {
 // TestScanIgnoresNonResourceBlocks covers the milestone's scope: lines are
 // reported for resource and data declarations, and for nothing else.
 func TestScanIgnoresNonResourceBlocks(t *testing.T) {
-	declarations := scan(fixtureSource(t, "generated", "main.tf"))
+	declarations := read(t, fixtureSource(t, "generated", "main.tf"))
 
 	for _, d := range declarations {
 		if d.Kind != "resource" && d.Kind != "data" {
@@ -113,7 +136,7 @@ func TestScanIgnoresNonResourceBlocks(t *testing.T) {
 // finding actually rests on, and a nested one whose first segment is what an
 // evidence path names.
 func TestScanFindsAttributesInShippedAwsConfiguration(t *testing.T) {
-	declarations := scan(fixtureSource(t, "aws", "main.tf"))
+	declarations := read(t, fixtureSource(t, "aws", "main.tf"))
 
 	bucket := found(t, declarations, "resource", "aws_s3_bucket", "assets")
 	if bucket.Line != 6 {
@@ -185,9 +208,7 @@ func TestScanFailsClosed(t *testing.T) {
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := scan([]byte(source)); got != nil {
-				t.Fatalf("a file that does not lex yielded %v", got)
-			}
+			refused(t, []byte(source))
 		})
 	}
 }
@@ -223,7 +244,7 @@ func TestScanReadsWhatTheGrammarAllows(t *testing.T) {
 	}
 	for name, source := range sources {
 		t.Run(name, func(t *testing.T) {
-			declarations := scan([]byte(source))
+			declarations := read(t, []byte(source))
 			d := found(t, declarations, "resource", "aws_s3_bucket", "a")
 			expected := want[name]
 			if d.Line != expected.line {
@@ -253,7 +274,7 @@ resource "aws_s3_bucket" "a" {
   bucket = "a"
 }
 `
-	declarations := scan([]byte(source))
+	declarations := read(t, []byte(source))
 
 	if d := found(t, declarations, "data", "aws_s3_bucket", "a"); d.Line != 1 {
 		t.Errorf("data source at line %d, want 1", d.Line)
@@ -277,7 +298,7 @@ resource "aws_s3_bucket" "a" {
   bucket = "second"
 }
 `
-	declarations := scan([]byte(source))
+	declarations := read(t, []byte(source))
 
 	if len(declarations) != 2 {
 		t.Fatalf("found %d declarations, want both: %v", len(declarations), declarations)
@@ -296,7 +317,7 @@ func TestScanRecordsTheFirstOfARepeatedAttribute(t *testing.T) {
   bucket = "second"
 }
 `
-	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
+	d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
 
 	if attributeLine(d, "bucket") != 2 {
 		t.Fatalf("bucket at line %d, want the first at 2", attributeLine(d, "bucket"))
@@ -315,7 +336,7 @@ func TestScanIgnoresMalformedHeaders(t *testing.T) {
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := scan([]byte(source)); len(got) != 0 {
+			if got := read(t, []byte(source)); len(got) != 0 {
 				t.Fatalf("reported %v", got)
 			}
 		})
@@ -334,7 +355,7 @@ func TestScanIgnoresAHeaderSpreadOverLines(t *testing.T) {
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := scan([]byte(source)); len(got) != 0 {
+			if got := read(t, []byte(source)); len(got) != 0 {
 				t.Fatalf("reported %v", got)
 			}
 		})
@@ -353,8 +374,8 @@ func TestScanRefusesADeclarationInsideAnotherBlock(t *testing.T) {
   }
 }
 `
-	if got := scan([]byte(source)); len(got) != 0 {
-		t.Fatalf("a nested declaration was reported: %v", got)
+	if got := read(t, []byte(source)); len(got) != 0 {
+		t.Fatalf("reported %v", got)
 	}
 }
 
@@ -370,9 +391,7 @@ func TestScanRefusesRunawayNesting(t *testing.T) {
 	}
 	source += "}\n"
 
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("runaway nesting yielded %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanRefusesAFileWithTooManyTokens covers the other bound on one file, which
@@ -383,9 +402,7 @@ func TestScanRefusesAFileWithTooManyTokens(t *testing.T) {
 	source := "resource \"aws_s3_bucket\" \"a\" {\n  bucket = \"a\"\n}\n" +
 		strings.Repeat(",", maxTokens+1)
 
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("a file past the token bound yielded %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanRefusesRunawayTemplateNesting covers the bound on a quoted template.
@@ -397,9 +414,7 @@ func TestScanRefusesRunawayTemplateNesting(t *testing.T) {
 		strings.Repeat("\"${", maxBraceDepth+2) + "x" +
 		strings.Repeat("}\"", maxBraceDepth+2) + "\n}\n"
 
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("a template nested past the bound yielded %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanRefusesALoneCarriageReturn covers the byte that is a line ending only
@@ -412,21 +427,34 @@ func TestScanRefusesALoneCarriageReturn(t *testing.T) {
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := scan([]byte(source)); got != nil {
-				t.Fatalf("yielded %v", got)
-			}
+			refused(t, []byte(source))
 		})
 	}
 }
 
-// TestScanHandlesAnEmptyFile covers the ordinary boundary: nothing found is not
-// a failure.
-func TestScanHandlesAnEmptyFile(t *testing.T) {
-	if got := scan(nil); got != nil {
-		t.Fatalf("an empty file yielded %v", got)
+// TestScanReadsAFileWithNothingInIt covers the boundary this scanner used to
+// blur. A file with no declarations was read completely and has nothing to offer,
+// which is not the same answer as a file that could not be read -- and for a
+// while both were spelled the same way, so this package could not have said
+// whether it had refused the whole repository.
+func TestScanReadsAFileWithNothingInIt(t *testing.T) {
+	cases := map[string][]byte{
+		"empty":           nil,
+		"a comment":       []byte("\n\n# just a comment\n"),
+		"only a module":   []byte("module \"storage\" {\n  source = \"./modules/storage\"\n}\n"),
+		"only a variable": []byte("variable \"tag\" {\n  type = string\n}\n"),
+		"only whitespace": []byte("\n\t \n"),
 	}
-	if got := scan([]byte("\n\n# just a comment\n")); got != nil {
-		t.Fatalf("a file with no declarations yielded %v", got)
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			declarations, readable := scan(source)
+			if !readable {
+				t.Fatal("a file with nothing in it was refused")
+			}
+			if len(declarations) != 0 {
+				t.Fatalf("reported %v", declarations)
+			}
+		})
 	}
 }
 
@@ -443,9 +471,7 @@ resource "aws_s3_bucket" "b" {
   bucket = "b"
 }
 `
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("a file with an unterminated string yielded %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanRefusesAValueThatSpansALine covers the quote that opens on one line
@@ -460,9 +486,7 @@ func TestScanRefusesAValueThatSpansALine(t *testing.T) {
 description = "opens here
   and closes here"
 `
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("a value spanning a line yielded %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanRefusesAFileThatStopsBalancing covers the declaration that closed
@@ -476,9 +500,7 @@ func TestScanRefusesAFileThatStopsBalancing(t *testing.T) {
 
 locals {
 `
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("a file that stops balancing yielded %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanRefusesAStrayClosingBrace is the case a final balance check alone does
@@ -495,9 +517,7 @@ locals {
 }
 {
 `
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("a nested declaration surfaced by a stray brace was reported: %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanIgnoresASecondHeaderOnOneLine covers a file Terraform rejects. The
@@ -507,7 +527,7 @@ func TestScanIgnoresASecondHeaderOnOneLine(t *testing.T) {
 	source := `resource "aws_s3_bucket" "a" resource "aws_s3_bucket" "b" {
 }
 `
-	if got := scan([]byte(source)); len(got) != 0 {
+	if got := read(t, []byte(source)); len(got) != 0 {
 		t.Fatalf("reported %v", got)
 	}
 }
@@ -520,7 +540,7 @@ func TestScanIgnoresAnUnknownTwoLabelBlock(t *testing.T) {
   bucket = "a"
 }
 `
-	if got := scan([]byte(source)); len(got) != 0 {
+	if got := read(t, []byte(source)); len(got) != 0 {
 		t.Fatalf("reported %v", got)
 	}
 }
@@ -542,7 +562,7 @@ func TestScanRecordsOnlyUnlabelledNestedBlocks(t *testing.T) {
   bucket = "y"
 }
 `
-	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
+	d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
 
 	want := map[string]int{"versioning": 6, "bucket": 10}
 	if len(d.Attributes) != len(want) {
@@ -564,7 +584,7 @@ func TestScanDoesNotReadAComparisonAsAnArgument(t *testing.T) {
   mistake == 1
 }
 `
-	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
+	d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
 
 	if line, present := d.lineOf("mistake"); present {
 		t.Fatalf("a comparison was recorded as an argument at line %d", line)
@@ -579,7 +599,7 @@ func TestScanRefusesTwoArgumentsOnOneLine(t *testing.T) {
   bucket = "a"  acl = "public-read"
 }
 `
-	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
+	d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
 
 	if line, present := d.lineOf("acl"); present {
 		t.Fatalf("a second argument on one line was recorded at line %d", line)
@@ -600,9 +620,7 @@ resource "aws_s3_bucket" "b" {
   bucket = "b"
 }
 `
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("a heredoc with no tag yielded %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanRefusesAHeredocTagItCannotRead is the defect independent review found,
@@ -622,14 +640,13 @@ resource "aws_s3_bucket" "b" {
 // Terraform from those exact bytes, so "the files may have changed" does not
 // apply to it.
 func TestScanRefusesAHeredocTagItCannotRead(t *testing.T) {
-	if got := scan(fixtureSource(t, "heredoc-tag", "main.tf")); got != nil {
-		t.Fatalf("a heredoc tag this build cannot read yielded %v", got)
-	}
+	refused(t, fixtureSource(t, "heredoc-tag", "main.tf"))
 
 	// And the specific wrong answer, in case a later change makes the file
 	// readable again by some other route: input is written on line 6, and line 4
 	// is inside the heredoc.
-	for _, d := range scan(fixtureSource(t, "heredoc-tag", "main.tf")) {
+	declarations, _ := scan(fixtureSource(t, "heredoc-tag", "main.tf"))
+	for _, d := range declarations {
 		if line, written := d.lineOf("input"); written && line != 6 {
 			t.Fatalf("input located at line %d, which is inside a string", line)
 		}
@@ -647,9 +664,7 @@ func TestScanRefusesATruncatedTagWhereverTheLetterIs(t *testing.T) {
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := scan([]byte(source)); got != nil {
-				t.Fatalf("yielded %v", got)
-			}
+			refused(t, []byte(source))
 		})
 	}
 }
@@ -669,7 +684,7 @@ func TestScanCountsLinesInsideAnInterpolation(t *testing.T) {
   acl = "private"
 }
 `
-	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
+	d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
 
 	if line, _ := d.lineOf("acl"); line != 6 {
 		t.Fatalf("acl at line %d, want 6: a newline inside the interpolation was not counted", line)
@@ -686,7 +701,7 @@ resource "aws_s3_bucket" "b" {
   acl = "private"
 }
 `
-	second := found(t, scan([]byte(twice)), "resource", "aws_s3_bucket", "b")
+	second := found(t, read(t, []byte(twice)), "resource", "aws_s3_bucket", "b")
 	if second.Line != 8 {
 		t.Fatalf("the second declaration is at line %d, want 8", second.Line)
 	}
@@ -710,7 +725,7 @@ func TestScanReadsADirectiveHoldingAString(t *testing.T) {
 		"  bucket = \"%{ if length(\"{\") > 0 }y%{ endif }\"\n" +
 		"  acl    = \"private\"\n}\n"
 
-	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
+	d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
 
 	if line, _ := d.lineOf("acl"); line != 3 {
 		t.Fatalf("acl at line %d, want 3", line)
@@ -724,7 +739,7 @@ func TestScanTreatsASlashSlashCommentAsAComment(t *testing.T) {
 	source := "// resource \"aws_s3_bucket\" \"decoy\" {\n" +
 		"resource \"aws_s3_bucket\" \"a\" {\n  bucket = \"a\"\n}\n"
 
-	declarations := scan([]byte(source))
+	declarations := read(t, []byte(source))
 
 	d := found(t, declarations, "resource", "aws_s3_bucket", "a")
 	if d.Line != 2 {
@@ -747,7 +762,7 @@ func TestScanAcceptsAHeredocTerminatorWithTrailingWhitespace(t *testing.T) {
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
-			d := found(t, scan([]byte(source)), "resource", "a", "b")
+			d := found(t, read(t, []byte(source)), "resource", "a", "b")
 			if line, written := d.lineOf("y"); !written || line != 5 {
 				t.Fatalf("y at line %d (written %v), want 5: the terminator was not recognised", line, written)
 			}
@@ -766,7 +781,7 @@ func TestScanAcceptsAHeredocTerminatorWithTrailingWhitespace(t *testing.T) {
 func TestScanDoesNotRecordAnArgumentSharingALineWithABrace(t *testing.T) {
 	source := "resource \"a\" \"b\" { first = 1\n  versioning { enabled = true } second = 2\n  third = 3\n}\n"
 
-	d := found(t, scan([]byte(source)), "resource", "a", "b")
+	d := found(t, read(t, []byte(source)), "resource", "a", "b")
 
 	for _, name := range []string{"first", "second"} {
 		if line, written := d.lineOf(name); written {
@@ -784,7 +799,7 @@ func TestScanDoesNotRecordAnArgumentSharingALineWithABrace(t *testing.T) {
 func TestScanReadsAComparisonAgainstALessThan(t *testing.T) {
 	source := "resource \"a\" \"b\" {\n  count = var.x < var.y ? 1 : 0\n  acl   = \"private\"\n}\n"
 
-	d := found(t, scan([]byte(source)), "resource", "a", "b")
+	d := found(t, read(t, []byte(source)), "resource", "a", "b")
 
 	if line, written := d.lineOf("acl"); !written || line != 3 {
 		t.Fatalf("acl at line %d (written %v), want 3", line, written)
@@ -812,7 +827,7 @@ func TestScanReadsConstructsTerraformAccepts(t *testing.T) {
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
-			declarations := scan([]byte(source))
+			declarations := read(t, []byte(source))
 			if declarations == nil {
 				t.Fatal("refused a file Terraform accepts, so nothing in it can be located")
 			}
@@ -832,7 +847,7 @@ func TestScanSkipsAByteOrderMark(t *testing.T) {
 	source := "\ufeffresource \"terraform_data\" \"first\" {\n  input = \"a\"\n}\n" +
 		"\nresource \"terraform_data\" \"second\" {\n  input = \"b\"\n}\n"
 
-	declarations := scan([]byte(source))
+	declarations := read(t, []byte(source))
 
 	if len(declarations) != 2 {
 		t.Fatalf("found %d declarations, want both: %v", len(declarations), declarations)
@@ -851,9 +866,7 @@ func TestScanSkipsAByteOrderMark(t *testing.T) {
 func TestScanRefusesContentAfterAHeredocMarker(t *testing.T) {
 	source := "resource \"a\" \"b\" {\n  x = <<EOT trailing\n  body\nEOT\n}\n"
 
-	if got := scan([]byte(source)); got != nil {
-		t.Fatalf("content after a heredoc marker was accepted, yielding %v", got)
-	}
+	refused(t, []byte(source))
 }
 
 // TestScanRefusesATagThatIsNotAnIdentifier covers the first byte of a heredoc
@@ -864,9 +877,7 @@ func TestScanRefusesATagThatIsNotAnIdentifier(t *testing.T) {
 		"resource \"a\" \"b\" {\n  x = <<9EOT\n  body\n9EOT\n}\n",
 		"resource \"a\" \"b\" {\n  x = <<--EOT\n  body\n-EOT\n}\n",
 	} {
-		if got := scan([]byte(source)); got != nil {
-			t.Fatalf("a tag that is not an identifier yielded %v", got)
-		}
+		refused(t, []byte(source))
 	}
 }
 
@@ -877,9 +888,70 @@ func TestScanRefusesATagThatIsNotAnIdentifier(t *testing.T) {
 func TestScanDoesNotMatchANameAgainstADistantBrace(t *testing.T) {
 	source := "resource \"a\" \"b\" {\n  far\n\n  {\n    x = 1\n  }\n}\n"
 
-	d := found(t, scan([]byte(source)), "resource", "a", "b")
+	d := found(t, read(t, []byte(source)), "resource", "a", "b")
 
 	if line, written := d.lineOf("far"); written {
 		t.Fatalf("a name was matched against a brace two lines away, at line %d", line)
+	}
+}
+
+// TestEveryConfigurationThisRepositoryShipsIsRead is the canary for the failure
+// no other test here can see: a file Terraform accepts that this build refuses.
+//
+// Every refusal in this scanner is the safe direction and is tested. Refusing too
+// much is not tested anywhere by construction -- FuzzScan returns the moment scan
+// yields nil, because there is nothing to check the lines of, so tightening the
+// lexer until it reads nothing at all would leave the suite green. The cost is
+// silent: a reader who expected a line and sees none cannot tell "not written
+// here" from "not read".
+//
+// So every .tf file this repository ships is scanned, and must produce something.
+// They are real configuration, written to be read: the generated fixture was run
+// through Terraform, the aws one matches a shipped plan, and examples/infra is
+// what the README tells a reader to point at.
+func TestEveryConfigurationThisRepositoryShipsIsRead(t *testing.T) {
+	// The one file that must not be read, and why. It is a deliberate refusal:
+	// its heredoc tag holds a letter outside ASCII, which this lexer cannot read
+	// without truncating it.
+	deliberatelyRefused := map[string]string{
+		filepath.Join("testdata", "heredoc-tag", "main.tf"): "its heredoc tag holds a letter outside ASCII",
+	}
+
+	var scanned, skipped int
+	for _, root := range []string{"testdata", filepath.Join("..", "..", "examples")} {
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || filepath.Ext(path) != ".tf" {
+				return err
+			}
+			source, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			declarations, readable := scan(source)
+			if reason, deliberate := deliberatelyRefused[path]; deliberate {
+				if readable {
+					t.Errorf("%s is meant to be refused because %s, and was read as %v",
+						path, reason, declarations)
+				}
+				skipped++
+				return nil
+			}
+			if !readable {
+				t.Errorf("%s was refused, so nothing in it can be located", path)
+				return nil
+			}
+			scanned++
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walking %s: %v", root, err)
+		}
+	}
+
+	if scanned < 5 {
+		t.Fatalf("only %d configuration files were found, which is too few to be the set", scanned)
+	}
+	if skipped != len(deliberatelyRefused) {
+		t.Fatalf("the deliberate refusals were not all found: %d of %d", skipped, len(deliberatelyRefused))
 	}
 }

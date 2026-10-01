@@ -142,6 +142,15 @@ at the start of a file, which used to make the file's first declaration invisibl
 Still refused and still Terraform-legal, as a stated limitation: a heredoc opened
 inside an interpolation. The file yields no locations at all.
 
+Refusing too much is a failure mode with no natural test: a scanner that read
+nothing at all would leave a fuzz oracle green, because an oracle checks reported
+positions and a refusal reports none. So every `.tf` file this repository ships
+must be read, and the one that must not — the heredoc-tag fixture — is named in
+that test with its reason. "Could not read this" and "nothing here to find" are
+also separate answers now rather than one value doing for both: a file that only
+calls modules was read completely, and a file that was refused may have held
+everything.
+
 ## Limitations of this milestone, as built
 
 - **`.tf.json` is not read.** A configuration written in JSON is a different

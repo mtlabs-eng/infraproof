@@ -57,18 +57,27 @@ const maxBraceDepth = 64
 // refused rather than lexed, for the reason the guard refuses a large directory.
 const maxTokens = 1 << 18
 
-// scan returns every resource and data declaration in one configuration file.
+// scan returns every resource and data declaration in one configuration file,
+// and whether the file could be read at all.
 //
-// It returns nil for a file it cannot lex to the end: an unterminated string,
-// heredoc or comment, unbalanced braces, or nesting past the bound. This is the
-// safety property the milestone rests on. A scanner that reported the positions
-// it saw before losing track would be reporting exactly the plausible-but-wrong
-// lines that send a reader to the wrong code with the tool's authority behind
-// it, and the absence of a location is an answer.
-func scan(source []byte) []declaration {
+// It reports false for a file it cannot lex to the end: an unterminated string,
+// heredoc or comment, unbalanced braces, nesting past a bound, or a construct
+// this build does not know how to read. This is the safety property the milestone
+// rests on. A scanner that reported the positions it saw before losing track
+// would be reporting exactly the plausible-but-wrong lines that send a reader to
+// the wrong code with the tool's authority behind it, and the absence of a
+// location is an answer.
+//
+// The two answers are separate because they are different facts. A file with no
+// declarations in it -- one that only calls modules, say -- was read completely
+// and has nothing to offer; a file that was refused may have had everything in
+// it. Both yield no location, so nothing downstream branches on the difference,
+// and returning one value for both left this package unable to say whether it had
+// refused the whole repository. A test asks it now.
+func scan(source []byte) ([]declaration, bool) {
 	tokens, ok := lex(source)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	return declarationsIn(tokens)
 }
@@ -415,7 +424,7 @@ func identPart(c byte) bool {
 // shaped like one nested inside another block is not a declaration a plan can
 // contain, so reporting its line would be reporting a position for a resource
 // that does not exist.
-func declarationsIn(tokens []token) []declaration {
+func declarationsIn(tokens []token) ([]declaration, bool) {
 	var out []declaration
 	var current *declaration
 
@@ -443,12 +452,12 @@ func declarationsIn(tokens []token) []declaration {
 			}
 			depth++
 			if depth > maxBraceDepth {
-				return nil
+				return nil, false
 			}
 		case tokenClose:
 			depth--
 			if depth < 0 {
-				return nil
+				return nil, false
 			}
 			if depth == 0 {
 				if current != nil {
@@ -471,9 +480,9 @@ func declarationsIn(tokens []token) []declaration {
 		}
 	}
 	if depth != 0 {
-		return nil
+		return nil, false
 	}
-	return out
+	return out, true
 }
 
 // headerDeclaration reads a block header, or reports that the window is not one.

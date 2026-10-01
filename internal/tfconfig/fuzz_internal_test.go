@@ -70,8 +70,11 @@ func FuzzScan(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, source []byte) {
-		declarations := scan(source)
-		if declarations == nil {
+		declarations, readable := scan(source)
+		if !readable {
+			// Nothing to check the lines of. That a file Terraform accepts is not
+			// refused here is a different property, and a test asserts it over
+			// every configuration this repository ships.
 			return
 		}
 
@@ -118,7 +121,7 @@ func FuzzScan(f *testing.F) {
 		}
 
 		// Two scans of one file must agree, or a report is not reproducible.
-		if again := scan(source); len(again) != len(declarations) {
+		if again, _ := scan(source); len(again) != len(declarations) {
 			t.Fatalf("scanning twice found %d then %d declarations", len(declarations), len(again))
 		}
 	})

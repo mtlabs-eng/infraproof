@@ -230,7 +230,15 @@ func (l *locator) declarationsIn(dir string) map[declarationKey][]placed {
 			if err != nil {
 				return err
 			}
-			for _, d := range scan(source) {
+			declarations, readable := scan(source)
+			if !readable {
+				// A file in this directory could not be read, so the directory
+				// cannot be known to hold one declaration of anything: the file
+				// refused may have declared a second. errTooLarge's reasoning,
+				// for the same reason.
+				return errUnreadable
+			}
+			for _, d := range declarations {
 				key := keyOf(d)
 				found[key] = append(found[key], placed{declaration: d, file: name})
 			}
@@ -271,10 +279,13 @@ func (l *locator) read(file *os.File) ([]byte, error) {
 	return source, nil
 }
 
-// errTooLarge reports a file this build will not read whole. It never reaches a
-// caller: it ends one directory's scan, and the absence of a location is what a
-// reader sees.
-var errTooLarge = errorString("is larger than this build reads")
+// errTooLarge reports a file this build will not read whole, and errUnreadable
+// one it could not lex to the end. Neither reaches a caller: each ends one
+// directory's scan, and the absence of a location is what a reader sees.
+var (
+	errTooLarge   = errorString("is larger than this build reads")
+	errUnreadable = errorString("holds something this build cannot read")
+)
 
 type errorString string
 

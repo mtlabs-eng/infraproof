@@ -654,3 +654,25 @@ func TestAFileTooLargeDiscardsTheDeclarationsBesideIt(t *testing.T) {
 
 	nothingLocated(t, finding, "a declaration beside a file this build refused to read")
 }
+
+// TestAFileThatCannotBeLexedDiscardsTheDeclarationsBesideIt is the oversized-file
+// rule for the other reason a file is not read: this build could not lex it. The
+// declaration in it could have been the second match, so a position from the files
+// beside it would be a position this build cannot know is unique.
+func TestAFileThatCannotBeLexedDiscardsTheDeclarationsBesideIt(t *testing.T) {
+	root := t.TempDir()
+	declaration := "resource \"terraform_data\" \"root\" {\n  input = \"x\"\n}\n"
+	if err := os.WriteFile(filepath.Join(root, "a_main.tf"), []byte(declaration), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Declares the same resource, and ends inside a string.
+	broken := declaration + "resource \"terraform_data\" \"root\" {\n  input = \"unterminated\n"
+	if err := os.WriteFile(filepath.Join(root, "z_broken.tf"), []byte(broken), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	plan := loadPlan(t, "testdata", "generated", "plan.json")
+	finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
+
+	nothingLocated(t, finding, "a declaration beside a file this build could not lex")
+}
