@@ -1,5 +1,7 @@
 package tfconfig
 
+import "bytes"
+
 // declaration is one resource or data block found in a configuration file, with
 // the line it is written on and the lines of the attributes written directly
 // inside it.
@@ -103,6 +105,14 @@ func lex(source []byte) ([]token, bool) {
 	var tokens []token
 	line := 1
 	i := 0
+	// A byte order mark is not content. Terraform reads a file that starts with
+	// one; leaving it in made its three bytes the token before the first keyword,
+	// which is how startsStatement came to decide that the first declaration in
+	// the file does not begin a statement, and the file's first declaration was
+	// silently invisible.
+	if bytes.HasPrefix(source, []byte{0xef, 0xbb, 0xbf}) {
+		i = 3
+	}
 
 	emit := func(kind tokenKind, text string, at int) bool {
 		if len(tokens) >= maxTokens {
@@ -118,7 +128,17 @@ func lex(source []byte) ([]token, bool) {
 		case c == '\n':
 			line++
 			i++
-		case c == ' ' || c == '\t' || c == '\r':
+		case c == ' ' || c == '\t':
+			i++
+		case c == '\r':
+			// Only as part of a line ending. Terraform refuses a carriage return
+			// anywhere else -- "this character is not used within the language" --
+			// and treating one as whitespace let a name and its "=" sit on one
+			// lexer line while the file has them on two, which is a position
+			// claimed in a file nothing could have planned.
+			if i+1 >= len(source) || source[i+1] != '\n' {
+				return nil, false
+			}
 			i++
 		case c == '#':
 			i = endOfLine(source, i)
@@ -224,7 +244,7 @@ func blockComment(source []byte, i, line int) (int, int, bool) {
 // does not permit it, and treating an unterminated string as if it continued on
 // the next line is how a lexer loses a file's structure without noticing.
 func quoted(source []byte, i, line, depth int) (int, int, string, bool) {
-	if depth > maxBraceDepth {
+	if depth >= maxBraceDepth {
 		return 0, 0, "", false
 	}
 
@@ -252,6 +272,15 @@ func quoted(source []byte, i, line, depth int) (int, int, string, bool) {
 			}
 			line++
 		case '$', '%':
+			// "$${" and "%%{" are how a template writes a literal "${" or "%{",
+			// so the second sigil opens nothing. Reading one as an interpolation
+			// left the counter high for the rest of the string, and the file --
+			// which Terraform accepts -- was refused whole, so nothing in it had
+			// a location and the bundle did not say why.
+			if j+1 < len(source) && source[j+1] == source[j] {
+				j++
+				break
+			}
 			if j+1 < len(source) && source[j+1] == '{' {
 				interpolation++
 				j++
@@ -263,6 +292,25 @@ func quoted(source []byte, i, line, depth int) (int, int, string, bool) {
 		case '}':
 			if interpolation > 0 {
 				interpolation--
+			}
+		case '#':
+			// An expression may carry a comment, and a brace or a quote in one
+			// says nothing about the template around it. Outside an
+			// interpolation "#" is ordinary text.
+			if interpolation > 0 {
+				j = endOfLine(source, j) - 1
+			}
+		case '/':
+			if interpolation > 0 && j+1 < len(source) && source[j+1] == '/' {
+				j = endOfLine(source, j) - 1
+				break
+			}
+			if interpolation > 0 && j+1 < len(source) && source[j+1] == '*' {
+				end, endLine, ok := blockComment(source, j, line)
+				if !ok {
+					return 0, 0, "", false
+				}
+				j, line = end-1, endLine
 			}
 		case '"':
 			if interpolation == 0 {
@@ -290,18 +338,45 @@ func heredoc(source []byte, i, line int) (int, int, bool) {
 		j++
 	}
 	tagStart := j
-	for j < len(source) && identPart(source[j]) {
+	// An identifier does not start with a digit or a dash, so a marker that does
+	// has no tag at all and the file is refused below. Terraform refuses both
+	// forms, and reading "<<9EOT" as a heredoc tagged 9EOT meant this build read
+	// a file as configuration that Terraform reads as an error.
+	if j < len(source) && identStart(source[j]) {
 		j++
+		for j < len(source) && identPart(source[j]) {
+			j++
+		}
 	}
 	tag := string(source[tagStart:j])
+	// An HCL identifier is Unicode and identPart is not, so a tag with a letter
+	// outside ASCII stops early and what this build holds is a proper prefix of
+	// the real terminator. The heredoc then ends at the first body line equal to
+	// that prefix, and everything up to the real terminator is lexed as
+	// structure: independent review built a file Terraform validates and plans,
+	// where an argument's position came out four lines from where it is written
+	// and a declaration was reported that exists only inside a string.
+	//
+	// Refusing is enough, and refusing is already the answer to a file this
+	// build cannot read. Reading the tag as a real Unicode identifier would be
+	// more than is needed, and the rest of this lexer is ASCII by the same
+	// choice -- there it only loses an attribute, here it moves a line.
+	if j < len(source) && source[j] >= 0x80 {
+		return 0, 0, false
+	}
 	if tag == "" {
 		// Not a heredoc at all. Refusing the file is the honest answer: this
 		// build does not know what it is reading.
 		return 0, 0, false
 	}
 
-	// The rest of the opening line belongs to the heredoc marker.
-	j = endOfLine(source, j)
+	// Nothing may follow the marker. Terraform refuses it, and swallowing it
+	// meant this build read a file as a heredoc that Terraform reads as an error.
+	rest := endOfLine(source, j)
+	if trimmed(source[j:rest]) != "" {
+		return 0, 0, false
+	}
+	j = rest
 	for j < len(source) {
 		j++ // the newline ending the previous line
 		line++
@@ -355,7 +430,15 @@ func declarationsIn(tokens []token) []declaration {
 		switch tk.kind {
 		case tokenOpen:
 			if depth == 0 {
-				current = headerDeclaration(tokens, header)
+				current = headerDeclaration(tokens, header, tk)
+				// Clearing it here changes nothing a test can see, and
+				// independent review found that out by mutation: tokens inside a
+				// block never reach the window, and the closing brace clears it
+				// again, so the only file that could tell is one whose block
+				// never closes -- which is refused whole. It stays because the
+				// window is about what precedes a brace, and leaving a consumed
+				// header in it would be a fact about the file that is no longer
+				// true.
 				header = nil
 			}
 			depth++
@@ -394,11 +477,20 @@ func declarationsIn(tokens []token) []declaration {
 }
 
 // headerDeclaration reads a block header, or reports that the window is not one.
-func headerDeclaration(tokens []token, header []int) *declaration {
+//
+// All of it on one line, including the brace. HCL ends a header at a newline, so
+// a keyword on one line and its labels on the next is a file Terraform refuses --
+// and this build read it as a declaration, reporting the keyword's line. The
+// fuzzer found that by disagreeing with an oracle that asks what a line is
+// actually used for, which was the oracle being right.
+func headerDeclaration(tokens []token, header []int, brace token) *declaration {
 	if len(header) != 3 || !startsStatement(tokens, header[0]) {
 		return nil
 	}
 	keyword, first, second := tokens[header[0]], tokens[header[1]], tokens[header[2]]
+	if keyword.line != first.line || first.line != second.line || second.line != brace.line {
+		return nil
+	}
 	if keyword.kind != tokenIdent || first.kind != tokenString || second.kind != tokenString {
 		return nil
 	}
@@ -425,7 +517,11 @@ func recordAttribute(current *declaration, tokens []token, i int) {
 	if tk.kind != tokenIdent || !startsStatement(tokens, i) || i+1 >= len(tokens) {
 		return
 	}
-	if next := tokens[i+1].kind; next != tokenEquals && next != tokenOpen {
+	// On the same line as the name. HCL writes an argument and its "=" together,
+	// and a block header and its brace together; without the check the token
+	// matched against could be arbitrarily far away -- a heredoc or a run of
+	// blank lines later -- and the position claimed would be for something else.
+	if next := tokens[i+1]; next.line != tk.line || next.kind != tokenEquals && next.kind != tokenOpen {
 		return
 	}
 	if _, seen := current.lineOf(tk.text); !seen {
@@ -436,14 +532,19 @@ func recordAttribute(current *declaration, tokens []token, i int) {
 // startsStatement reports whether the token at i begins something rather than
 // continuing it.
 //
-// HCL separates arguments by newline, so an identifier that opens a line, or
-// follows a brace, is a name; one that follows another token on the same line is
-// part of an expression -- the "assets" in aws_s3_bucket.assets.id is not an
-// argument called assets.
+// HCL separates arguments and blocks by newline, so a name is the first token on
+// its line and nothing else is: the "assets" in aws_s3_bucket.assets.id is not an
+// argument called assets, and neither is the "x" in "{ x = 1 }" written on the
+// same line as the brace that opens it, because Terraform refuses that file.
+//
+// An earlier version also accepted a name straight after a brace on the same
+// line. That is HCL this build would never be given -- Terraform reports
+// "Missing newline after block definition" -- and accepting it meant claiming a
+// position inside a file nothing could have planned. The fuzzer found it by
+// disagreeing with a stricter oracle, which was the oracle being right.
 func startsStatement(tokens []token, i int) bool {
 	if i == 0 {
 		return true
 	}
-	previous := tokens[i-1]
-	return previous.kind == tokenOpen || previous.kind == tokenClose || previous.line < tokens[i].line
+	return tokens[i-1].line < tokens[i].line
 }

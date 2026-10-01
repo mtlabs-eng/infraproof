@@ -322,6 +322,25 @@ func TestScanIgnoresMalformedHeaders(t *testing.T) {
 	}
 }
 
+// TestScanIgnoresAHeaderSpreadOverLines covers where a header ends. HCL ends one
+// at a newline, so a keyword on one line and its labels on the next is a file
+// Terraform refuses, and a position claimed in it is a position in a file nothing
+// could have planned.
+func TestScanIgnoresAHeaderSpreadOverLines(t *testing.T) {
+	cases := map[string]string{
+		"labels on the next line": "resource\n\"aws_s3_bucket\" \"a\" {\n  bucket = \"a\"\n}\n",
+		"second label below":      "resource \"aws_s3_bucket\"\n\"a\" {\n  bucket = \"a\"\n}\n",
+		"brace below":             "resource \"aws_s3_bucket\" \"a\"\n{\n  bucket = \"a\"\n}\n",
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := scan([]byte(source)); len(got) != 0 {
+				t.Fatalf("reported %v", got)
+			}
+		})
+	}
+}
+
 // TestScanRefusesADeclarationInsideAnotherBlock covers scope. A resource block
 // is written at the top level of a file; something that looks like one nested
 // inside another block is not one, and reporting it would be a line for a
@@ -380,6 +399,23 @@ func TestScanRefusesRunawayTemplateNesting(t *testing.T) {
 
 	if got := scan([]byte(source)); got != nil {
 		t.Fatalf("a template nested past the bound yielded %v", got)
+	}
+}
+
+// TestScanRefusesALoneCarriageReturn covers the byte that is a line ending only
+// in company. Terraform refuses one on its own, and reading it as whitespace put
+// a name and its assignment on one line while the file has them on two.
+func TestScanRefusesALoneCarriageReturn(t *testing.T) {
+	cases := map[string]string{
+		"between a name and its assignment": "resource \"a\" \"b\" {\n  x\r= 1\n}\n",
+		"at the end of a line":              "resource \"a\" \"b\" {\r  x = 1\r}\r",
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := scan([]byte(source)); got != nil {
+				t.Fatalf("yielded %v", got)
+			}
+		})
 	}
 }
 
@@ -566,5 +602,284 @@ resource "aws_s3_bucket" "b" {
 `
 	if got := scan([]byte(source)); got != nil {
 		t.Fatalf("a heredoc with no tag yielded %v", got)
+	}
+}
+
+// TestScanRefusesAHeredocTagItCannotRead is the defect independent review found,
+// and the only one in this milestone that produced a wrong line on a file
+// Terraform itself accepts.
+//
+// An HCL identifier is Unicode; this lexer's is ASCII. A tag with a letter
+// outside ASCII therefore stops early, and the prefix it holds is a proper prefix
+// of the real terminator -- so the heredoc ends at the first body line equal to
+// the prefix and the rest of the body is read as structure. In the committed
+// fixture that put `input` four lines from where it is written, with the
+// resource's own identity checking out, which is precisely the failure the rule
+// "a location is reported only when the declaration found at it matches" cannot
+// catch: the declaration did match.
+//
+// The fixture is a file Terraform validates, and its plan.json was produced by
+// Terraform from those exact bytes, so "the files may have changed" does not
+// apply to it.
+func TestScanRefusesAHeredocTagItCannotRead(t *testing.T) {
+	if got := scan(fixtureSource(t, "heredoc-tag", "main.tf")); got != nil {
+		t.Fatalf("a heredoc tag this build cannot read yielded %v", got)
+	}
+
+	// And the specific wrong answer, in case a later change makes the file
+	// readable again by some other route: input is written on line 6, and line 4
+	// is inside the heredoc.
+	for _, d := range scan(fixtureSource(t, "heredoc-tag", "main.tf")) {
+		if line, written := d.lineOf("input"); written && line != 6 {
+			t.Fatalf("input located at line %d, which is inside a string", line)
+		}
+	}
+}
+
+// TestScanRefusesATruncatedTagWhereverTheLetterIs covers the same rule for the
+// forms the fixture does not have.
+func TestScanRefusesATruncatedTagWhereverTheLetterIs(t *testing.T) {
+	cases := map[string]string{
+		"letter after the tag":    "resource \"a\" \"b\" {\n  x = <<EOTÖ\nEOT\n}\nEOTÖ\n",
+		"letter inside the tag":   "resource \"a\" \"b\" {\n  x = <<EÖT\nEÖT\n}\n",
+		"letter starting the tag": "resource \"a\" \"b\" {\n  x = <<Önly\nÖnly\n}\n",
+		"dedented form":           "resource \"a\" \"b\" {\n  x = <<-EOTÖ\n  EOT\n}\n  EOTÖ\n",
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := scan([]byte(source)); got != nil {
+				t.Fatalf("yielded %v", got)
+			}
+		})
+	}
+}
+
+// TestScanCountsLinesInsideAnInterpolation covers the one place left where this
+// lexer consumes a newline, which is the same shape as the defect the fuzzer found
+// in a quoted string: a newline swallowed without being counted puts every line
+// after it one too low. Independent review removed that line++ and the whole
+// suite stayed green, because no fixture had a multi-line interpolation followed
+// by anything whose position is asserted.
+func TestScanCountsLinesInsideAnInterpolation(t *testing.T) {
+	source := `resource "aws_s3_bucket" "a" {
+  bucket = "${join(
+    "",
+    ["a", "b"]
+  )}"
+  acl = "private"
+}
+`
+	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
+
+	if line, _ := d.lineOf("acl"); line != 6 {
+		t.Fatalf("acl at line %d, want 6: a newline inside the interpolation was not counted", line)
+	}
+
+	// And the same again, so that one uncounted newline cannot be absorbed by an
+	// off-by-one somewhere else.
+	twice := source[:len(source)-1] + `
+resource "aws_s3_bucket" "b" {
+  bucket = "${join(
+    "",
+    ["c"]
+  )}"
+  acl = "private"
+}
+`
+	second := found(t, scan([]byte(twice)), "resource", "aws_s3_bucket", "b")
+	if second.Line != 8 {
+		t.Fatalf("the second declaration is at line %d, want 8", second.Line)
+	}
+	if line, _ := second.lineOf("acl"); line != 13 {
+		t.Fatalf("the second acl is at line %d, want 13", line)
+	}
+}
+
+// TestScanReadsADirectiveHoldingAString covers the second template sigil, which
+// nothing held: ignoring %{ altogether left every existing case reading the same.
+//
+// Separating the two takes a brace inside a string inside a directive's
+// condition, which is what this is. Read as a directive, the brace is inside a
+// nested string and says nothing about the file's structure. Read as ordinary
+// text, the quotes pair up differently, the brace is exposed as a real one, and
+// the file stops balancing -- so the whole scan is refused and nothing in it is
+// located. The condition is a bool, so Terraform accepts the file; several
+// shorter candidates do not, which is why this one is shaped the way it is.
+func TestScanReadsADirectiveHoldingAString(t *testing.T) {
+	source := "resource \"aws_s3_bucket\" \"a\" {\n" +
+		"  bucket = \"%{ if length(\"{\") > 0 }y%{ endif }\"\n" +
+		"  acl    = \"private\"\n}\n"
+
+	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
+
+	if line, _ := d.lineOf("acl"); line != 3 {
+		t.Fatalf("acl at line %d, want 3", line)
+	}
+}
+
+// TestScanTreatsASlashSlashCommentAsAComment covers what the existing case could
+// not: its comment held no brace, so disabling // comments altogether changed
+// nothing. A commented-out block header carries one.
+func TestScanTreatsASlashSlashCommentAsAComment(t *testing.T) {
+	source := "// resource \"aws_s3_bucket\" \"decoy\" {\n" +
+		"resource \"aws_s3_bucket\" \"a\" {\n  bucket = \"a\"\n}\n"
+
+	declarations := scan([]byte(source))
+
+	d := found(t, declarations, "resource", "aws_s3_bucket", "a")
+	if d.Line != 2 {
+		t.Fatalf("declared at line %d, want 2", d.Line)
+	}
+	if len(declarations) != 1 {
+		t.Fatalf("a commented-out header was read: %v", declarations)
+	}
+}
+
+// TestScanAcceptsAHeredocTerminatorWithTrailingWhitespace covers both trims in
+// trimmed, each of which Terraform accepts and neither of which any fixture had:
+// a terminator followed by spaces, and one followed by a carriage return.
+func TestScanAcceptsAHeredocTerminatorWithTrailingWhitespace(t *testing.T) {
+	cases := map[string]string{
+		"trailing spaces":       "resource \"a\" \"b\" {\n  x = <<EOT\n  body\nEOT   \n  y = 1\n}\n",
+		"carriage return":       "resource \"a\" \"b\" {\n  x = <<EOT\n  body\nEOT\r\n  y = 1\n}\n",
+		"tab":                   "resource \"a\" \"b\" {\n  x = <<EOT\n  body\nEOT\t\n  y = 1\n}\n",
+		"indented and dedented": "resource \"a\" \"b\" {\n  x = <<-EOT\n    body\n  EOT  \n  y = 1\n}\n",
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := found(t, scan([]byte(source)), "resource", "a", "b")
+			if line, written := d.lineOf("y"); !written || line != 5 {
+				t.Fatalf("y at line %d (written %v), want 5: the terminator was not recognised", line, written)
+			}
+		})
+	}
+}
+
+// TestScanDoesNotRecordAnArgumentSharingALineWithABrace covers what a name is:
+// the first token on its line. Terraform refuses a file that writes an argument
+// on the same line as the brace that opens the block, so a position claimed
+// inside one is a position inside a file nothing could have planned.
+//
+// The first argument of a block, written on its own line after the brace, is
+// still an argument -- that is the ordinary case, and the line comparison covers
+// it.
+func TestScanDoesNotRecordAnArgumentSharingALineWithABrace(t *testing.T) {
+	source := "resource \"a\" \"b\" { first = 1\n  versioning { enabled = true } second = 2\n  third = 3\n}\n"
+
+	d := found(t, scan([]byte(source)), "resource", "a", "b")
+
+	for _, name := range []string{"first", "second"} {
+		if line, written := d.lineOf(name); written {
+			t.Errorf("%s shares a line with a brace and was recorded at line %d", name, line)
+		}
+	}
+	if line, written := d.lineOf("third"); !written || line != 3 {
+		t.Fatalf("third at line %d (written %v), want 3", line, written)
+	}
+}
+
+// TestScanReadsAComparisonAgainstALessThan covers the byte a heredoc shares with
+// an operator. HCL compares with "<", and treating a lone one as a heredoc marker
+// makes the tag empty, which refuses the whole file.
+func TestScanReadsAComparisonAgainstALessThan(t *testing.T) {
+	source := "resource \"a\" \"b\" {\n  count = var.x < var.y ? 1 : 0\n  acl   = \"private\"\n}\n"
+
+	d := found(t, scan([]byte(source)), "resource", "a", "b")
+
+	if line, written := d.lineOf("acl"); !written || line != 3 {
+		t.Fatalf("acl at line %d (written %v), want 3", line, written)
+	}
+}
+
+// TestScanReadsConstructsTerraformAccepts covers six forms independent review
+// found that Terraform validates and this build refused outright. None of them
+// produced a wrong line -- the refusal is the safe direction -- but the cost is
+// the limitation the milestone names: the bundle is not told a scan was refused,
+// so a reader cannot tell "not written here" from "not read", and the blast
+// radius was the whole file rather than the one argument.
+//
+// Each source here was checked against terraform validate on v1.14.0.
+func TestScanReadsConstructsTerraformAccepts(t *testing.T) {
+	cases := map[string]string{
+		"escaped interpolation sigil": "resource \"a\" \"b\" {\n  x = \"$${\"\n  y = 1\n}\n",
+		"escaped directive sigil":     "resource \"a\" \"b\" {\n  x = \"%%{\"\n  y = 1\n}\n",
+		"escaped sigil in an object":  "resource \"a\" \"b\" {\n  x = { k = \"$${\" }\n  y = 1\n}\n",
+		// A raw quote inside the comment, not an escaped one: a comment is lexed
+		// before string rules, so the quote is text and must not open a string.
+		"block comment in an interpolation": "resource \"a\" \"b\" {\n  x = \"${ 1 /* \" */ }\"\n  y = 1\n}\n",
+		"hash comment in an interpolation":  "resource \"a\" \"b\" {\n  x = \"${ 1 # }\n}\"\n  y = 1\n}\n",
+		"slash comment in an interpolation": "resource \"a\" \"b\" {\n  x = \"${ 1 // }\n}\"\n  y = 1\n}\n",
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			declarations := scan([]byte(source))
+			if declarations == nil {
+				t.Fatal("refused a file Terraform accepts, so nothing in it can be located")
+			}
+			d := found(t, declarations, "resource", "a", "b")
+			if line, written := d.lineOf("y"); !written || line < 3 {
+				t.Fatalf("y at line %d (written %v), want the line after the template", line, written)
+			}
+		})
+	}
+}
+
+// TestScanSkipsAByteOrderMark covers a file Terraform reads and this build used
+// to lose the first declaration of. The mark's three bytes were the token before
+// the first keyword, so startsStatement decided the keyword did not begin a
+// statement -- and the declaration was invisible with nothing said about it.
+func TestScanSkipsAByteOrderMark(t *testing.T) {
+	source := "\ufeffresource \"terraform_data\" \"first\" {\n  input = \"a\"\n}\n" +
+		"\nresource \"terraform_data\" \"second\" {\n  input = \"b\"\n}\n"
+
+	declarations := scan([]byte(source))
+
+	if len(declarations) != 2 {
+		t.Fatalf("found %d declarations, want both: %v", len(declarations), declarations)
+	}
+	if d := found(t, declarations, "resource", "terraform_data", "first"); d.Line != 1 {
+		t.Fatalf("the first declaration is at line %d, want 1", d.Line)
+	}
+	if d := found(t, declarations, "resource", "terraform_data", "second"); d.Line != 5 {
+		t.Fatalf("the second declaration is at line %d, want 5", d.Line)
+	}
+}
+
+// TestScanRefusesContentAfterAHeredocMarker covers a line Terraform rejects and
+// this build swallowed: whatever follows the marker was read as part of the
+// heredoc, so a file that is an error to Terraform was read as configuration.
+func TestScanRefusesContentAfterAHeredocMarker(t *testing.T) {
+	source := "resource \"a\" \"b\" {\n  x = <<EOT trailing\n  body\nEOT\n}\n"
+
+	if got := scan([]byte(source)); got != nil {
+		t.Fatalf("content after a heredoc marker was accepted, yielding %v", got)
+	}
+}
+
+// TestScanRefusesATagThatIsNotAnIdentifier covers the first byte of a heredoc
+// tag. An identifier does not start with a digit or a dash, and Terraform
+// refuses both forms.
+func TestScanRefusesATagThatIsNotAnIdentifier(t *testing.T) {
+	for _, source := range []string{
+		"resource \"a\" \"b\" {\n  x = <<9EOT\n  body\n9EOT\n}\n",
+		"resource \"a\" \"b\" {\n  x = <<--EOT\n  body\n-EOT\n}\n",
+	} {
+		if got := scan([]byte(source)); got != nil {
+			t.Fatalf("a tag that is not an identifier yielded %v", got)
+		}
+	}
+}
+
+// TestScanDoesNotMatchANameAgainstADistantBrace covers the token an argument is
+// recognised by. It is the next token on the same line, not simply the next
+// token: a heredoc or a run of blank lines in between would otherwise let a name
+// claim a position for a brace somewhere else entirely.
+func TestScanDoesNotMatchANameAgainstADistantBrace(t *testing.T) {
+	source := "resource \"a\" \"b\" {\n  far\n\n  {\n    x = 1\n  }\n}\n"
+
+	d := found(t, scan([]byte(source)), "resource", "a", "b")
+
+	if line, written := d.lineOf("far"); written {
+		t.Fatalf("a name was matched against a brace two lines away, at line %d", line)
 	}
 }

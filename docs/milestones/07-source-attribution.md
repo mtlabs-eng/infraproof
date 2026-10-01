@@ -114,6 +114,34 @@ one.
 - The locator is exercised against a configuration this repository ships, so the
   scan is tested against real HCL rather than against strings in a test.
 
+## Where the scan agrees with Terraform, and where it stops
+
+A location rests on reading the same file Terraform reads. Independent review
+measured the two against each other on Terraform v1.14.0, construct by construct,
+and the differences that remained are listed here rather than left to be found.
+
+Refused, because Terraform refuses them too, and reading one as configuration
+means claiming a position in a file nothing could have planned: a heredoc marker
+with anything after it on its line; a tag that does not begin an identifier
+(`<<9EOT`, `<<--EOT`); a carriage return that is not part of a line ending; a
+block header spread over more than one line; an argument written on the same line
+as the brace that opens its block.
+
+Refused, because this build cannot read them rather than because they are wrong: a
+heredoc tag holding a letter outside ASCII. HCL identifiers are Unicode and this
+lexer's are not, so the tag would be truncated to a prefix of the real terminator
+— the heredoc would end early and its body would be read as structure. That
+produced the one wrong line this milestone's review found, on a file Terraform
+validates and planned, so the whole file is refused instead.
+
+Read, after review found each of them refused while Terraform accepts them: the
+escaped sigils `$${` and `%%{`, which write a literal `${` or `%{` and open
+nothing; `#`, `//` and `/* */` comments inside an interpolation; a byte order mark
+at the start of a file, which used to make the file's first declaration invisible.
+
+Still refused and still Terraform-legal, as a stated limitation: a heredoc opened
+inside an interpolation. The file yields no locations at all.
+
 ## Limitations of this milestone, as built
 
 - **`.tf.json` is not read.** A configuration written in JSON is a different
