@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -154,21 +155,33 @@ func TestCanonicalCopiesLocations(t *testing.T) {
 	}
 }
 
-// TestCanonicalKeepsTwoReferencesThatDifferOnlyByLocation covers the ordering
-// this addition must not disturb. Two references alike but for where they are
-// written are two references, and a canonical form that collapsed them would
-// drop evidence.
-func TestCanonicalKeepsTwoReferencesThatDifferOnlyByLocation(t *testing.T) {
-	bundle := blockBundle()
-	first := bundle.Findings[0].Evidence[0]
+// TestTwoReferencesDifferingOnlyByLocationAreOrderedByContent covers both halves
+// of what a canonical form owes them: two references alike but for where they are
+// written are two references, and which comes first is decided by their content
+// rather than by the order a producer happened to append them.
+//
+// The second half is what this test was missing. It asserted a count, with a
+// comment claiming to cover ordering, and independent review showed the
+// assertion was satisfied whatever the order came out as.
+func TestTwoReferencesDifferingOnlyByLocationAreOrderedByContent(t *testing.T) {
+	first := blockBundle().Findings[0].Evidence[0]
+	first.Location = &Location{File: "a.tf", Line: 2}
 	second := first
-	first.Location = &Location{File: "main.tf", Line: 1}
-	second.Location = &Location{File: "main.tf", Line: 2}
-	bundle.Findings[0].Evidence = []EvidenceRef{first, second}
+	second.Location = &Location{File: "z.tf", Line: 1}
 
-	canonical := Canonical(bundle)
+	forward, reversed := blockBundle(), blockBundle()
+	forward.Findings[0].Evidence = []EvidenceRef{first, second}
+	reversed.Findings[0].Evidence = []EvidenceRef{second, first}
 
-	if len(canonical.Findings[0].Evidence) != 2 {
-		t.Fatalf("evidence = %+v, want both references", canonical.Findings[0].Evidence)
+	got := Canonical(forward).Findings[0].Evidence
+	if len(got) != 2 {
+		t.Fatalf("evidence = %+v, want both references", got)
+	}
+	if got[0].Location.File != "a.tf" {
+		t.Fatalf("evidence is ordered %q then %q, want content order",
+			got[0].Location.File, got[1].Location.File)
+	}
+	if !reflect.DeepEqual(got, Canonical(reversed).Findings[0].Evidence) {
+		t.Fatal("two references differing only by location order by input position")
 	}
 }

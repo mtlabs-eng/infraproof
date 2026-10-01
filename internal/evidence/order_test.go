@@ -234,6 +234,38 @@ func TestFindingOrderIsTotalOverContent(t *testing.T) {
 			b.Evidence = []EvidenceRef{{Source: "terraform_plan", Path: "change.before"}}
 			return a, b
 		},
+		"resource location file": func() (Finding, Finding) {
+			a, b := base(), base()
+			a.Resource.Location = &Location{File: "a.tf", Line: 1}
+			b.Resource.Location = &Location{File: "z.tf", Line: 1}
+			return a, b
+		},
+		"resource location line": func() (Finding, Finding) {
+			a, b := base(), base()
+			a.Resource.Location = &Location{File: "main.tf", Line: 1}
+			b.Resource.Location = &Location{File: "main.tf", Line: 2}
+			return a, b
+		},
+		"resource location presence": func() (Finding, Finding) {
+			a, b := base(), base()
+			b.Resource.Location = &Location{File: "main.tf", Line: 1}
+			return a, b
+		},
+		"evidence location": func() (Finding, Finding) {
+			a, b := base(), base()
+			a.Evidence = []EvidenceRef{{Source: "terraform_plan", Path: "acl",
+				Location: &Location{File: "a.tf", Line: 1}}}
+			b.Evidence = []EvidenceRef{{Source: "terraform_plan", Path: "acl",
+				Location: &Location{File: "z.tf", Line: 1}}}
+			return a, b
+		},
+		"evidence location presence": func() (Finding, Finding) {
+			a, b := base(), base()
+			a.Evidence = []EvidenceRef{{Source: "terraform_plan", Path: "acl"}}
+			b.Evidence = []EvidenceRef{{Source: "terraform_plan", Path: "acl",
+				Location: &Location{File: "a.tf", Line: 1}}}
+			return a, b
+		},
 		"evidence count": func() (Finding, Finding) {
 			a, b := base(), base()
 			a.Evidence = []EvidenceRef{{Source: "terraform_plan", Path: "change.after"}}

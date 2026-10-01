@@ -253,3 +253,40 @@ func TestALocatedBundleStillSatisfiesItsContract(t *testing.T) {
 		t.Fatalf("a located bundle does not satisfy its own contract: %v", err)
 	}
 }
+
+// TestNoConfigurationDirectoryReadsNoFile covers what "no flag, no file read"
+// means, which the test beside it could not see.
+//
+// Independent review removed the guard on an empty ConfigRoot and the whole suite
+// still passed: filepath.Abs("") resolves to the process working directory, so a
+// plain run from inside a Terraform directory read its .tf files and reported
+// positions from them. The test that claimed to cover this passed only because
+// the test binary's working directory happened to hold no .tf file. This one puts
+// one there.
+func TestNoConfigurationDirectoryReadsNoFile(t *testing.T) {
+	// Resolved before the working directory changes, or they name nothing.
+	intent := write(t, "intent.json", contract)
+	plan := write(t, "plan.json", configuredPlan)
+
+	elsewhere := t.TempDir()
+	configuration, err := os.ReadFile(filepath.Join(awsConfiguration(), "main.tf"))
+	if err != nil {
+		t.Fatalf("reading the shipped configuration: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(elsewhere, "main.tf"), configuration, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Chdir(elsewhere)
+
+	bundle, err := verify.FromFiles(intent, plan, verify.Options{})
+	if err != nil {
+		t.Fatalf("FromFiles: %v", err)
+	}
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if strings.Contains(string(raw), "location") {
+		t.Fatalf("a run with no configuration directory read the working directory:\n%s", raw)
+	}
+}

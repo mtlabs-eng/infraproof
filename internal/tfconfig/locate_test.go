@@ -77,6 +77,26 @@ func annotate(t *testing.T, bundle evidence.Bundle, plan terraformplan.Plan, roo
 	return located.Findings[0]
 }
 
+// nothingLocated asserts that a finding carries no position at all.
+//
+// Both fields, because they are reached by different code: the resource lookup
+// is the first call, which fills the directory cache, and the evidence lookup is
+// the second, which reads it. Independent review found that every refusal test
+// here checked only the first, so a mutation that made the cache report an
+// unresolved directory as resolved -- locating a module that climbed out of the
+// configuration directory inside the root module -- survived the whole suite.
+func nothingLocated(t *testing.T, finding evidence.Finding, because string) {
+	t.Helper()
+	if finding.Resource != nil && finding.Resource.Location != nil {
+		t.Fatalf("%s was located at %+v", because, finding.Resource.Location)
+	}
+	for i, ref := range finding.Evidence {
+		if ref.Location != nil {
+			t.Fatalf("%s was located through evidence[%d] at %+v", because, i, ref.Location)
+		}
+	}
+}
+
 // at compares a location with what a reader would see by opening the file.
 func at(t *testing.T, got *evidence.Location, file string, line int) {
 	t.Helper()
@@ -199,12 +219,7 @@ func TestReportsNoLocationWhenTheDeclarationHasMoved(t *testing.T) {
 
 	finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a moved declaration was located at %+v", finding.Resource.Location)
-	}
-	if finding.Evidence[0].Location != nil {
-		t.Fatalf("an argument of a moved declaration was located at %+v", finding.Evidence[0].Location)
-	}
+	nothingLocated(t, finding, "a moved declaration")
 }
 
 // TestReportsNoLocationWhenTwoDeclarationsMatch covers the file that answers
@@ -216,9 +231,7 @@ func TestReportsNoLocationWhenTwoDeclarationsMatch(t *testing.T) {
 
 	finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("an ambiguous declaration was located at %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "an ambiguous declaration")
 }
 
 // TestReadsNothingThroughAModuleSourceThatClimbsOut covers the milestone's
@@ -241,9 +254,7 @@ func TestReadsNothingThroughAModuleSourceThatClimbsOut(t *testing.T) {
 		"module.shared.terraform_data.x",
 		"input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a declaration outside the configuration directory was located at %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "a declaration outside the configuration directory")
 }
 
 // TestReportsNoLocationForARemoteModule covers the source this build does not
@@ -258,9 +269,7 @@ func TestReportsNoLocationForARemoteModule(t *testing.T) {
 		"module.shared.terraform_data.x",
 		"input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a remote module was located at %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "a remote module")
 }
 
 // TestReportsNoLocationForAnAddressThePlanDoesNotHave covers the join failing at
@@ -272,9 +281,7 @@ func TestReportsNoLocationForAnAddressThePlanDoesNotHave(t *testing.T) {
 
 	finding := annotate(t, about("terraform_data.absent", "terraform_data.absent", "input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("an address the plan does not carry was located at %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "an address the plan does not carry")
 }
 
 // TestLocatesUnknownsAsWell covers the records that are not findings. An unknown
@@ -401,9 +408,7 @@ func TestSkipsFilesTerraformItselfSkips(t *testing.T) {
 
 	finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a declaration in a file Terraform ignores was located at %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "a declaration in a file Terraform ignores")
 }
 
 // TestAnAddressThePlanDoesNotHaveMatchesNothing covers why the lookup refuses an
@@ -416,9 +421,7 @@ func TestAnAddressThePlanDoesNotHaveMatchesNothing(t *testing.T) {
 
 	finding := annotate(t, about("terraform_data.absent", "terraform_data.absent", "input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("an unknown address was located at %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "an unknown address")
 }
 
 // TestDoesNotFollowARemoteSourceIntoALocalDirectory covers the collision the
@@ -439,9 +442,7 @@ func TestDoesNotFollowARemoteSourceIntoALocalDirectory(t *testing.T) {
 		"module.shared.terraform_data.x",
 		"input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a remote source was followed into %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "a remote source followed into a local directory")
 }
 
 // TestReadsNothingThroughASourceThatLeavesAndComesBack covers the path a lexical
@@ -459,9 +460,7 @@ func TestReadsNothingThroughASourceThatLeavesAndComesBack(t *testing.T) {
 		"module.shared.terraform_data.x",
 		"input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a source that climbed out and back was followed to %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "a source that climbed out and back")
 }
 
 // TestRefusesAChainOfModuleCallsThatDoesNotEnd covers a plan this package did
@@ -490,9 +489,7 @@ func TestRefusesAChainOfModuleCallsThatDoesNotEnd(t *testing.T) {
 		"module.a.module.b.terraform_data.x",
 		"input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a chain that does not end was followed to %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "a chain that does not end")
 }
 
 // TestReadsNothingPastTheRunBudget covers the bound on the work one run does.
@@ -517,9 +514,7 @@ func TestReadsNothingPastTheRunBudget(t *testing.T) {
 	plan := loadPlan(t, "testdata", "generated", "plan.json")
 	finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("reading continued past the budget, locating %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "a declaration past the run's reading budget")
 }
 
 // TestReadsNothingFromAFileTooLarge covers the same bound on one file. Nothing
@@ -536,9 +531,7 @@ func TestReadsNothingFromAFileTooLarge(t *testing.T) {
 	plan := loadPlan(t, "testdata", "generated", "plan.json")
 	finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a file past the bound was read, locating %+v", finding.Resource.Location)
-	}
+	nothingLocated(t, finding, "a declaration in a file past the size bound")
 }
 
 // TestAcceptsAConfigurationDirectoryNamedThroughAParent covers the argument a
@@ -592,9 +585,7 @@ func TestAFileNameTheContractRefusesIsNotALocation(t *testing.T) {
 			// that matters: an unspellable location must not be composed.
 			finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
 
-			if finding.Resource.Location != nil {
-				t.Fatalf("a name the contract refuses was reported as %+v", finding.Resource.Location)
-			}
+			nothingLocated(t, finding, "a name the contract refuses")
 		})
 	}
 }
@@ -633,7 +624,33 @@ func TestADirectoryNameTheContractRefusesIsNotALocation(t *testing.T) {
 		"module.shared.terraform_data.x",
 		"input"), plan, root)
 
-	if finding.Resource.Location != nil {
-		t.Fatalf("a directory name the contract refuses was reported as %+v", finding.Resource.Location)
+	nothingLocated(t, finding, "a directory name the contract refuses")
+}
+
+// TestAFileTooLargeDiscardsTheDeclarationsBesideIt covers why a directory that
+// could not be read whole is discarded whole.
+//
+// The declaration in the file this build refused could have been the second match
+// that makes the answer ambiguous. Keeping the ones already scanned would report
+// a unique position for something this build cannot know is unique -- which is
+// the wrong line the milestone exists to prevent, arrived at by being helpful.
+//
+// The fixture is built so the two cases differ: both files declare the resource
+// the plan names, and the oversized one sorts second, so a partial scan would
+// have exactly one match in hand.
+func TestAFileTooLargeDiscardsTheDeclarationsBesideIt(t *testing.T) {
+	root := t.TempDir()
+	declaration := "resource \"terraform_data\" \"root\" {\n  input = \"x\"\n}\n"
+	if err := os.WriteFile(filepath.Join(root, "a_main.tf"), []byte(declaration), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
 	}
+	oversized := strings.Repeat("# filler\n", 70_000) + declaration
+	if err := os.WriteFile(filepath.Join(root, "z_huge.tf"), []byte(oversized), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	plan := loadPlan(t, "testdata", "generated", "plan.json")
+	finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, root)
+
+	nothingLocated(t, finding, "a declaration beside a file this build refused to read")
 }
