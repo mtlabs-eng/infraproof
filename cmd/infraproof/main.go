@@ -18,7 +18,7 @@ import (
 
 // version identifies the build. It stays fixed until the CLI has behavior worth
 // versioning independently of the Evidence Bundle contract.
-const version = "0.1.0"
+const version = "0.2.1"
 
 const usage = `InfraProof verifies Terraform and OpenTofu changes against declared intent.
 

@@ -27,7 +27,7 @@ fails if that block ever widens.
 It needs no secret. The step that runs the verifier is given no credential at
 all, and a test asserts that.
 
-Pin the version. The template installs `@v0.2.0`; a verifier that changes under
+Pin the version. The template installs `@v0.2.1`; a verifier that changes under
 you is a verdict you cannot reproduce, which is what `@latest` would be. Nothing
 here can check that the version you name resolves, so check it once when you
 change it.

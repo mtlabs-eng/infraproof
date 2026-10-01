@@ -15,7 +15,7 @@ import (
 )
 
 // Version is the adapter's version, reported in the handshake.
-const Version = "0.1.0"
+const Version = "0.2.1"
 
 // MaxInputBytes bounds each file a tool reads.
 //

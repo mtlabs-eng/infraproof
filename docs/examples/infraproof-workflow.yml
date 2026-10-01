@@ -73,7 +73,7 @@ jobs:
       # Pin the version. A verifier that changes under you is a verdict you
       # cannot reproduce, and "@latest" is exactly that.
       - name: Install InfraProof
-        run: go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.2.0
+        run: go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.2.1
 
       # The verdict, twice: once shaped for a comment, once as the Evidence
       # Bundle, which carries everything the comment leaves out.
