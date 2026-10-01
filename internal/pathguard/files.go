@@ -50,12 +50,11 @@ var ErrNotADirectory = errors.New("names a file rather than a directory")
 //
 // An empty suffix list yields nothing. It is not "every file": a guard that
 // answered with everything when asked for nothing would read a private key
-// because a caller forgot an argument.
+// because a caller forgot an argument. That falls out of matches rather than
+// being checked here -- an earlier version checked it twice, and a commit message
+// claimed a mutation test killed the second check when nothing could, because the
+// two are the same answer.
 func (g *Guard) Files(dir string, suffixes []string, fn func(name string, f *os.File) error) error {
-	if len(suffixes) == 0 {
-		return nil
-	}
-
 	absolute, err := filepath.Abs(dir)
 	if err != nil {
 		return refuse(dir)

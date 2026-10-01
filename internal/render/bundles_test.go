@@ -41,7 +41,12 @@ func contractBundle() evidence.Bundle {
 					Source:          "terraform_plan",
 					ResourceAddress: "aws_s3_bucket.assets",
 					Path:            "resource_changes[].change.after",
-					Location:        &evidence.Location{File: "main.tf", Line: 7},
+					// The declaration's line, not an argument's: this
+					// reference names a path in the plan document rather than
+					// an argument of the block, so a producer locating it falls
+					// back to the block. An example a producer could not have
+					// made is an example that teaches the wrong thing.
+					Location: &evidence.Location{File: "main.tf", Line: 6},
 				}},
 				Remediation: "Disable public access using the provider-supported controls.",
 			},

@@ -3,6 +3,7 @@ package tfconfig
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -352,6 +353,33 @@ func TestScanRefusesRunawayNesting(t *testing.T) {
 
 	if got := scan([]byte(source)); got != nil {
 		t.Fatalf("runaway nesting yielded %v", got)
+	}
+}
+
+// TestScanRefusesAFileWithTooManyTokens covers the other bound on one file, which
+// is reachable well inside the 512 KiB this build reads: three hundred thousand
+// commas is a quarter of a megabyte. It was argued for in a comment and held by
+// nothing until independent review mutated it away and the suite stayed green.
+func TestScanRefusesAFileWithTooManyTokens(t *testing.T) {
+	source := "resource \"aws_s3_bucket\" \"a\" {\n  bucket = \"a\"\n}\n" +
+		strings.Repeat(",", maxTokens+1)
+
+	if got := scan([]byte(source)); got != nil {
+		t.Fatalf("a file past the token bound yielded %v", got)
+	}
+}
+
+// TestScanRefusesRunawayTemplateNesting covers the bound on a quoted template.
+// An interpolation holds an expression, which holds strings, which hold
+// interpolations, and the nesting is followed rather than guessed at -- so it
+// needs a floor, and seventy levels is past any real configuration.
+func TestScanRefusesRunawayTemplateNesting(t *testing.T) {
+	source := "resource \"aws_s3_bucket\" \"a\" {\n  bucket = " +
+		strings.Repeat("\"${", maxBraceDepth+2) + "x" +
+		strings.Repeat("}\"", maxBraceDepth+2) + "\n}\n"
+
+	if got := scan([]byte(source)); got != nil {
+		t.Fatalf("a template nested past the bound yielded %v", got)
 	}
 }
 

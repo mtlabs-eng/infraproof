@@ -97,6 +97,14 @@ func TestInvalidLocationsAreRefused(t *testing.T) {
 		"line zero":         {File: "main.tf", Line: 0},
 		"negative line":     {File: "main.tf", Line: -3},
 		"control character": {File: "ma\nin.tf", Line: 1},
+		// Spellings the prose excluded and the check accepted, until independent
+		// review measured them one by one.
+		"drive letter":       {File: "C:/infra/main.tf", Line: 1},
+		"bare directory":     {File: ".", Line: 1},
+		"blank":              {File: " ", Line: 1},
+		"nul byte":           {File: "ma\x00in.tf", Line: 1},
+		"tab":                {File: "\tmain.tf", Line: 1},
+		"longer than a path": {File: strings.Repeat("a", 4097), Line: 1},
 	}
 	for name, location := range cases {
 		t.Run(name, func(t *testing.T) {

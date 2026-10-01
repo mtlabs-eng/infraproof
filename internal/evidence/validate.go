@@ -553,6 +553,11 @@ func validateLocation(path string, l *Location) []error {
 	return errs
 }
 
+// maxLocationPath bounds a location's path. Every filesystem this build runs on
+// stops well before it, and a field with no bound is a field a third-party bundle
+// can make arbitrarily long.
+const maxLocationPath = 4096
+
 // relativeFilePath reports whether a path names a file inside the directory it
 // is relative to, in the one spelling this contract emits.
 //
@@ -560,12 +565,33 @@ func validateLocation(path string, l *Location) []error {
 // question: "a//b", "./a" and "a/b/../c" are all refused as written, so there is
 // no second spelling for a consumer to have to handle, and nothing here has to
 // decide what an unusual one meant.
+//
+// The rest of the refusals are spellings independent review measured as accepted
+// while the prose said otherwise. "C:/infra/main.tf" satisfies every rule above
+// and is absolute on the machine it came from. A control character is invisible in
+// every report this build writes, and a NUL truncates the path for anything that
+// hands it to a C library. A blank path names nothing. None is producible by this
+// build's own locator; a bundle is a public format, and a consumer validating
+// somebody else's is entitled to the rules as written.
 func relativeFilePath(file string) bool {
+	if strings.TrimSpace(file) == "" || len(file) > maxLocationPath {
+		return false
+	}
 	if strings.ContainsRune(file, '\\') || strings.HasPrefix(file, "/") || file != gopath.Clean(file) || file == "." {
 		return false
 	}
-	for _, segment := range strings.Split(file, "/") {
+	for _, char := range file {
+		if isControlChar(char) {
+			return false
+		}
+	}
+	for i, segment := range strings.Split(file, "/") {
 		if segment == ".." {
+			return false
+		}
+		// A drive letter is absolute wherever it came from, and the only place
+		// one can appear is the first segment.
+		if i == 0 && strings.Contains(segment, ":") {
 			return false
 		}
 	}
@@ -587,5 +613,5 @@ func relativeFilePath(file string) bool {
 // and no report. A rule a producer cannot ask about is a rule a producer will
 // restate, or ignore.
 func (l Location) Valid() bool {
-	return relativeFilePath(l.File) && !strings.ContainsAny(l.File, "\r\n") && l.Line >= 1
+	return relativeFilePath(l.File) && l.Line >= 1
 }

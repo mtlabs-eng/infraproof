@@ -319,6 +319,32 @@ func TestFilesYieldsNamesInOrder(t *testing.T) {
 	}
 }
 
+// TestFilesMatchesSuffixesExactly covers the comparison Terraform makes. A file
+// named MAIN.TF is not configuration to Terraform, so no plan was ever made from
+// it, and a line out of one would be a line out of a file that never ran.
+//
+// It is here because the rule was argued for in a comment and defended by
+// nothing: lower-casing both sides survived the whole suite.
+func TestFilesMatchesSuffixesExactly(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"main.tf", "SHOUTED.TF", "mixed.Tf", "data.tfvars"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	guard, err := pathguard.New([]string{root})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer guard.Close()
+
+	got := collect(t, guard, root, []string{".tf"})
+	if len(got) != 1 || got["main.tf"] != "main.tf" {
+		t.Fatalf("yielded %v, want main.tf alone", got)
+	}
+}
+
 // TestFilesWithNoSuffixesYieldsNothing covers the reading a caller must not be
 // given by omission. An empty list is not "every file": a guard that answered
 // with everything when asked for nothing would read a private key because a

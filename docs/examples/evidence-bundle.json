@@ -52,7 +52,7 @@
           "redacted": false,
           "location": {
             "file": "main.tf",
-            "line": 7
+            "line": 6
           }
         }
       ],

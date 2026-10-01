@@ -97,8 +97,18 @@ one.
 - A declaration that has moved, been renamed, or been deleted since the plan was
   made produces no location, and a test proves the mismatch is detected rather
   than the nearest block reported.
-- Without `--config`, every committed fixture produces the byte-identical bundle
-  it produces today.
+- Without `--config` nothing is read and nothing is added. For every plan this
+  repository ships, a verification against a configuration directory that
+  declares nothing produces the same bytes as one with no directory at all, and
+  no bundle carries a location.
+
+  Written first as "every committed fixture produces the byte-identical bundle it
+  produces today", which independent review showed is false as stated and for a
+  reason that has nothing to do with locations: this milestone takes the Evidence
+  Bundle to 1.2, so `schema_version` differs in every fixture. The comparison
+  above is what a suite can hold, and the review also made the original
+  comparison by hand across 65 fixtures and three formats: Markdown and review
+  output are byte-identical, and JSON differs on that one line.
 - A module `source` pointing outside the configuration directory reads nothing.
 - No configuration file content appears in any rendering.
 - The locator is exercised against a configuration this repository ships, so the
@@ -125,5 +135,18 @@ one.
 - **MCP is unchanged.** `verify_plan` takes a contract and a plan, as before. Its
   guard confines the paths it is handed, and handing it a directory is a wider
   grant than this milestone examined.
-- **Reading is bounded at 512 KiB per file and 8 MiB per run.** Past either,
-  nothing more is read and nothing more is located.
+- **Reading is bounded at 512 KiB per file and 8 MiB per run.** Past either, the
+  whole directory is discarded rather than the one file: a declaration this build
+  did not get to see could have been the second match that makes the answer
+  ambiguous, so keeping the ones it did see would report a position for something
+  it cannot know is unique.
+- **A hard link is read.** The guard refuses a symbolic link out of the
+  configuration directory, and a hard link is indistinguishable from the file it
+  points at — the same residual risk `docs/THREAT-MODEL-MCP.md` records for the
+  paths the adapter is given. No content reaches output either way, and a line is
+  reported only if the linked file happens to declare what the plan names.
+- **A symbolic link to a directory is not followed, even inside the directory.**
+  A module whose path goes through one has no locations, and nothing in the
+  bundle says why.
+- **A directory cannot be enumerated past 1024 entries.** Past that it is refused
+  rather than walked, and its declarations have no locations.

@@ -2,11 +2,14 @@ package verify_test
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
 	"github.com/mtlabs-eng/infraproof/internal/verify"
@@ -288,5 +291,88 @@ func TestNoConfigurationDirectoryReadsNoFile(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "location") {
 		t.Fatalf("a run with no configuration directory read the working directory:\n%s", raw)
+	}
+}
+
+// planFixtures returns every plan this repository ships, by path.
+func planFixtures(t *testing.T) []string {
+	t.Helper()
+	var found []string
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".json" || !strings.Contains(path, "testdata") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if _, err := terraformplan.Parse(raw); err != nil {
+			// Not a plan, or a plan this build refuses. Either way it is not a
+			// fixture this comparison is about.
+			return nil
+		}
+		found = append(found, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking fixtures: %v", err)
+	}
+	if len(found) < 20 {
+		t.Fatalf("found only %d plan fixtures, which is too few to be the set", len(found))
+	}
+	return found
+}
+
+// TestEveryFixtureIsUnchangedWhenNothingMatches covers the milestone's
+// compatibility criterion across the whole fixture set rather than one plan.
+//
+// The criterion was written as "byte-identical", and what is provable in a suite
+// is narrower and worth stating exactly: for every plan this repository ships, a
+// verification against a configuration directory that declares nothing produces
+// the same bytes as one with no directory at all. Nothing is added when nothing
+// matched, in any fixture, in any field.
+//
+// The test that used to stand for this checked one plan for the absence of a
+// substring.
+func TestEveryFixtureIsUnchangedWhenNothingMatches(t *testing.T) {
+	intent := write(t, "intent.json", contract)
+	empty := t.TempDir()
+
+	for _, fixture := range planFixtures(t) {
+		t.Run(fixture, func(t *testing.T) {
+			plain, err := verify.FromFiles(intent, fixture, verify.Options{})
+			if err != nil {
+				t.Skipf("this fixture is not verifiable: %v", err)
+			}
+			against, err := verify.FromFiles(intent, fixture, verify.Options{ConfigRoot: empty})
+			if err != nil {
+				t.Fatalf("FromFiles with a configuration directory: %v", err)
+			}
+
+			want, err := json.Marshal(plain)
+			if err != nil {
+				t.Fatalf("marshalling: %v", err)
+			}
+			got, err := json.Marshal(against)
+			if err != nil {
+				t.Fatalf("marshalling: %v", err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("a configuration directory that declares nothing changed the bundle\n got: %s\nwant: %s", got, want)
+			}
+			if strings.Contains(string(want), "location") {
+				t.Fatalf("a verification with no configuration directory carried a location: %s", want)
+			}
+		})
 	}
 }
