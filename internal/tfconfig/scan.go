@@ -14,10 +14,34 @@ type declaration struct {
 	Type, Name string
 	// Line is the 1-based line the block keyword is on.
 	Line int
-	// Attributes maps the name of each argument or nested block written directly
-	// inside this one to its line. Nothing deeper is recorded: an attribute of
-	// an attribute is not an attribute of the resource.
-	Attributes map[string]int
+	// Attributes are the arguments and unlabelled nested blocks written directly
+	// inside this one, with the line each is on, in the order they appear.
+	// Nothing deeper is recorded: an attribute of an attribute is not an
+	// attribute of the resource.
+	//
+	// A slice rather than a map because a declaration has a handful of them and
+	// a directory can have tens of thousands of declarations: a map per
+	// declaration costs more in headers than the whole configuration it came
+	// from. Measured at this build's own reading bound, the maps were most of a
+	// 24-fold amplification of the bytes read.
+	Attributes []attribute
+}
+
+// attribute is one argument or nested block, and the line it is written on.
+type attribute struct {
+	name string
+	line int
+}
+
+// lineOf returns the line an argument is written on, and whether it is written
+// in this block at all.
+func (d declaration) lineOf(name string) (int, bool) {
+	for _, a := range d.Attributes {
+		if a.name == name {
+			return a.line, true
+		}
+	}
+	return 0, false
 }
 
 // maxBraceDepth bounds how deeply a file may nest before the scan refuses it.
@@ -382,11 +406,10 @@ func headerDeclaration(tokens []token, header []int) *declaration {
 		return nil
 	}
 	return &declaration{
-		Kind:       keyword.text,
-		Type:       first.text,
-		Name:       second.text,
-		Line:       keyword.line,
-		Attributes: map[string]int{},
+		Kind: keyword.text,
+		Type: first.text,
+		Name: second.text,
+		Line: keyword.line,
 	}
 }
 
@@ -405,8 +428,8 @@ func recordAttribute(current *declaration, tokens []token, i int) {
 	if next := tokens[i+1].kind; next != tokenEquals && next != tokenOpen {
 		return
 	}
-	if _, seen := current.Attributes[tk.text]; !seen {
-		current.Attributes[tk.text] = tk.line
+	if _, seen := current.lineOf(tk.text); !seen {
+		current.Attributes = append(current.Attributes, attribute{name: tk.text, line: tk.line})
 	}
 }
 

@@ -18,6 +18,15 @@ func fixtureSource(t *testing.T, parts ...string) []byte {
 	return raw
 }
 
+// attributeLine is the line an argument is written on, or zero when it is not
+// written in that block.
+func attributeLine(d declaration, name string) int {
+	if line, written := d.lineOf(name); written {
+		return line
+	}
+	return 0
+}
+
 // found returns the one declaration of a type and name, and fails if the file
 // holds none or several.
 func found(t *testing.T, declarations []declaration, kind, resourceType, name string) declaration {
@@ -59,7 +68,7 @@ func TestScanFindsDeclarationsInGeneratedConfiguration(t *testing.T) {
 		if d.Line != c.line {
 			t.Errorf("%s declared at line %d, want %d", c.name, d.Line, c.line)
 		}
-		if got := d.Attributes[c.attribute]; got != c.at {
+		if got := attributeLine(d, c.attribute); got != c.at {
 			t.Errorf("%s attribute %s at line %d, want %d", c.name, c.attribute, got, c.at)
 		}
 	}
@@ -109,18 +118,18 @@ func TestScanFindsAttributesInShippedAwsConfiguration(t *testing.T) {
 	if bucket.Line != 6 {
 		t.Errorf("bucket declared at line %d, want 6", bucket.Line)
 	}
-	if bucket.Attributes["tags"] != 9 {
-		t.Errorf("tags at line %d, want 9", bucket.Attributes["tags"])
+	if attributeLine(bucket, "tags") != 9 {
+		t.Errorf("tags at line %d, want 9", attributeLine(bucket, "tags"))
 	}
 	// owner is written at depth two, inside tags. It is not an attribute of the
 	// resource and must not be reported as one.
-	if line, present := bucket.Attributes["owner"]; present {
+	if line, present := bucket.lineOf("owner"); present {
 		t.Errorf("a nested attribute was reported as the resource's own, at line %d", line)
 	}
 
 	acl := found(t, declarations, "resource", "aws_s3_bucket_acl", "assets")
-	if acl.Line != 23 || acl.Attributes["acl"] != 25 {
-		t.Errorf("acl block at line %d, acl attribute at line %d, want 23 and 25", acl.Line, acl.Attributes["acl"])
+	if acl.Line != 23 || attributeLine(acl, "acl") != 25 {
+		t.Errorf("acl block at line %d, acl attribute at line %d, want 23 and 25", acl.Line, attributeLine(acl, "acl"))
 	}
 
 	block := found(t, declarations, "resource", "aws_s3_bucket_public_access_block", "assets")
@@ -131,7 +140,7 @@ func TestScanFindsAttributesInShippedAwsConfiguration(t *testing.T) {
 		"ignore_public_acls":      19,
 		"restrict_public_buckets": 20,
 	} {
-		if got := block.Attributes[attribute]; got != want {
+		if got := attributeLine(block, attribute); got != want {
 			t.Errorf("%s at line %d, want %d", attribute, got, want)
 		}
 	}
@@ -219,7 +228,7 @@ func TestScanReadsWhatTheGrammarAllows(t *testing.T) {
 			if d.Line != expected.line {
 				t.Errorf("declared at line %d, want %d", d.Line, expected.line)
 			}
-			if got := d.Attributes["bucket"]; got != expected.at {
+			if got := attributeLine(d, "bucket"); got != expected.at {
 				t.Errorf("bucket at line %d, want %d", got, expected.at)
 			}
 			for _, other := range declarations {
@@ -288,8 +297,8 @@ func TestScanRecordsTheFirstOfARepeatedAttribute(t *testing.T) {
 `
 	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
 
-	if d.Attributes["bucket"] != 2 {
-		t.Fatalf("bucket at line %d, want the first at 2", d.Attributes["bucket"])
+	if attributeLine(d, "bucket") != 2 {
+		t.Fatalf("bucket at line %d, want the first at 2", attributeLine(d, "bucket"))
 	}
 }
 
@@ -476,8 +485,8 @@ func TestScanRecordsOnlyUnlabelledNestedBlocks(t *testing.T) {
 		t.Fatalf("attributes = %v, want %v", d.Attributes, want)
 	}
 	for name, line := range want {
-		if d.Attributes[name] != line {
-			t.Errorf("%s at line %d, want %d", name, d.Attributes[name], line)
+		if attributeLine(d, name) != line {
+			t.Errorf("%s at line %d, want %d", name, attributeLine(d, name), line)
 		}
 	}
 }
@@ -493,7 +502,7 @@ func TestScanDoesNotReadAComparisonAsAnArgument(t *testing.T) {
 `
 	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
 
-	if line, present := d.Attributes["mistake"]; present {
+	if line, present := d.lineOf("mistake"); present {
 		t.Fatalf("a comparison was recorded as an argument at line %d", line)
 	}
 }
@@ -508,7 +517,7 @@ func TestScanRefusesTwoArgumentsOnOneLine(t *testing.T) {
 `
 	d := found(t, scan([]byte(source)), "resource", "aws_s3_bucket", "a")
 
-	if line, present := d.Attributes["acl"]; present {
+	if line, present := d.lineOf("acl"); present {
 		t.Fatalf("a second argument on one line was recorded at line %d", line)
 	}
 }

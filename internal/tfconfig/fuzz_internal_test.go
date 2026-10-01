@@ -75,12 +75,12 @@ func FuzzScan(f *testing.F) {
 			if text := at(d.Line); !strings.Contains(text, d.Kind) {
 				t.Fatalf("declaration reported at line %d, which does not hold %q", d.Line, d.Kind)
 			}
-			for name, line := range d.Attributes {
-				if line < d.Line {
-					t.Fatalf("attribute %q at line %d, before its declaration at %d", name, line, d.Line)
+			for _, a := range d.Attributes {
+				if a.line < d.Line {
+					t.Fatalf("attribute %q at line %d, before its declaration at %d", a.name, a.line, d.Line)
 				}
-				if text := at(line); !strings.Contains(text, name) {
-					t.Fatalf("attribute %q reported at line %d, which does not hold it", name, line)
+				if text := at(a.line); !strings.Contains(text, a.name) {
+					t.Fatalf("attribute %q reported at line %d, which does not hold it", a.name, a.line)
 				}
 			}
 		}

@@ -78,8 +78,15 @@ type locator struct {
 	changes map[string]terraformplan.ResourceChange
 	calls   map[string]terraformplan.ModuleCall
 
-	dirs    map[string]string
-	scanned map[string][]placed
+	dirs map[string]string
+	// scanned holds each directory's declarations indexed by what a match is on.
+	//
+	// Indexed rather than scanned, because a lookup happens once per finding and
+	// once per evidence reference: a linear scan made the cost findings times
+	// declarations, which at this build's own reading bound measured nine
+	// seconds for four thousand findings. Bounded work has to mean bounded, not
+	// bounded per read.
+	scanned map[string]map[declarationKey][]placed
 	// remaining is what is left of this run's reading budget. Once spent, later
 	// lookups find nothing rather than reading further.
 	remaining int64
@@ -89,6 +96,16 @@ type locator struct {
 type placed struct {
 	declaration
 	file string
+}
+
+// declarationKey is what a plan address is matched on: the three things a plan
+// states about a declaration, and the only three a location may rest on.
+type declarationKey struct {
+	kind, resourceType, name string
+}
+
+func keyOf(d declaration) declarationKey {
+	return declarationKey{kind: d.Kind, resourceType: d.Type, name: d.Name}
 }
 
 func newLocator(plan terraformplan.Plan, root string) (*locator, error) {
@@ -112,7 +129,7 @@ func newLocator(plan terraformplan.Plan, root string) (*locator, error) {
 		changes:   make(map[string]terraformplan.ResourceChange, len(plan.ResourceChanges)),
 		calls:     plan.ModuleCalls,
 		dirs:      map[string]string{},
-		scanned:   map[string][]placed{},
+		scanned:   map[string]map[declarationKey][]placed{},
 		remaining: maxTotalBytes,
 	}
 	for _, change := range plan.ResourceChanges {
@@ -144,7 +161,7 @@ func (l *locator) evidenceAt(ref evidence.EvidenceRef) *evidence.Location {
 	if !ok {
 		return nil
 	}
-	if line, written := found.Attributes[firstSegment(ref.Path)]; written {
+	if line, written := found.lineOf(firstSegment(ref.Path)); written {
 		return at(dir, found.file, line)
 	}
 	return at(dir, found.file, found.Line)
@@ -188,27 +205,22 @@ func (l *locator) find(address string) (placed, string, bool) {
 		kind = "data"
 	}
 
-	var match placed
-	matches := 0
-	for _, candidate := range l.declarationsIn(dir) {
-		if candidate.Kind == kind && candidate.Type == change.Type && candidate.Name == change.Name {
-			match = candidate
-			matches++
-		}
-	}
-	if matches != 1 {
+	// Found once, it is the answer. Found twice or not at all, there is no
+	// answer, and the nearest block is not it.
+	matches := l.declarationsIn(dir)[declarationKey{kind: kind, resourceType: change.Type, name: change.Name}]
+	if len(matches) != 1 {
 		return placed{}, "", false
 	}
-	return match, dir, true
+	return matches[0], dir, true
 }
 
 // declarationsIn reads one module directory, once.
-func (l *locator) declarationsIn(dir string) []placed {
+func (l *locator) declarationsIn(dir string) map[declarationKey][]placed {
 	if cached, read := l.scanned[dir]; read {
 		return cached
 	}
 
-	var found []placed
+	found := map[declarationKey][]placed{}
 	err := l.guard.Files(filepath.Join(l.root, filepath.FromSlash(dir)), []string{".tf"},
 		func(name string, file *os.File) error {
 			if ignoredFile(name) {
@@ -219,15 +231,21 @@ func (l *locator) declarationsIn(dir string) []placed {
 				return err
 			}
 			for _, d := range scan(source) {
-				found = append(found, placed{declaration: d, file: name})
+				key := keyOf(d)
+				found[key] = append(found[key], placed{declaration: d, file: name})
 			}
 			return nil
 		})
 	if err != nil {
 		// A directory that cannot be read is a directory nothing is known
-		// about. It is recorded as read so that a plan naming it many times
-		// does not ask the filesystem again for the same refusal.
-		found = nil
+		// about, and that includes the files beside the one that failed: a
+		// declaration this build did not get to see could have been the second
+		// match that makes the answer ambiguous, so keeping the ones it did see
+		// would report a position for something it cannot know is unique.
+		//
+		// It is recorded as read so that a plan naming it many times does not
+		// ask the filesystem again for the same refusal.
+		found = map[declarationKey][]placed{}
 	}
 
 	l.scanned[dir] = found
