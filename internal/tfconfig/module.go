@@ -67,6 +67,13 @@ func (l *locator) resolve(moduleAddress string) (string, bool) {
 	// nothing, before anything is opened, which is why the result is an absent
 	// location rather than an error.
 	//
+	// No mutation of it fails a test either, and the confirming review found the
+	// reason: the composed path keeps its "../" prefix, which the Evidence Bundle
+	// contract refuses, so the location is absent twice over and the suite cannot
+	// see the difference. What it does see is the difference that matters here --
+	// without this, the files are opened and read before the location is thrown
+	// away, and the milestone's requirement is about reading, not about reporting.
+	//
 	// It is not the guard's check repeated. A source that leaves the directory
 	// and returns -- "../escaping" from the root called escaping -- cancels out
 	// when the names are joined, so the guard sees a path inside the root and

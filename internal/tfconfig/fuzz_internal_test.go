@@ -89,6 +89,21 @@ func FuzzScan(f *testing.F) {
 			// declaration in every such file look misreported.
 			return strings.TrimPrefix(string(lines[line-1]), "\ufeff")
 		}
+		// from is the reported line and everything after it, because what a name
+		// opens may legally be on a later line: a comment between a keyword and
+		// its labels carries newlines and is whitespace to Terraform. The name
+		// itself must still be on the line claimed, which is what usedAs enforces
+		// by bounding where the match may start.
+		from := func(line int) (string, int) {
+			tail := strings.Join(func() []string {
+				out := make([]string, 0, len(lines)-line+1)
+				for _, l := range lines[line-1:] {
+					out = append(out, string(l))
+				}
+				return out
+			}(), "\n")
+			return strings.TrimPrefix(tail, "\ufeff"), len(at(line))
+		}
 
 		for _, d := range declarations {
 			if d.Kind != "resource" && d.Kind != "data" {
@@ -107,14 +122,14 @@ func FuzzScan(f *testing.F) {
 			// it. So what is checked is use: a declaration's keyword is followed
 			// by a quoted label, and an argument's name by an assignment or a
 			// block.
-			if !usedAs(at(d.Line), d.Kind, `"`) {
+			if tail, within := from(d.Line); !usedAs(tail, within, d.Kind, `"`) {
 				t.Fatalf("declaration reported at line %d, which does not use %q: %q", d.Line, d.Kind, at(d.Line))
 			}
 			for _, a := range d.Attributes {
 				if a.line < d.Line {
 					t.Fatalf("attribute %q at line %d, before its declaration at %d", a.name, a.line, d.Line)
 				}
-				if !usedAs(at(a.line), a.name, "=", "{") {
+				if tail, within := from(a.line); !usedAs(tail, within, a.name, "=", "{") {
 					t.Fatalf("attribute %q reported at line %d, where nothing is assigned: %q", a.name, a.line, at(a.line))
 				}
 			}
@@ -127,16 +142,17 @@ func FuzzScan(f *testing.F) {
 	})
 }
 
-// afterGap skips what HCL allows between two tokens on one line: horizontal
-// whitespace and complete block comments. Terraform accepts
-// `resource/**/"a"/**/"b" {`, so an oracle that insists on a quote immediately
-// after the keyword refuses a file this build is right about.
+// afterGap skips what HCL allows between two tokens: whitespace, including
+// newlines, and complete block comments. Terraform accepts
+// `resource/**/"a"/**/"b" {` and the same with newlines inside the comments, so an
+// oracle that insists on a quote immediately after the keyword refuses files this
+// build is right about -- it refused two of them while this was being written.
 //
 // This is a second reading of the grammar, which is what an oracle is for. The
 // production lexer must not carry one; this file exists to disagree with it.
 func afterGap(text string) string {
 	for {
-		text = strings.TrimLeft(text, " \t")
+		text = strings.TrimLeft(text, " \t\r\n")
 		if !strings.HasPrefix(text, "/*") {
 			return text
 		}
@@ -151,17 +167,25 @@ func afterGap(text string) string {
 // usedAs reports whether text uses word as a name followed by one of the given
 // openers, rather than merely containing the letters somewhere.
 //
+// The name must begin within the first within bytes, which is the line the
+// position claims; what it opens may be further on, because the gap between them
+// may carry a comment and a comment may carry newlines. Without the bound the
+// oracle would accept a position one line early and find the name on the next.
+//
 // A name is a whole word: the character before it cannot continue an identifier,
 // or "input" would be found inside "no_input". "=" does not match "==", which is
 // a comparison and not an assignment.
-func usedAs(text, word string, openers ...string) bool {
-	for offset := 0; ; {
+func usedAs(text string, within int, word string, openers ...string) bool {
+	for offset := 0; offset <= within; {
 		at := strings.Index(text[offset:], word)
 		if at < 0 {
 			return false
 		}
 		at += offset
 		offset = at + len(word)
+		if at > within {
+			return false
+		}
 
 		if at > 0 && identPart(text[at-1]) {
 			continue
@@ -177,4 +201,5 @@ func usedAs(text, word string, openers ...string) bool {
 			return true
 		}
 	}
+	return false
 }

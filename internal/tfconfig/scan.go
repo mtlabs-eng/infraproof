@@ -53,9 +53,16 @@ func (d declaration) lineOf(name string) (int, bool) {
 // track is impossible rather than merely unlikely.
 const maxBraceDepth = 64
 
-// maxTokens bounds how many tokens one file may produce. A file past it is
-// refused rather than lexed, for the reason the guard refuses a large directory.
-const maxTokens = 1 << 18
+// maxTokens bounds how many tokens one file may produce.
+//
+// It is the per-file byte bound, because a token needs at least one byte: a file
+// inside maxFileBytes cannot reach this, so it cannot be a second and tighter size
+// limit than the one this build documents. It was 1<<18, and a 259 KiB file of
+// commas that Terraform validates was refused by it -- a bound nothing in the
+// milestone named, discarding the whole directory silently.
+//
+// It stays because lex is not only reached through a bounded read.
+const maxTokens = maxFileBytes
 
 // scan returns every resource and data declaration in one configuration file,
 // and whether the file could be read at all.
@@ -103,6 +110,18 @@ type token struct {
 	// any plan states, so it will match nothing, which is the safe answer.
 	text string
 	line int
+	// bare reports that a newline outside any comment, string or heredoc came
+	// immediately before this token -- which is what separates one statement from
+	// the next in HCL.
+	//
+	// Comparing line numbers instead conflates two different files. A multi-line
+	// comment between a keyword and its labels is whitespace to Terraform, and
+	// `resource /* …\n… */ "type" "name" {` is a header it validates; a bare
+	// newline in the same place is a file it refuses. Reading both as "spread over
+	// lines" made the first invisible -- scanned, reported readable, and silently
+	// not there, so the uniqueness rule could not fire and a position was reported
+	// for the other declaration of the same address.
+	bare bool
 }
 
 // lex turns a configuration file into tokens, or reports that it could not.
@@ -114,6 +133,8 @@ func lex(source []byte) ([]token, bool) {
 	var tokens []token
 	line := 1
 	i := 0
+	// Whether a bare newline has been passed since the last token was emitted.
+	bare := false
 	// A byte order mark is not content. Terraform reads a file that starts with
 	// one; leaving it in made its three bytes the token before the first keyword,
 	// which is how startsStatement came to decide that the first declaration in
@@ -127,7 +148,8 @@ func lex(source []byte) ([]token, bool) {
 		if len(tokens) >= maxTokens {
 			return false
 		}
-		tokens = append(tokens, token{kind: kind, text: text, line: at})
+		tokens = append(tokens, token{kind: kind, text: text, line: at, bare: bare})
+		bare = false
 		return true
 	}
 
@@ -136,6 +158,7 @@ func lex(source []byte) ([]token, bool) {
 		switch {
 		case c == '\n':
 			line++
+			bare = true
 			i++
 		case c == ' ' || c == '\t':
 			i++
@@ -370,6 +393,13 @@ func heredoc(source []byte, i, line int) (int, int, bool) {
 	// build cannot read. Reading the tag as a real Unicode identifier would be
 	// more than is needed, and the rest of this lexer is ASCII by the same
 	// choice -- there it only loses an attribute, here it moves a line.
+	//
+	// No mutation of this line fails a test, and the confirming review proved why:
+	// the non-ASCII byte is always left on the marker line, so the check below
+	// that nothing may follow the marker refuses every such file first. It stays
+	// because the two say different things -- one is about a tag this build cannot
+	// read, the other about a line Terraform would reject -- and a later change to
+	// the second would otherwise reopen the first in silence.
 	if j < len(source) && source[j] >= 0x80 {
 		return 0, 0, false
 	}
@@ -487,17 +517,18 @@ func declarationsIn(tokens []token) ([]declaration, bool) {
 
 // headerDeclaration reads a block header, or reports that the window is not one.
 //
-// All of it on one line, including the brace. HCL ends a header at a newline, so
-// a keyword on one line and its labels on the next is a file Terraform refuses --
-// and this build read it as a declaration, reporting the keyword's line. The
-// fuzzer found that by disagreeing with an oracle that asks what a line is
-// actually used for, which was the oracle being right.
+// Nothing bare between its parts. HCL ends a header at a newline, so a keyword on
+// one line and its labels on the next is a file Terraform refuses. A comment
+// between them is not a newline -- `resource /* …\n… */ "type" "name" {` is a
+// header Terraform validates -- and an earlier version of this check compared
+// line numbers, which read the two the same way and dropped the second
+// declaration in silence.
 func headerDeclaration(tokens []token, header []int, brace token) *declaration {
 	if len(header) != 3 || !startsStatement(tokens, header[0]) {
 		return nil
 	}
 	keyword, first, second := tokens[header[0]], tokens[header[1]], tokens[header[2]]
-	if keyword.line != first.line || first.line != second.line || second.line != brace.line {
+	if first.bare || second.bare || brace.bare {
 		return nil
 	}
 	if keyword.kind != tokenIdent || first.kind != tokenString || second.kind != tokenString {
@@ -526,11 +557,11 @@ func recordAttribute(current *declaration, tokens []token, i int) {
 	if tk.kind != tokenIdent || !startsStatement(tokens, i) || i+1 >= len(tokens) {
 		return
 	}
-	// On the same line as the name. HCL writes an argument and its "=" together,
-	// and a block header and its brace together; without the check the token
-	// matched against could be arbitrarily far away -- a heredoc or a run of
-	// blank lines later -- and the position claimed would be for something else.
-	if next := tokens[i+1]; next.line != tk.line || next.kind != tokenEquals && next.kind != tokenOpen {
+	// Nothing bare between the name and what it opens. HCL writes an argument and
+	// its "=" in one statement, so a newline between them ends the statement and
+	// the position claimed would be for something else -- while a comment between
+	// them, newlines and all, is whitespace Terraform accepts.
+	if next := tokens[i+1]; next.bare || next.kind != tokenEquals && next.kind != tokenOpen {
 		return
 	}
 	if _, seen := current.lineOf(tk.text); !seen {
@@ -541,19 +572,15 @@ func recordAttribute(current *declaration, tokens []token, i int) {
 // startsStatement reports whether the token at i begins something rather than
 // continuing it.
 //
-// HCL separates arguments and blocks by newline, so a name is the first token on
-// its line and nothing else is: the "assets" in aws_s3_bucket.assets.id is not an
-// argument called assets, and neither is the "x" in "{ x = 1 }" written on the
-// same line as the brace that opens it, because Terraform refuses that file.
+// HCL separates statements by a newline, and only by a newline. So a name opens a
+// statement when a bare newline came before it: the "assets" in
+// aws_s3_bucket.assets.id does not, and neither does the "x" in "{ x = 1 }"
+// written beside the brace that opens it, because Terraform refuses that file.
 //
-// An earlier version also accepted a name straight after a brace on the same
-// line. That is HCL this build would never be given -- Terraform reports
-// "Missing newline after block definition" -- and accepting it meant claiming a
-// position inside a file nothing could have planned. The fuzzer found it by
-// disagreeing with a stricter oracle, which was the oracle being right.
+// A newline inside a comment is not a separator either -- Terraform reads
+// `x = 1 /* …\n… */ y = 2` as two arguments on one line and refuses it -- which
+// is why this asks about a bare newline rather than comparing the two tokens'
+// lines.
 func startsStatement(tokens []token, i int) bool {
-	if i == 0 {
-		return true
-	}
-	return tokens[i-1].line < tokens[i].line
+	return i == 0 || tokens[i].bare
 }

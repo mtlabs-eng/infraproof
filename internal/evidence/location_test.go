@@ -105,6 +105,13 @@ func TestInvalidLocationsAreRefused(t *testing.T) {
 		"nul byte":           {File: "ma\x00in.tf", Line: 1},
 		"tab":                {File: "\tmain.tf", Line: 1},
 		"longer than a path": {File: strings.Repeat("a", 4097), Line: 1},
+		// The cleaned form, which the prose requires and nothing held: a
+		// consumer handed two spellings of one path has to decide they are the
+		// same path, and deciding that is how two answers to one question start.
+		"a current directory prefix": {File: "./main.tf", Line: 1},
+		"a doubled separator":        {File: "modules//storage/main.tf", Line: 1},
+		"a current directory inside": {File: "modules/./storage/main.tf", Line: 1},
+		"a trailing separator":       {File: "modules/storage/", Line: 1},
 	}
 	for name, location := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -17,8 +17,11 @@ import (
 // reading bound that measured nine seconds for four thousand findings.
 //
 // It is a benchmark rather than a test because a wall-clock assertion is a test
-// that fails on a loaded machine. What it guards is reported in the commit that
-// changed it, and it is here so the next reader can measure rather than believe.
+// that fails on a loaded machine -- and that is not hypothetical: this was first
+// reported as 77.6ms, an independent review measured 148ms for the same shape, and
+// measuring it again here gives 81ms at -benchtime 1x and 85ms at 10x. The figure
+// moves with what else is running. What does not move is the direction: a linear
+// scan of the same directory measures in seconds.
 func BenchmarkAnnotateAtTheReadingBound(b *testing.B) {
 	// Sized to sit just inside the run's 8 MiB reading budget. Past it the
 	// directory is discarded whole and the benchmark measures a refusal, which

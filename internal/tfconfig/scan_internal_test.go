@@ -955,3 +955,82 @@ func TestEveryConfigurationThisRepositoryShipsIsRead(t *testing.T) {
 		t.Fatalf("the deliberate refusals were not all found: %d of %d", skipped, len(deliberatelyRefused))
 	}
 }
+
+// TestScanReadsAHeaderSplitByAComment is the defect the confirming review found,
+// and the reason this lexer now tracks newlines rather than comparing line
+// numbers.
+//
+// A comment is whitespace to Terraform, so a keyword and its labels may be
+// separated by one, newlines and all. Reading that as "a header spread over
+// lines" made the declaration invisible while the file still reported as read --
+// so the uniqueness rule could not fire, and in a directory declaring one address
+// twice a position was reported for the other declaration. Reproduced through the
+// command: a BLOCK about a public ACL pointing at the line that reads
+// `acl = "private"`.
+//
+// Every spelling here was checked against terraform validate on v1.14.0.
+func TestScanReadsAHeaderSplitByAComment(t *testing.T) {
+	cases := map[string]string{
+		"between the keyword and the labels": "resource /* c\n */ \"aws_s3_bucket\" \"a\" {\n  bucket = \"a\"\n}\n",
+		"between the labels":                 "resource \"aws_s3_bucket\" /* c\n */ \"a\" {\n  bucket = \"a\"\n}\n",
+		"before the brace":                   "resource \"aws_s3_bucket\" \"a\" /* c\n */ {\n  bucket = \"a\"\n}\n",
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
+			if d.Line != 1 {
+				t.Fatalf("declared at line %d, want 1, where the keyword is written", d.Line)
+			}
+		})
+	}
+}
+
+// TestScanReadsAnArgumentSplitByAComment covers the same rule one level down. A
+// comment between a name and its "=" is whitespace Terraform accepts, and the
+// argument is written where its name is.
+func TestScanReadsAnArgumentSplitByAComment(t *testing.T) {
+	source := "resource \"aws_s3_bucket\" \"a\" {\n  bucket /* c\n  */ = \"a\"\n  acl = \"private\"\n}\n"
+
+	d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
+
+	if line, written := d.lineOf("bucket"); !written || line != 2 {
+		t.Fatalf("bucket at line %d (written %v), want 2", line, written)
+	}
+	if line, _ := d.lineOf("acl"); line != 4 {
+		t.Fatalf("acl at line %d, want 4", line)
+	}
+}
+
+// TestScanDoesNotRecordTwoArgumentsSeparatedOnlyByAComment covers the other half,
+// and it is why a comment cannot simply be treated as a newline. Terraform refuses
+// two arguments with nothing but a comment between them -- a comment is
+// whitespace, not a separator -- so the second is not an argument and has no
+// position.
+func TestScanDoesNotRecordTwoArgumentsSeparatedOnlyByAComment(t *testing.T) {
+	source := "resource \"aws_s3_bucket\" \"a\" {\n  bucket = \"a\" /* c\n  */ acl = \"private\"\n  tags = {}\n}\n"
+
+	d := found(t, read(t, []byte(source)), "resource", "aws_s3_bucket", "a")
+
+	if line, written := d.lineOf("acl"); written {
+		t.Fatalf("an argument separated only by a comment was recorded at line %d", line)
+	}
+	if line, _ := d.lineOf("tags"); line != 4 {
+		t.Fatalf("tags at line %d, want 4", line)
+	}
+}
+
+// TestADeclarationHiddenFromTheUniquenessRuleCannotHappen is the end of the chain
+// the review reproduced: a header the scanner cannot see is worse than one it
+// refuses, because find counts matches and a declaration that was never reported
+// cannot be counted. Two declarations of one address, one of them split by a
+// comment, must leave no position at all.
+func TestADeclarationHiddenFromTheUniquenessRuleCannotHappen(t *testing.T) {
+	source := "resource \"terraform_data\" \"root\" {\n  input = \"first\"\n}\n\n" +
+		"resource /* the second one\n */ \"terraform_data\" \"root\" {\n  input = \"second\"\n}\n"
+
+	declarations := read(t, []byte(source))
+
+	if len(declarations) != 2 {
+		t.Fatalf("found %d declarations, want both: %v", len(declarations), declarations)
+	}
+}

@@ -676,3 +676,28 @@ func TestAFileThatCannotBeLexedDiscardsTheDeclarationsBesideIt(t *testing.T) {
 
 	nothingLocated(t, finding, "a declaration beside a file this build could not lex")
 }
+
+// TestADataAddressLocatesTheDataBlock covers the direction the kind test did not.
+// It probed a managed address only, so forcing every lookup to "resource" was the
+// identity for it -- and the reverse, a data address resolving to the resource
+// block of the same type and name, is a wrong line.
+func TestADataAddressLocatesTheDataBlock(t *testing.T) {
+	plan := terraformplan.Plan{
+		FormatVersion: "1.2",
+		ResourceChanges: []terraformplan.ResourceChange{{
+			Address: "data.terraform_data.root",
+			Mode:    terraformplan.ModeData,
+			Type:    "terraform_data",
+			Name:    "root",
+		}},
+	}
+	root := filepath.Join("testdata", "kinds")
+
+	finding := annotate(t, about(
+		"data.terraform_data.root",
+		"data.terraform_data.root",
+		"input"), plan, root)
+
+	at(t, finding.Resource.Location, "main.tf", 4)
+	at(t, finding.Evidence[0].Location, "main.tf", 5)
+}

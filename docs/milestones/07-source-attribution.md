@@ -123,9 +123,20 @@ and the differences that remained are listed here rather than left to be found.
 Refused, because Terraform refuses them too, and reading one as configuration
 means claiming a position in a file nothing could have planned: a heredoc marker
 with anything after it on its line; a tag that does not begin an identifier
-(`<<9EOT`, `<<--EOT`); a carriage return that is not part of a line ending; a
-block header spread over more than one line; an argument written on the same line
-as the brace that opens its block.
+(`<<9EOT`, `<<--EOT`); a carriage return that is not part of a line ending.
+
+Read but not reported, for the same reason without refusing the file: a block
+header whose parts are separated by a bare newline, and an argument written on the
+same line as the brace that opens its block. Those are not a declaration and not
+an argument; the rest of the file still is.
+
+A comment is not a newline. Terraform treats one as whitespace, so
+`resource /* …` with its labels on the next line is a header it validates, and so
+is an argument whose `=` is on the far side of a comment — both are read, and both
+used to be silently invisible, which is worse than refused: a declaration the scan
+never reported could not be counted, so the rule that refuses to choose between
+two declarations of one address could not fire, and a position was reported for
+the other one.
 
 Refused, because this build cannot read them rather than because they are wrong: a
 heredoc tag holding a letter outside ASCII. HCL identifiers are Unicode and this
@@ -139,8 +150,10 @@ escaped sigils `$${` and `%%{`, which write a literal `${` or `%{` and open
 nothing; `#`, `//` and `/* */` comments inside an interpolation; a byte order mark
 at the start of a file, which used to make the file's first declaration invisible.
 
-Still refused and still Terraform-legal, as a stated limitation: a heredoc opened
-inside an interpolation. The file yields no locations at all.
+Still refused and still Terraform-legal, as stated limitations, each costing every
+location in its file: a template or an object nested more than 64 deep; and a
+heredoc opened inside an interpolation whose body does not balance on its own —
+one that balances is read.
 
 Refusing too much is a failure mode with no natural test: a scanner that read
 nothing at all would leave a fuzz oracle green, because an oracle checks reported
@@ -187,3 +200,9 @@ everything.
   bundle says why.
 - **A directory cannot be enumerated past 1024 entries.** Past that it is refused
   rather than walked, and its declarations have no locations.
+- **An override file costs the locations of what it overrides.** Terraform merges
+  `override.tf` and `*_override.tf` into the files beside them; this build reads
+  them as ordinary configuration, so an address declared in both looks like two
+  declarations and gets no location. Everything else in the directory is
+  unaffected. Reporting the base file's line instead would send a reader to the
+  declaration whose arguments were replaced.
