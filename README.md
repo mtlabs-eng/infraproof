@@ -104,7 +104,7 @@ line.
 ## On a pull request
 
 ```sh
-go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.1.0
+go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.2.0
 infraproof check --intent infra/intent.json --plan tfplan.json --format review
 ```
 
