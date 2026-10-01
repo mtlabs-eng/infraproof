@@ -81,9 +81,9 @@ func findingBullets(f evidence.Finding) []string {
 		// other one. inlineText neutralises a tag and leaves a link, an image
 		// and emphasis alone — enough for a plan to make a report the reader
 		// trusts carry a clickable host of its choosing.
-		bullets = append(bullets, fmt.Sprintf("- Resource: %s (%s, %s)",
+		bullets = append(bullets, fmt.Sprintf("- Resource: %s (%s, %s)%s",
 			code(f.Resource.Address), inlineText(string(f.Resource.Cloud)),
-			code(f.Resource.Provider)))
+			code(f.Resource.Provider), locationText(f.Resource.Location)))
 	}
 	if f.Expected != nil {
 		bullets = append(bullets, fmt.Sprintf("- Expected: %s = %s",
@@ -121,7 +121,22 @@ func evidenceText(ref evidence.EvidenceRef) string {
 	if ref.Redacted {
 		text += " (redacted)"
 	}
-	return text
+	return text + locationText(ref.Location)
+}
+
+// locationText renders where a declaration is written, and nothing when it is
+// not known.
+//
+// The path goes in a code span like every other value this build did not
+// author. A location is produced here, but its path comes from a filesystem
+// somebody else writes to: a file called "a`b.tf" would otherwise end the span
+// it is printed in, and one called "[x](...)" would plant a link in a report a
+// reader trusts.
+func locationText(l *evidence.Location) string {
+	if l == nil {
+		return ""
+	}
+	return " at " + code(fmt.Sprintf("%s:%d", l.File, l.Line))
 }
 
 // unknownsBlock renders the unknowns table, or a single "None." block.

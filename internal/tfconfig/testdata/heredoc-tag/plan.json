@@ -1,0 +1,80 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.14.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "terraform_data.a",
+          "mode": "managed",
+          "type": "terraform_data",
+          "name": "a",
+          "provider_name": "terraform.io/builtin/terraform",
+          "schema_version": 0,
+          "values": {
+            "input": "the real one",
+            "triggers_replace": "EOT\ninput = \"this line is inside a string\"\n"
+          },
+          "sensitive_values": {}
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "terraform_data.a",
+      "mode": "managed",
+      "type": "terraform_data",
+      "name": "a",
+      "provider_name": "terraform.io/builtin/terraform",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "input": "the real one",
+          "triggers_replace": "EOT\ninput = \"this line is inside a string\"\n"
+        },
+        "after_unknown": {
+          "id": true,
+          "output": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "configuration": {
+    "provider_config": {
+      "terraform": {
+        "name": "terraform",
+        "full_name": "terraform.io/builtin/terraform"
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "terraform_data.a",
+          "mode": "managed",
+          "type": "terraform_data",
+          "name": "a",
+          "provider_config_key": "terraform",
+          "expressions": {
+            "input": {
+              "constant_value": "the real one"
+            },
+            "triggers_replace": {
+              "constant_value": "EOT\ninput = \"this line is inside a string\"\n"
+            }
+          },
+          "schema_version": 0
+        }
+      ]
+    }
+  },
+  "timestamp": "2026-10-01T11:56:33Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}

@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "decision": "BLOCK",
   "summary": "The requested private storage change enables public access.",
   "subject": {
@@ -29,7 +29,11 @@
       "resource": {
         "address": "aws_s3_bucket.assets",
         "provider": "registry.terraform.io/hashicorp/aws",
-        "cloud": "aws"
+        "cloud": "aws",
+        "location": {
+          "file": "main.tf",
+          "line": 6
+        }
       },
       "expected": {
         "path": "object_storage.public_access",
@@ -45,7 +49,11 @@
           "source": "terraform_plan",
           "resource_address": "aws_s3_bucket.assets",
           "path": "resource_changes[].change.after",
-          "redacted": false
+          "redacted": false,
+          "location": {
+            "file": "main.tf",
+            "line": 6
+          }
         }
       ],
       "remediation": "Disable public access using the provider-supported controls."

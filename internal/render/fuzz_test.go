@@ -60,6 +60,11 @@ func FuzzMarkdownStructure(f *testing.F) {
 	// escapes there would pair this span's opener with the next span's, and
 	// swallow the cell boundary between them.
 	f.Add("x\\")
+	// Paths, which is what a location carries.
+	f.Add("main.tf")
+	f.Add("a`b.tf")
+	f.Add("a|b.tf")
+	f.Add("modules/a`b/main.tf")
 
 	f.Fuzz(func(t *testing.T, value string) {
 		// The contract refuses a line break in an inline field, which is a
@@ -121,6 +126,17 @@ func placements() []placement {
 		{"a check id", "ORDINARY_CHECK", func(b *evidence.Bundle, v string) { b.Unknowns[0].CheckID = v }},
 		{"a verification name", "ordinary-value", func(b *evidence.Bundle, v string) { b.Verification[0].Name = v }},
 		{"an intent source", "ordinary-value", func(b *evidence.Bundle, v string) { b.Subject.IntentSource = v }},
+		// A location's path comes from a filesystem somebody else writes to, so
+		// it is a value this build did not author and belongs here with the
+		// rest. Most of what a fuzzer puts in it is refused by the contract,
+		// which is the stronger answer; what the contract accepts the renderer
+		// has to make safe.
+		{"a resource location", "ordinary-value", func(b *evidence.Bundle, v string) {
+			b.Findings[0].Resource.Location = &evidence.Location{File: v, Line: 6}
+		}},
+		{"an evidence location", "ordinary-value", func(b *evidence.Bundle, v string) {
+			b.Findings[0].Evidence[0].Location = &evidence.Location{File: v, Line: 7}
+		}},
 	}
 }
 

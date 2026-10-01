@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "decision": "UNKNOWN",
   "summary": "Public access could not be determined from the supplied plan.",
   "subject": {

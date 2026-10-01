@@ -1,9 +1,15 @@
 package verify_test
 
 import (
+	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
 	"github.com/mtlabs-eng/infraproof/internal/verify"
@@ -58,7 +64,8 @@ func write(t *testing.T, name, body string) string {
 func TestOneVerificationForEveryCaller(t *testing.T) {
 	bundle, err := verify.FromFiles(
 		write(t, "intent.json", contract),
-		write(t, "plan.json", publicPlan))
+		write(t, "plan.json", publicPlan),
+		verify.Options{})
 	if err != nil {
 		t.Fatalf("FromFiles: %v", err)
 	}
@@ -92,13 +99,279 @@ func TestUnreadableInputIsAnErrorAndNotAVerdict(t *testing.T) {
 
 	for name, paths := range cases {
 		t.Run(name, func(t *testing.T) {
-			bundle, err := verify.FromFiles(paths[0], paths[1])
+			bundle, err := verify.FromFiles(paths[0], paths[1], verify.Options{})
 			if err == nil {
 				t.Fatalf("unreadable input produced a verdict: %q", bundle.Decision)
 			}
 			if bundle.Decision != "" {
 				t.Errorf("a failed verification returned a decision as well as an error: %q",
 					bundle.Decision)
+			}
+		})
+	}
+}
+
+// configuredPlan is the plan the shipped aws configuration matches, by address.
+const configuredPlan = `{
+  "format_version": "1.2",
+  "resource_changes": [
+    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+     "name": "assets", "provider_name": "registry.terraform.io/hashicorp/aws",
+     "change": {"actions": ["create"], "before": null,
+                "after": {"bucket": "assets", "tags": {"environment": "staging"}}}},
+    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+     "name": "assets", "provider_name": "registry.terraform.io/hashicorp/aws",
+     "change": {"actions": ["create"], "before": null,
+                "after": {"bucket": "assets", "acl": "public-read"}}}
+  ],
+  "configuration": {"root_module": {"resources": [
+    {"address": "aws_s3_bucket.assets", "mode": "managed", "type": "aws_s3_bucket",
+     "name": "assets", "expressions": {}},
+    {"address": "aws_s3_bucket_acl.assets", "mode": "managed", "type": "aws_s3_bucket_acl",
+     "name": "assets", "expressions": {"bucket": {"references": [
+       "aws_s3_bucket.assets.id", "aws_s3_bucket.assets"]}}}
+  ]}}
+}`
+
+// awsConfiguration is the configuration directory internal/tfconfig ships for
+// exactly these addresses.
+func awsConfiguration() string {
+	return filepath.Join("..", "tfconfig", "testdata", "aws")
+}
+
+// TestNoConfigurationDirectoryChangesNothing covers the milestone's
+// compatibility criterion. Without the directory the verification is the one it
+// was before this milestone, byte for byte.
+func TestNoConfigurationDirectoryChangesNothing(t *testing.T) {
+	intent := write(t, "intent.json", contract)
+	plan := write(t, "plan.json", publicPlan)
+
+	bundle, err := verify.FromFiles(intent, plan, verify.Options{})
+	if err != nil {
+		t.Fatalf("FromFiles: %v", err)
+	}
+
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if strings.Contains(string(raw), "location") {
+		t.Fatalf("a verification with no configuration directory carried a location: %s", raw)
+	}
+}
+
+// TestAConfigurationDirectoryAddsOnlyLocations covers the other half of the same
+// rule: locations are additional and never load-bearing. The two bundles are
+// compared field by field with the locations stripped out, so anything else that
+// moved would show here.
+func TestAConfigurationDirectoryAddsOnlyLocations(t *testing.T) {
+	intent := write(t, "intent.json", contract)
+	plan := write(t, "plan.json", configuredPlan)
+
+	plain, err := verify.FromFiles(intent, plan, verify.Options{})
+	if err != nil {
+		t.Fatalf("FromFiles: %v", err)
+	}
+	located, err := verify.FromFiles(intent, plan, verify.Options{ConfigRoot: awsConfiguration()})
+	if err != nil {
+		t.Fatalf("FromFiles with a configuration directory: %v", err)
+	}
+
+	if evidence.ExitCode(plain.Decision) != evidence.ExitCode(located.Decision) {
+		t.Fatalf("exit code changed: %d then %d",
+			evidence.ExitCode(plain.Decision), evidence.ExitCode(located.Decision))
+	}
+
+	// Something must have been located, or this test would pass by locating
+	// nothing at all.
+	if located.Findings[0].Resource.Location == nil {
+		t.Fatal("nothing was located, so this test proves nothing")
+	}
+
+	stripped := located
+	stripped.Findings = slices.Clone(located.Findings)
+	for i := range stripped.Findings {
+		finding := &stripped.Findings[i]
+		if finding.Resource != nil {
+			resource := *finding.Resource
+			resource.Location = nil
+			finding.Resource = &resource
+		}
+		finding.Evidence = slices.Clone(finding.Evidence)
+		for j := range finding.Evidence {
+			finding.Evidence[j].Location = nil
+		}
+	}
+	stripped.Unknowns = slices.Clone(located.Unknowns)
+	for i := range stripped.Unknowns {
+		stripped.Unknowns[i].Evidence = slices.Clone(stripped.Unknowns[i].Evidence)
+		for j := range stripped.Unknowns[i].Evidence {
+			stripped.Unknowns[i].Evidence[j].Location = nil
+		}
+	}
+
+	want, err := json.Marshal(plain)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	got, err := json.Marshal(stripped)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("locating changed more than the locations\n--- with locations stripped ---\n%s\n--- without ---\n%s", got, want)
+	}
+}
+
+// TestAConfigurationDirectoryThatCannotBeReadIsAnError keeps the distinction the
+// rest of this package keeps. A directory that cannot be opened was the caller's
+// mistake, not a fact about the change, and reporting a verdict from it would
+// hide the mistake.
+func TestAConfigurationDirectoryThatCannotBeReadIsAnError(t *testing.T) {
+	intent := write(t, "intent.json", contract)
+	plan := write(t, "plan.json", publicPlan)
+
+	bundle, err := verify.FromFiles(intent, plan,
+		verify.Options{ConfigRoot: filepath.Join(t.TempDir(), "nowhere")})
+	if err == nil {
+		t.Fatalf("a configuration directory that is not there produced a verdict: %q", bundle.Decision)
+	}
+	if bundle.Decision != "" {
+		t.Errorf("a failed verification returned a decision as well as an error: %q", bundle.Decision)
+	}
+}
+
+// TestALocatedBundleStillSatisfiesItsContract covers the obligation every
+// producer in this build has: what it emits validates.
+func TestALocatedBundleStillSatisfiesItsContract(t *testing.T) {
+	bundle, err := verify.FromFiles(
+		write(t, "intent.json", contract),
+		write(t, "plan.json", configuredPlan),
+		verify.Options{ConfigRoot: awsConfiguration()})
+	if err != nil {
+		t.Fatalf("FromFiles: %v", err)
+	}
+
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("a located bundle does not satisfy its own contract: %v", err)
+	}
+}
+
+// TestNoConfigurationDirectoryReadsNoFile covers what "no flag, no file read"
+// means, which the test beside it could not see.
+//
+// Independent review removed the guard on an empty ConfigRoot and the whole suite
+// still passed: filepath.Abs("") resolves to the process working directory, so a
+// plain run from inside a Terraform directory read its .tf files and reported
+// positions from them. The test that claimed to cover this passed only because
+// the test binary's working directory happened to hold no .tf file. This one puts
+// one there.
+func TestNoConfigurationDirectoryReadsNoFile(t *testing.T) {
+	// Resolved before the working directory changes, or they name nothing.
+	intent := write(t, "intent.json", contract)
+	plan := write(t, "plan.json", configuredPlan)
+
+	elsewhere := t.TempDir()
+	configuration, err := os.ReadFile(filepath.Join(awsConfiguration(), "main.tf"))
+	if err != nil {
+		t.Fatalf("reading the shipped configuration: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(elsewhere, "main.tf"), configuration, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Chdir(elsewhere)
+
+	bundle, err := verify.FromFiles(intent, plan, verify.Options{})
+	if err != nil {
+		t.Fatalf("FromFiles: %v", err)
+	}
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if strings.Contains(string(raw), "location") {
+		t.Fatalf("a run with no configuration directory read the working directory:\n%s", raw)
+	}
+}
+
+// planFixtures returns every plan this repository ships, by path.
+func planFixtures(t *testing.T) []string {
+	t.Helper()
+	var found []string
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".json" || !strings.Contains(path, "testdata") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if _, err := terraformplan.Parse(raw); err != nil {
+			// Not a plan, or a plan this build refuses. Either way it is not a
+			// fixture this comparison is about.
+			return nil
+		}
+		found = append(found, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking fixtures: %v", err)
+	}
+	if len(found) < 20 {
+		t.Fatalf("found only %d plan fixtures, which is too few to be the set", len(found))
+	}
+	return found
+}
+
+// TestEveryFixtureIsUnchangedWhenNothingMatches covers the milestone's
+// compatibility criterion across the whole fixture set rather than one plan.
+//
+// The criterion was written as "byte-identical", and what is provable in a suite
+// is narrower and worth stating exactly: for every plan this repository ships, a
+// verification against a configuration directory that declares nothing produces
+// the same bytes as one with no directory at all. Nothing is added when nothing
+// matched, in any fixture, in any field.
+//
+// The test that used to stand for this checked one plan for the absence of a
+// substring.
+func TestEveryFixtureIsUnchangedWhenNothingMatches(t *testing.T) {
+	intent := write(t, "intent.json", contract)
+	empty := t.TempDir()
+
+	for _, fixture := range planFixtures(t) {
+		t.Run(fixture, func(t *testing.T) {
+			plain, err := verify.FromFiles(intent, fixture, verify.Options{})
+			if err != nil {
+				t.Skipf("this fixture is not verifiable: %v", err)
+			}
+			against, err := verify.FromFiles(intent, fixture, verify.Options{ConfigRoot: empty})
+			if err != nil {
+				t.Fatalf("FromFiles with a configuration directory: %v", err)
+			}
+
+			want, err := json.Marshal(plain)
+			if err != nil {
+				t.Fatalf("marshalling: %v", err)
+			}
+			got, err := json.Marshal(against)
+			if err != nil {
+				t.Fatalf("marshalling: %v", err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("a configuration directory that declares nothing changed the bundle\n got: %s\nwant: %s", got, want)
+			}
+			if strings.Contains(string(want), "location") {
+				t.Fatalf("a verification with no configuration directory carried a location: %s", want)
 			}
 		})
 	}

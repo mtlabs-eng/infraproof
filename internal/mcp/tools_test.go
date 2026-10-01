@@ -119,7 +119,7 @@ func TestTheAdapterReturnsWhatTheVerifierReturns(t *testing.T) {
 		t.Fatalf("the tool reported a failure: %s", text)
 	}
 
-	bundle, err := verify.FromFiles(intentPath, planPath)
+	bundle, err := verify.FromFiles(intentPath, planPath, verify.Options{})
 	if err != nil {
 		t.Fatalf("FromFiles: %v", err)
 	}

@@ -30,6 +30,8 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	intentPath := flags.String("intent", "", "path to an intent contract JSON file")
 	planPath := flags.String("plan", "", "path to a Terraform or OpenTofu plan JSON file")
 	format := flags.String("format", "json", "output format: json, markdown or review")
+	configPath := flags.String("config", "",
+		"directory holding the Terraform configuration, to report the file and line of each finding")
 
 	if err := flags.Parse(args); err != nil {
 		// Asking a command to describe itself is not a usage error, and the
@@ -58,7 +60,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 			fmt.Sprintf("--format is %q, want json, markdown or review", *format))
 	}
 
-	bundle, err := verify.FromFiles(*intentPath, *planPath)
+	bundle, err := verify.FromFiles(*intentPath, *planPath, verify.Options{ConfigRoot: *configPath})
 	if err != nil {
 		return inputError(stderr, err)
 	}
@@ -84,10 +86,21 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 // flag package so that the two places a reader can ask — this and the top-level
 // --help — say the same thing.
 const checkUsage = `Usage:
-  infraproof check --intent <path> --plan <path> [--format json|markdown|review]
+  infraproof check --intent <path> --plan <path> [--config <dir>]
+                   [--format json|markdown|review]
 
   --intent   path to an intent contract JSON file
   --plan     path to a Terraform or OpenTofu plan JSON file
+  --config   directory holding the Terraform configuration the plan was made
+             from. With it, a finding also carries the file and line its
+             declaration is written on. There is no default: guessing the
+             directory would report lines from the wrong configuration, and a
+             wrong line is worse than none.
+
+             A line is reported only when the declaration found there is the one
+             the plan names. A declaration renamed, moved or deleted since the
+             plan was made carries no line, because nothing ties a plan to the
+             files that produced it.
   --format   output format: json (default), markdown, or review
 
              review is shaped for a pull request comment: the decision, what it
@@ -95,7 +108,7 @@ const checkUsage = `Usage:
              a diff. It carries a marker so a workflow can update one comment
              rather than append one per push.
 
-Both files are read locally. The command reaches no network, needs no cloud
+Every file is read locally. The command reaches no network, needs no cloud
 account, and never applies anything. The intent contract must be JSON; YAML is
 not supported in this build.
 

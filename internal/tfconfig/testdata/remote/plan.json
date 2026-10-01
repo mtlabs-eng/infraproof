@@ -1,0 +1,43 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.14.0",
+  "resource_changes": [
+    {
+      "address": "module.shared.terraform_data.x",
+      "module_address": "module.shared",
+      "mode": "managed",
+      "type": "terraform_data",
+      "name": "x",
+      "provider_name": "terraform.io/builtin/terraform",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "input": "outside"
+        }
+      }
+    }
+  ],
+  "configuration": {
+    "root_module": {
+      "module_calls": {
+        "shared": {
+          "source": "terraform-aws-modules/s3-bucket/aws",
+          "module": {
+            "resources": [
+              {
+                "address": "terraform_data.x",
+                "mode": "managed",
+                "type": "terraform_data",
+                "name": "x",
+                "provider_config_key": "shared:terraform"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

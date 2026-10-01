@@ -163,7 +163,10 @@ func Marker(subject evidence.Subject) string {
 func reviewRow(f evidence.Finding) string {
 	resource := "-"
 	if f.Resource != nil {
-		resource = code(f.Resource.Address)
+		// Where it is written goes in the same cell rather than a column of its
+		// own, so a report with nothing located keeps the shape it has always
+		// had and a column of dashes is never printed.
+		resource = code(f.Resource.Address) + locationText(f.Resource.Location)
 	}
 	return "| " + strings.Join([]string{
 		escapeCell(string(f.Severity)),

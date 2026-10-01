@@ -3,6 +3,7 @@ package evidence
 import (
 	"errors"
 	"fmt"
+	gopath "path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -280,6 +281,7 @@ func validateFinding(path string, f Finding) []error {
 		if !f.Resource.Cloud.Valid() {
 			errs = append(errs, violation(path+".resource.cloud", "unrecognized cloud %q", string(f.Resource.Cloud)))
 		}
+		errs = append(errs, validateLocation(path+".resource.location", f.Resource.Location)...)
 	}
 
 	if f.Expected != nil {
@@ -361,6 +363,7 @@ func validateEvidence(parent string, refs []EvidenceRef) []error {
 				errs = append(errs, err)
 			}
 		}
+		errs = append(errs, validateLocation(path+".location", ref.Location)...)
 	}
 
 	return errs
@@ -521,4 +524,94 @@ func isPlainNumber(s string) bool {
 		}
 	}
 	return true
+}
+
+// validateLocation holds a location to what it claims to be: somewhere inside
+// the configuration directory the caller supplied.
+//
+// An absolute path says where that directory is on the machine the tool ran on,
+// which is a fact about the runner and not about the change. A parent segment
+// says the declaration is outside the directory, which nothing in this build
+// reads. Both are refused rather than normalized: a location is a claim, and one
+// that has to be repaired before it can be read was not the claim that was made.
+func validateLocation(path string, l *Location) []error {
+	if l == nil {
+		return nil
+	}
+
+	var errs []error
+	if !relativeFilePath(l.File) {
+		errs = append(errs, violation(path+".file",
+			"must be a path inside the configuration directory, written with forward slashes and no parent segment, got %q", l.File))
+	}
+	if err := validateSingleLine(path+".file", l.File); err != nil {
+		errs = append(errs, err)
+	}
+	if l.Line < 1 {
+		errs = append(errs, violation(path+".line", "must be a 1-based line number, got %d", l.Line))
+	}
+	return errs
+}
+
+// maxLocationPath bounds a location's path. Every filesystem this build runs on
+// stops well before it, and a field with no bound is a field a third-party bundle
+// can make arbitrarily long.
+const maxLocationPath = 4096
+
+// relativeFilePath reports whether a path names a file inside the directory it
+// is relative to, in the one spelling this contract emits.
+//
+// Requiring the cleaned form rather than cleaning it is what makes the check one
+// question: "a//b", "./a" and "a/b/../c" are all refused as written, so there is
+// no second spelling for a consumer to have to handle, and nothing here has to
+// decide what an unusual one meant.
+//
+// The rest of the refusals are spellings independent review measured as accepted
+// while the prose said otherwise. "C:/infra/main.tf" satisfies every rule above
+// and is absolute on the machine it came from. A control character is invisible in
+// every report this build writes, and a NUL truncates the path for anything that
+// hands it to a C library. A blank path names nothing. None is producible by this
+// build's own locator; a bundle is a public format, and a consumer validating
+// somebody else's is entitled to the rules as written.
+func relativeFilePath(file string) bool {
+	if strings.TrimSpace(file) == "" || len(file) > maxLocationPath {
+		return false
+	}
+	if strings.ContainsRune(file, '\\') || strings.HasPrefix(file, "/") || file != gopath.Clean(file) || file == "." {
+		return false
+	}
+	for _, char := range file {
+		if isControlChar(char) {
+			return false
+		}
+	}
+	for i, segment := range strings.Split(file, "/") {
+		if segment == ".." {
+			return false
+		}
+		// A drive letter is absolute wherever it came from, and the only place
+		// one can appear is the first segment.
+		if i == 0 && strings.Contains(segment, ":") {
+			return false
+		}
+	}
+	return true
+}
+
+// Valid reports whether this location is one the contract can carry.
+//
+// It exists for the producer rather than for the validation above, which has to
+// say which rule a location broke. A producer composes a location out of a
+// directory entry's name and a module's source, and the file names in a
+// configuration directory belong to whoever wrote that repository: a name this
+// contract refuses has to cost the location and nothing else.
+//
+// It was not here at first, and the cost of that was exactly what the shape of
+// this build is meant to prevent. A file called "we\\ird.tf" was composed into a
+// location anyway, the bundle became invalid after the verdict had been reached,
+// the renderer refused it, and a change that blocks produced an internal failure
+// and no report. A rule a producer cannot ask about is a rule a producer will
+// restate, or ignore.
+func (l Location) Valid() bool {
+	return relativeFilePath(l.File) && l.Line >= 1
 }

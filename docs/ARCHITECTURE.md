@@ -157,6 +157,7 @@ Planned Go packages:
 cmd/infraproof
 internal/intent
 internal/terraformplan
+internal/tfconfig
 internal/model
 internal/providers/aws
 internal/providers/azure
@@ -169,8 +170,11 @@ internal/render
 
 Provider packages may depend on `model`. The policy engine depends on `model` and intent types. Core packages must not import provider packages, CLI packages, MCP code, or LLM clients.
 
+`internal/tfconfig` reads Terraform configuration to say where a declaration is written. It is the only package that reads a `.tf` file, it reads nothing outside the directory the caller supplies, and neither `policy` nor `model` may import it: a rule that could reach the filesystem would be a rule whose verdict changed when a file moved. It depends on `terraformplan` for the identity of each declaration, because deriving one from an address text would be a second grammar almost the same as the first.
+
 ## Testing strategy
 
+- Where this build restates another tool's grammar, a test asks that tool. `internal/tfconfig` reads HCL, and four independent reviews of the milestone that added it found one class of defect and almost nothing else: the lexer disagreeing with Terraform. Each found it by hand-building cases nobody had thought of, and each time that work died with the reviewer. `TestScanAgreesWithTerraform` runs `terraform validate` over a corpus and requires this build to read every file Terraform accepts, at the right line — so the question survives the reviewer who thought to ask it. It skips when `terraform` is absent.
 - Unit tests for parsing, normalization, rules, decisions, and rendering
 - Golden tests for stable JSON and Markdown output
 - Contract tests that run equivalent scenarios through all three provider mappers

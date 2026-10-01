@@ -122,7 +122,32 @@ func compareResource(a, b *Resource) int {
 	if c := cmp.Compare(a.Provider, b.Provider); c != 0 {
 		return c
 	}
-	return cmp.Compare(string(a.Cloud), string(b.Cloud))
+	if c := cmp.Compare(string(a.Cloud), string(b.Cloud)); c != 0 {
+		return c
+	}
+	return compareLocation(a.Location, b.Location)
+}
+
+// compareLocation orders two locations, an absent one before any present one.
+//
+// It is a tiebreak like every other field, and it has to be: the contract says
+// the order is total over content, so two records that differ in any field at all
+// are ordered by content rather than by where a producer appended them. Leaving
+// it out made that sentence false the moment a location could differ -- and the
+// test that guards it is a hand-written list of fields, so nothing noticed.
+func compareLocation(a, b *Location) int {
+	switch {
+	case a == nil && b == nil:
+		return 0
+	case a == nil:
+		return -1
+	case b == nil:
+		return 1
+	}
+	if c := cmp.Compare(a.File, b.File); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Line, b.Line)
 }
 
 // compareExpected orders optional expectations.
@@ -182,7 +207,10 @@ func compareEvidence(a, b EvidenceRef) int {
 	if c := cmp.Compare(a.Path, b.Path); c != 0 {
 		return c
 	}
-	return compareBool(a.Redacted, b.Redacted)
+	if c := compareBool(a.Redacted, b.Redacted); c != 0 {
+		return c
+	}
+	return compareLocation(a.Location, b.Location)
 }
 
 // nonNilVerification, nonNilFindings, and nonNilUnknowns replace a nil slice
@@ -216,6 +244,11 @@ func canonicalEvidence(refs []EvidenceRef) []EvidenceRef {
 	out := slices.Clone(refs)
 	if out == nil {
 		out = []EvidenceRef{}
+	}
+	// Clone is shallow, and a reference carries a pointer. Two bundles sharing
+	// one location is a copy a caller can change through.
+	for i := range out {
+		out[i].Location = cloneLocation(out[i].Location)
 	}
 	slices.SortStableFunc(out, compareEvidence)
 	return out
@@ -263,6 +296,15 @@ func cloneResource(r *Resource) *Resource {
 		return nil
 	}
 	v := *r
+	v.Location = cloneLocation(r.Location)
+	return &v
+}
+
+func cloneLocation(l *Location) *Location {
+	if l == nil {
+		return nil
+	}
+	v := *l
 	return &v
 }
 

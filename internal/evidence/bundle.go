@@ -70,6 +70,25 @@ type Finding struct {
 	Remediation string `json:"remediation"`
 }
 
+// Location is where a declaration is written: a path relative to the
+// configuration directory the caller supplied, and a 1-based line.
+//
+// It carries no text from the file and there is nowhere to put any. A location
+// is a claim about where to look, and a .tf file holds secrets more often than
+// a plan does; the contract makes carrying one impossible rather than leaving it
+// to a producer to remember.
+//
+// It is never load-bearing. No decision, disposition or exit code depends on
+// whether a location was found, because a verdict that changed when a file moved
+// would not be a verdict about the plan.
+type Location struct {
+	// File is the path relative to the configuration directory, with forward
+	// slashes on every platform.
+	File string `json:"file"`
+	// Line is the 1-based line the declaration or argument is written on.
+	Line int `json:"line"`
+}
+
 // Resource identifies the infrastructure resource a finding concerns.
 type Resource struct {
 	// Address is the resource address, such as "aws_s3_bucket.assets".
@@ -78,6 +97,11 @@ type Resource struct {
 	Provider string `json:"provider"`
 	// Cloud is the cloud the resource belongs to.
 	Cloud Cloud `json:"cloud"`
+	// Location is where the resource is declared, when a configuration
+	// directory was supplied and the declaration there matches this address.
+	// Absent otherwise: a plan carries no source positions, and a location that
+	// was merely plausible would send a reader to the wrong code.
+	Location *Location `json:"location,omitempty"`
 }
 
 // ExpectedFact is a value the intent or policy required at a normalized path.
@@ -135,6 +159,12 @@ type EvidenceRef struct {
 	Path string `json:"path"`
 	// Redacted reports that the located value is sensitive and was not read.
 	Redacted bool `json:"redacted"`
+	// Location is where this data is written in the configuration: the argument
+	// itself when it is written in the resource block, and otherwise the block,
+	// because an argument set from a variable, a local or a dynamic block is not
+	// written there at all. Absent when no configuration directory was supplied
+	// or nothing there matched.
+	Location *Location `json:"location,omitempty"`
 }
 
 // Unknown records evidence that was required or expected but unavailable.
