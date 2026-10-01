@@ -22,10 +22,10 @@ The requested private storage change enables public access.
 
 Object storage permits public access.
 
-- Resource: `aws_s3_bucket.assets` (aws, `registry.terraform.io/hashicorp/aws`)
+- Resource: `aws_s3_bucket.assets` (aws, `registry.terraform.io/hashicorp/aws`) at `main.tf:6`
 - Expected: `object_storage.public_access` = `false`
 - Observed: `object_storage.public_access` = `true` (KNOWN)
-- Evidence: terraform_plan `aws_s3_bucket.assets` `resource_changes[].change.after`
+- Evidence: terraform_plan `aws_s3_bucket.assets` `resource_changes[].change.after` at `main.tf:7`
 - Remediation: Disable public access using the provider-supported controls.
 
 ## Unknowns

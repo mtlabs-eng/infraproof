@@ -92,14 +92,23 @@ type placed struct {
 }
 
 func newLocator(plan terraformplan.Plan, root string) (*locator, error) {
-	guard, err := pathguard.New([]string{root})
+	// Resolved once, here, because the guard refuses a path that names a parent
+	// directory and a caller is entitled to write one: "--config ../infra" is an
+	// ordinary argument. The guard resolves its own roots the same way, so the
+	// two agree about which directory this is, and every path handed to it from
+	// here on is built from the resolved one.
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	guard, err := pathguard.New([]string{absolute})
 	if err != nil {
 		return nil, err
 	}
 
 	finder := &locator{
 		guard:     guard,
-		root:      root,
+		root:      absolute,
 		changes:   make(map[string]terraformplan.ResourceChange, len(plan.ResourceChanges)),
 		calls:     plan.ModuleCalls,
 		dirs:      map[string]string{},

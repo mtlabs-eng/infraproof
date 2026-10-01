@@ -18,6 +18,7 @@ import (
 	"github.com/mtlabs-eng/infraproof/internal/policy"
 	"github.com/mtlabs-eng/infraproof/internal/providers"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
+	"github.com/mtlabs-eng/infraproof/internal/tfconfig"
 )
 
 // FromFiles reads an intent contract and a plan and returns the Evidence
@@ -32,7 +33,7 @@ import (
 // Opening the files is this function's job rather than the caller's so that
 // both interfaces read them the same way. A caller that must constrain where it
 // reads from resolves the path first and passes the result here.
-func FromFiles(intentPath, planPath string) (evidence.Bundle, error) {
+func FromFiles(intentPath, planPath string, opts Options) (evidence.Bundle, error) {
 	contract, err := intent.Load(intentPath)
 	if err != nil {
 		return evidence.Bundle{}, err
@@ -47,7 +48,27 @@ func FromFiles(intentPath, planPath string) (evidence.Bundle, error) {
 		return evidence.Bundle{}, fmt.Errorf("reading plan %s: %w", planPath, err)
 	}
 
-	return Plan(contract, plan), nil
+	bundle := Plan(contract, plan)
+	if opts.ConfigRoot == "" {
+		return bundle, nil
+	}
+	// A directory that cannot be read is the caller's mistake rather than a fact
+	// about the change, so it is an error and not a verdict with nothing located
+	// in it. Everything past the directory itself -- a declaration that has
+	// moved, a module this build does not resolve -- is an absence, and absence
+	// is an answer.
+	return tfconfig.Annotate(bundle, plan, opts.ConfigRoot)
+}
+
+// Options are the parts of a verification a caller chooses.
+type Options struct {
+	// ConfigRoot is the directory holding the Terraform configuration, enabling
+	// source locations. Empty means no file is read and no output changes.
+	//
+	// There is no default. Guessing the directory from the plan's own path would
+	// be a guess, and a wrong guess reports lines from the wrong configuration --
+	// which is the failure source attribution exists to remove.
+	ConfigRoot string
 }
 
 // FromReaders verifies a contract and a plan the caller has already opened.

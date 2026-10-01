@@ -540,3 +540,19 @@ func TestReadsNothingFromAFileTooLarge(t *testing.T) {
 		t.Fatalf("a file past the bound was read, locating %+v", finding.Resource.Location)
 	}
 }
+
+// TestAcceptsAConfigurationDirectoryNamedThroughAParent covers the argument a
+// caller is entitled to write. "--config ../infra" is ordinary, and the guard
+// refuses a path that names a parent directory, so the root is resolved once
+// before anything is asked of the filesystem.
+func TestAcceptsAConfigurationDirectoryNamedThroughAParent(t *testing.T) {
+	plan := loadPlan(t, "testdata", "generated", "plan.json")
+	// A leading parent segment, which is the form joining cannot clean away and
+	// the form a caller writes: this package's own directory reached from inside
+	// it. It is what "--config ../infra" looks like to the guard.
+	through := filepath.Join("..", "tfconfig", "testdata", "generated")
+
+	finding := annotate(t, about("terraform_data.root", "terraform_data.root", "input"), plan, through)
+
+	at(t, finding.Resource.Location, "main.tf", 11)
+}
