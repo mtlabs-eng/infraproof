@@ -174,6 +174,7 @@ Provider packages may depend on `model`. The policy engine depends on `model` an
 
 ## Testing strategy
 
+- Where this build restates another tool's grammar, a test asks that tool. `internal/tfconfig` reads HCL, and four independent reviews of the milestone that added it found one class of defect and almost nothing else: the lexer disagreeing with Terraform. Each found it by hand-building cases nobody had thought of, and each time that work died with the reviewer. `TestScanAgreesWithTerraform` runs `terraform validate` over a corpus and requires this build to read every file Terraform accepts, at the right line — so the question survives the reviewer who thought to ask it. It skips when `terraform` is absent.
 - Unit tests for parsing, normalization, rules, decisions, and rendering
 - Golden tests for stable JSON and Markdown output
 - Contract tests that run equivalent scenarios through all three provider mappers

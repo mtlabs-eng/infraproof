@@ -155,6 +155,19 @@ location in its file: a template or an object nested more than 64 deep; and a
 heredoc opened inside an interpolation whose body does not balance on its own —
 one that balances is read.
 
+Which of those a future change gets wrong is a question for Terraform, and
+`TestScanAgreesWithTerraform` asks it: every case is written to a directory,
+`terraform validate` says whether it is configuration, and this build must read
+every file it accepts and report the argument on the line it is written on. A file
+this build refuses deliberately carries the reason in the case, so a refusal nobody
+decided on cannot hide among the ones somebody did. It skips when `terraform` is
+not on `PATH`, needs no provider and no network -- every case uses the builtin
+`terraform_data` -- and costs about three seconds. For a deeper run:
+
+```sh
+INFRAPROOF_HCL_SWEEP=900 go test ./internal/tfconfig/ -run TestScanAgreesWithTerraform
+```
+
 Refusing too much is a failure mode with no natural test: a scanner that read
 nothing at all would leave a fuzz oracle green, because an oracle checks reported
 positions and a refusal reports none. So every `.tf` file this repository ships
