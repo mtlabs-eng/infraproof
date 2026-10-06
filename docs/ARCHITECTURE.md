@@ -185,3 +185,32 @@ Provider packages may depend on `model`. The policy engine depends on `model` an
 - Optional Terraform mock-provider generation of fixtures; committed sanitized JSON remains the deterministic test input
 
 No MVP test requires a cloud account.
+
+## Ask the plan what the author wrote
+
+An attribute a provider marks Optional **and Computed** is emitted as unknown in
+two opposite situations: the author left it out, where the provider's documented
+default applies, or the author set it from something the plan cannot resolve,
+where nothing does. The plan gives both the same shape.
+
+Reading every such unknown as unreadable answers `UNKNOWN` for the ordinary case.
+That is how the GCP mapper came to produce no verdict on a real plan: `direction`
+is Optional and Computed, so every firewall that does not spell out
+`direction = "INGRESS"` emitted it unknown, and the answer was `UNKNOWN` before
+anything else was read. Reading every such unknown as the default invents a value
+for the interpolated case, which this project forbids.
+
+The configuration block separates them, because it records which arguments a
+resource's configuration writes. `terraformplan` exposes that as
+`ResourceChange.Stated`, with `Configured` saying whether the question is
+answerable at all — a sanitized plan does not record what was written, and a
+default applied on the strength of a silence nobody recorded is an invented fact.
+`declared.Unwritten` is the question a mapper asks.
+
+The general rule this is an instance of: **when a mapper needs to know something
+about a provider's semantics, ask the authority rather than model it.** Milestone
+07 asks `terraform validate` directly. This family has no such oracle for provider
+schemas, so it does the next best thing — real `terraform plan` output committed
+as a fixture, with a guard test pinning the shape each one exists to carry. Three
+of the defects that reached a review were hand-written fixtures encoding shapes
+Terraform does not emit, and every one of them was permissive.

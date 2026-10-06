@@ -68,7 +68,10 @@ exists. Asserting reachability would make most real plans `UNKNOWN`; the limit i
 reported beside the finding instead. And one more asymmetry runs through this
 family: a grant can be proven from part of a rule set, while closure cannot, so a
 security group whose rules live in separate resources is `UNKNOWN` rather than
-closed.
+closed. Closure is never *fully* provable either — the providers advise against
+mixing inline rules with separate rule resources and do not prevent it — so a
+proven closure carries a non-required unknown saying a rule declared elsewhere
+could admit more.
 
 Where the plan does not determine exposure, InfraProof answers `UNKNOWN`, and
 `UNKNOWN` is not `PASS`. It is the honest answer in more cases than a reader may

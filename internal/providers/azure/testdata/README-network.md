@@ -1,10 +1,22 @@
 # Network fixtures
 
-Hand-authored from the provider's own documentation, like the storage fixtures
-beside them: there is no offline authority for a provider schema, and no provider
-was downloaded to produce these.
+Hand-authored, and the only cloud here where that is still true.
 
-What was verified against `hashicorp/terraform-provider-azurerm` rather than
+AWS and GCP carry real `terraform plan` output beside their hand-written
+fixtures. Azure cannot: the provider acquires an AAD token before it finishes
+building, so `terraform plan` fails at `clientCredentialsToken: AADSTS700038`
+with no cloud to reach. Standing up something for it to authenticate against is
+not work this project will do.
+
+So these are shaped from the **authoritative provider schema**
+(`terraform providers schema -json`, which settles every Required/Optional/Computed
+question) rather than from documentation prose. The leaf spellings inside
+`after`/`after_unknown` — `""` for an unset optional string, `[]` for an unset
+set, per-element unknowns inside the `security_rule` set — are inferred from SDKv2
+semantics and from the AWS set behaviour that was observed on a real plan. They
+are not measured, and that is this cloud's weakest link.
+
+What was verified against the schema or the provider's documentation, rather than
 assumed:
 
 - A `security_rule` block takes `name`, `description`, `protocol` (`Tcp`, `Udp`,
@@ -14,6 +26,20 @@ assumed:
   the application security group lists, `access` (`Allow`/`Deny`), `priority`
   (100–4096, **lower number is higher precedence**) and `direction`
   (`Inbound`/`Outbound`).
+- `security_rule` is a set of object, Optional **and Computed**, with 17 keys. An
+  unset inline set is therefore emitted as unknown rather than as `[]`, which is
+  what the fixtures here said until a review pointed at the schema. A group plus
+  separate `azurerm_network_security_rule` resources — the most common Azure shape
+  — reported UNKNOWN on the real shape where the fixture said KNOWN(true).
+- A rule has a **destination** as well as a source:
+  `destination_address_prefix`/`destination_address_prefixes`. It narrows what is
+  reachable rather than whether ingress is permitted, which is sound for an allow
+  and inverted for a deny — a deny scoped to one host is not a deny covering the
+  subnet.
+- Of the three service tags, only `Internet` is every public address.
+  `VirtualNetwork` and `AzureLoadBalancer` are not reachable from the internet and
+  are read as narrow. `AzureCloud` is Azure's own public IP space and is
+  deliberately left in the unreadable case.
 - `source_address_prefix` accepts a CIDR, an IP, `*`, or a service tag such as
   `Internet`, `VirtualNetwork` or `AzureLoadBalancer`. **`source_address_prefixes`
   may not carry tags.** That asymmetry is the provider's, not a simplification

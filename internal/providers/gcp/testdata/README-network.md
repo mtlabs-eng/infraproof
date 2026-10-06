@@ -1,18 +1,42 @@
 # Network fixtures
 
-Hand-authored from the provider's own documentation, like the storage fixtures
-beside them: there is no offline authority for a provider schema, and no provider
-was downloaded to produce these.
+`real-firewalls.json` and `real-undetermined.json` are genuine
+`terraform show -json` output: Terraform 1.14.0, `hashicorp/google` v6,
+`terraform plan` only. Never applied, no cloud contacted — a placeholder
+credentials filename and a fake project. Each scenario in them sits on its own
+network so the firewalls do not interact, because a firewall's rule set is scoped
+to one network. They are this milestone's authority test; the fixtures cut from
+them keep their shapes.
 
-What was verified against `hashicorp/terraform-provider-google` rather than
-assumed:
+The rest are hand-authored, which is how this mapper came to produce no verdict on
+real input. `direction` is Optional **and Computed**, so a create plan emits it as
+unknown for every firewall that does not spell it out — and all 25 hand-written
+fixtures wrote `direction = "INGRESS"`. Ten of eleven firewalls in a real plan
+reported UNKNOWN, including SSH open to `0.0.0.0/0`. The note below that
+`direction` "is Computed, so a plan may not state it" was treated as describing an
+exception; it describes the rule.
+
+What was verified against the authoritative provider schema
+(`terraform providers schema -json`) or against a real plan, rather than assumed:
 
 - Exactly one of `allow` or `deny` is required on a `google_compute_firewall`, so
   a firewall is an allow-rule or a deny-rule and never both.
 - `priority` is 0–65535, **1000 when unstated**, lower is higher precedence, and
   **a deny takes precedence over an allow of equal priority**. That tie-break is
   this cloud's own: Azure forbids the tie and AWS has no denies.
-- `direction` defaults to `INGRESS` and is Computed, so a plan may not state it.
+- `direction` is Optional **and Computed** and defaults to `INGRESS`. A real create
+  plan omits the key from `after` and marks it unknown in `after_unknown` unless
+  the configuration writes it, so the unknown is the default rather than a gap.
+  An interpolated `direction` is unknown and written, which is the only shape in
+  which it is a gap — `real-undetermined.json` carries both.
+- `priority` is emitted as `1000` when unstated rather than absent, `disabled`
+  emits `null`, and an unset `ports` list emits `[]`. None of `null`, an absent
+  key, or an absent `ports` field is a shape a real plan uses, which two
+  hand-written fixtures claimed.
+- The protocol is passed through verbatim: `"sctp"` and `"6"` are not normalized.
+  `allow`/`deny` accept `tcp udp icmp esp ah sctp ipip all` or an IANA number, and
+  note that **`sctp` carries ports**, so reporting an unnameable protocol as a
+  port-less grant would be wrong in kind.
 - `disabled` means the network behaves as if the rule did not exist.
 - **Since provider version 4, an ingress firewall must state one of
   `source_ranges`, `source_tags` or `source_service_accounts`.** The old

@@ -117,35 +117,68 @@ Both are recorded here rather than left to be inferred from the code.
 
 ## Limitations of this milestone, as built
 
-- **The claim is about the change, not about reachability.** Nothing here reads
+Rewritten after three independent reviews, two of which generated real
+`terraform plan` output and found several of the original statements false. What
+changed is recorded in the commits; what follows is what the build actually does.
+
+- **The claim is about the change, not about reachability.** Nothing here resolves
   an attachment: a security group's instances, an NSG's subnets, a firewall's
-  target tags beyond comparing them with a deny's. The attachment is reported as
-  a non-required unknown on every finding.
-- **A grant is provable from part of a rule set; closure is not.** A security
-  group or an NSG whose rules are separate resources is `UNKNOWN` unless one of
-  the rules in the plan grants. Only an inline set can be shown closed, because
-  the provider refuses to mix the two forms and an inline set is therefore the
-  whole set.
-- **One approximation, and it is upward.** A deny narrower by protocol than the
-  allow it meets cannot be subtracted: a range carries one protocol and "every
-  protocol except TCP" is not one. The wider range is reported and a missing
-  control says so. Dropping the grant would hide that the other protocols are
-  still open.
-- **GCP target scopes are compared as sets, not resolved.** A deny whose
-  `target_tags` do not cover the allow's is not applied, and the narrowing is
-  reported. Whether any instance actually carries a tag is not in the firewall.
-- **A protocol with no ports cannot be permitted by a port list.** ICMP, ESP, AH,
-  a protocol number, a spelling this build does not know: each is reported and
-  each needs a human, because a port declaration can neither permit nor forbid it
-  and this build will not decide on its own that ping from the internet is a
-  violation.
-- **Source ports and destination addresses are not read.** A source port is the
-  client's and says nothing; a destination address narrows what is reachable
-  rather than whether ingress is permitted.
+  network and target tags beyond comparing them with a deny's. Each cloud reports
+  it as a non-required unknown on every finding — `AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN`,
+  `AZURE_NSG_ASSOCIATION_UNKNOWN`, `GCP_FIREWALL_SCOPE_UNKNOWN`. The first version
+  of this list claimed that and GCP reported nothing of the sort.
+- **A grant is provable from part of a rule set; closure is not, and closure is
+  never fully provable.** A security group or an NSG whose rules are separate
+  resources is `UNKNOWN` unless a rule in the plan grants. An inline set can be
+  shown closed, bounded by a non-required unknown: the earlier claim that "the
+  provider refuses to mix the two forms" is false, and a review disproved it by
+  planning inline `ingress` and a standalone rule on one group — four resources to
+  add, no error and no warning. The documentation advises against mixing; nothing
+  prevents it.
+- **An Optional and Computed attribute that nobody wrote takes the provider's
+  documented default.** `direction`, `ingress` and `security_rule` are all emitted
+  as unknown when the author leaves them out, which is the common case rather than
+  an edge one. The configuration block says which arguments were written, so the
+  default is applied only where the author was silent; an attribute somebody set
+  from an unresolvable value stays unknown. Without a configuration block — a
+  sanitized plan — nothing is assumed either way.
+- **Two approximations, both upward, each with its own identifier.** A deny
+  narrower by protocol than the allow it meets cannot be subtracted: a range
+  carries one protocol and "every protocol except TCP" is not one. A deny narrower
+  by destination, or by target scope, cannot be shown to cover the allow at all.
+  In each case the wider answer is reported with a missing control naming the
+  reason, and the flag is raised only when something was actually approximated.
+- **Address and port sets are arithmetic, not pattern-matching.** What a source
+  field admits is the union of its entries, so `0.0.0.0/1, 128.0.0.0/1` is every
+  address in IPv4; what a declaration permits is the union of its ranges, so 80
+  and 81 declared is 80-81 declared. Both were wrong in the first version and both
+  produced a definite answer that was the opposite of the truth.
+- **A protocol with no ports cannot be permitted by a port list, and neither can
+  every protocol at once.** ICMP, ESP, AH: each needs a human, because a port
+  declaration can neither permit nor forbid it. A protocol written as its IANA
+  number is read when this model can name it — the four assignments are closed and
+  documented, and the providers pass the number through verbatim. Every other
+  number and spelling is `UNKNOWN` in all three clouds.
+- **A source this build cannot resolve is not a narrow source.** A managed prefix
+  list may contain `0.0.0.0/0`, so a rule sourced from one is undetermined. A rule
+  naming another security group, an application security group, or itself reaches
+  no address and is read as opening nothing.
+- **Source ports are not read, and a destination address is read only for a deny.**
+  A source port is the client's and says nothing. A destination narrows what is
+  reachable rather than whether ingress is permitted, which is sound for an allow
+  and inverted for a deny — ignoring it made a deny scoped to one host look like a
+  deny covering the subnet.
 - **Azure's and GCP's platform defaults are relied on, not modelled.** Both deny
-  inbound traffic no rule allows, which is what makes a readable set with no
-  grant a proven closure. The default rules themselves are not in any plan.
-- **Fixtures are hand-authored from provider documentation.** There is no offline
-  authority for a provider schema, so milestone 07's agreement harness has no
-  equivalent here. What was verified, and against which document, is recorded in
-  a README beside each cloud's fixtures.
+  inbound traffic no rule allows, which is what makes a readable set with no grant
+  a proven closure. The default rules themselves are not in any plan.
+- **The fixtures now include real plans, for two clouds of three.** AWS and GCP
+  carry genuine `terraform show -json` output committed as `real-*.json`, which is
+  this milestone's authority test and what caught the Optional-and-Computed
+  defects. Azure's are hand-authored from the authoritative provider schema:
+  azurerm acquires an AAD token before building the provider, so it cannot be
+  planned offline, and standing up something for it to authenticate against is not
+  work this project will do. Azure's leaf spellings are therefore inferred from the
+  schema and from the AWS set behaviour that was observed, not measured.
+- **Out of scope, unchanged.** Network ACLs, Cloud Armor, WAF. Egress.
+  Reachability through a load balancer, gateway or peering. Whether what is
+  listening behind an open port is dangerous.
