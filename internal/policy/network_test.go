@@ -392,14 +392,53 @@ func TestANetworkDeclarationThePlanCannotExerciseIsReported(t *testing.T) {
 	if !unknowns[0].Required {
 		t.Error("an unexercised declaration did not prevent a pass")
 	}
-	// The sentence has to be about ports, because that is what this family
-	// declares. "declares  exposure for network" is what one sentence for both
-	// families produced.
-	if !strings.Contains(unknowns[0].Reason, "reachable from any address") {
-		t.Errorf("the reason does not describe a network declaration: %q", unknowns[0].Reason)
+	// The sentence has to be about the ports that were declared, because that is
+	// what this family declares. "declares  exposure for network" is what one
+	// sentence for both families produced.
+	//
+	// Both halves are asserted, and that is the point: the two network sentences
+	// are near-inversions of each other -- "the ports that may be reachable" and
+	// "that no port may be reachable" -- and a test checking only that the reason
+	// mentions "reachable from any address" is satisfied by either. Swapping them
+	// made this report say the contract declares that no port may be reachable
+	// for a contract declaring 443, with the suite green.
+	reason := unknowns[0].Reason
+	if !strings.Contains(reason, "the ports of network that may be reachable from any address") {
+		t.Errorf("the reason does not say a declaration of ports was made: %q", reason)
 	}
-	if strings.Contains(unknowns[0].Reason, "exposure") {
-		t.Errorf("the reason names a field this family does not have: %q", unknowns[0].Reason)
+	if strings.Contains(reason, "no port") {
+		t.Errorf("the reason inverts what the contract declared: %q", reason)
+	}
+	if strings.Contains(reason, "exposure") {
+		t.Errorf("the reason names a field this family does not have: %q", reason)
+	}
+}
+
+// TestAnEmptyNetworkDeclarationIsDescribedAsTheRestrictionItIs is the other
+// sentence, and the reason the one above asserts both halves.
+//
+// An empty port list is the most restrictive thing this field can say, and the
+// report has to say that rather than "the ports that may be reachable", which
+// would describe a list the author deliberately left empty as though it named
+// something.
+func TestAnEmptyNetworkDeclarationIsDescribedAsTheRestrictionItIs(t *testing.T) {
+	none := []model.PortRange{}
+	declared := contract(func(c *intent.Contract) {
+		c.Resources = []intent.ResourceIntent{{Family: intent.FamilyNetwork, PublicPorts: &none}}
+	})
+
+	result := policy.ContractCoverage(declared, model.Graph{})
+
+	unknowns := unknownsFor(result, policy.CheckContractFamilyAbsent)
+	if len(unknowns) != 1 {
+		t.Fatalf("got %d unknowns, want 1: %+v", len(unknowns), unknowns)
+	}
+	reason := unknowns[0].Reason
+	if !strings.Contains(reason, "that no port of network may be reachable from any address") {
+		t.Errorf("an empty declaration is not described as the restriction it is: %q", reason)
+	}
+	if strings.Contains(reason, "the ports of network that may") {
+		t.Errorf("an empty declaration is described as naming ports: %q", reason)
 	}
 }
 
@@ -687,5 +726,50 @@ func TestNoRangeEverCarriesAProtocolWithNoName(t *testing.T) {
 	got := observed.Value.Display()
 	if got == "" || strings.HasPrefix(got, ",") || strings.Contains(got, ", ,") {
 		t.Fatalf("observed = %q: a range whose protocol has no name reached the reader as nothing", got)
+	}
+}
+
+// TestARenderedDeclarationIsBounded covers the one value in this finding that
+// comes from the contract rather than from the plan.
+//
+// A contract may declare any number of ports, and the Expected fact wrote all of
+// them: 1,500 entries produced a 49 KB report with almost all of it inside one
+// Markdown table cell. The intent package bounds a quoted contract value at 80
+// characters and says why -- "a message that reprints the file is one nobody
+// reads to the end" -- and this is the same value reaching the same reader.
+//
+// What is elided is counted, because a declaration the reader cannot see all of
+// must at least say how much of it there was.
+func TestARenderedDeclarationIsBounded(t *testing.T) {
+	declared := make([]model.PortRange, 0, 1500)
+	for p := 1000; p < 4000; p += 2 {
+		declared = append(declared, port(p))
+	}
+
+	result := policy.NetworkExposure(declaring(declared), open(tcp(22, 22)))
+
+	if len(result.Findings) != 1 {
+		t.Fatalf("%d findings, want one", len(result.Findings))
+	}
+	expected := result.Findings[0].Expected
+	if expected == nil {
+		t.Fatal("the finding expects nothing")
+	}
+	rendered := expected.Value.Display()
+	if len(rendered) > 200 {
+		t.Fatalf("the rendered declaration is %d bytes:\n%s", len(rendered), rendered)
+	}
+	if !strings.Contains(rendered, "1000") {
+		t.Errorf("the rendered declaration does not begin with what was declared: %q", rendered)
+	}
+	if !strings.Contains(rendered, "1500") && !strings.Contains(rendered, "more") {
+		t.Errorf("the rendered declaration elides without saying how much: %q", rendered)
+	}
+
+	// A declaration a reader can see all of is written out in full, or the bound
+	// has made every report worse to spare the one that was too long.
+	short := policy.NetworkExposure(declaring([]model.PortRange{port(80), port(443)}), open(tcp(22, 22)))
+	if got := short.Findings[0].Expected.Value.Display(); got != "80, 443" {
+		t.Fatalf("a short declaration renders as %q, want it in full", got)
 	}
 }

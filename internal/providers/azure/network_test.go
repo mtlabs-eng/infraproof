@@ -497,3 +497,21 @@ func TestADenyThatRemovesNothingIsNotAnApproximation(t *testing.T) {
 		t.Error("the approximation that is real stopped being reported")
 	}
 }
+
+// TestARuleBeingReplacedIsTheRuleThatWillExist is the same correction in this
+// cloud. A replacement is spelled as a delete and a create together, so testing
+// for a delete alone dropped a rule resource that will exist after apply.
+//
+// Here it under-reported: the dropped rule was the one stating the grant, so a
+// port open to the internet came out as an unsettled set.
+func TestARuleBeingReplacedIsTheRuleThatWillExist(t *testing.T) {
+	capabilities := securityGroup(t, "nsg-rule-replaced").Network
+
+	if !capabilities.PublicIngress.IsKnown() || !capabilities.PublicIngress.Get() {
+		t.Fatalf("a rule being replaced was dropped, so its grant went unreported: %v",
+			capabilities.PublicIngress.State)
+	}
+	if got := rendered(capabilities.OpenToAnyAddress); got != "tcp/22" {
+		t.Fatalf("opens %q, want tcp/22", got)
+	}
+}

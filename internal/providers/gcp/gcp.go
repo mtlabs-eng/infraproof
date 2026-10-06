@@ -52,10 +52,12 @@ func (Mapper) IsSubject(resourceType string) bool {
 	return resourceType == typeBucket || resourceType == typeFirewall
 }
 
-// FamilyOf names the family a resource type belongs to. Every type this mapper
-// interprets today is object storage; the normalizer asks because a control
-// resource cannot be placed by what it returned, and assuming one family was
-// invisible until a second one existed.
+// FamilyOf names the family a resource type belongs to.
+//
+// The normalizer asks because a control resource cannot be placed by what Map
+// returned: an IAM member is placed by the bucket it names, and a firewall rule
+// by the network it is on. Assuming one family was invisible until a second one
+// existed, which is what this milestone added.
 func (Mapper) FamilyOf(resourceType string) model.Family {
 	switch resourceType {
 	case typeBucket, typeIAMMember, typeIAMBinding, typeIAMPolicy:

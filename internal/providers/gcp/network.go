@@ -26,6 +26,7 @@ const (
 	checkDenyByTarget   = "GCP_FIREWALL_DENY_NARROWER_BY_TARGET"
 	checkDenyByProtocol = "GCP_FIREWALL_DENY_NARROWER_BY_PROTOCOL"
 	checkNetworkUnread  = "GCP_FIREWALL_NETWORK_UNDETERMINED"
+	checkScopeUnknown   = "GCP_FIREWALL_SCOPE_UNKNOWN"
 )
 
 // firewall normalizes one firewall, which on this cloud is a rule and a subject
@@ -77,7 +78,10 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			if candidate.Type != typeFirewall || candidate.Address == subject.Address {
 				continue
 			}
-			if slices.Contains(candidate.Actions, terraformplan.ActionDelete) {
+			// A replacement is a delete and a create together, so testing for
+			// a delete alone skipped a firewall that will exist after apply.
+			// The verdict is about the state the change produces.
+			if slices.Contains(candidate.Actions, terraformplan.ActionDelete) && !candidate.IsReplace() {
 				continue
 			}
 			deny := readFirewall(candidate)
@@ -180,6 +184,27 @@ func (m Mapper) ingressGaps(subject terraformplan.ResourceChange) []model.Missin
 		Sources: []model.Provenance{{
 			ResourceAddress: subject.Address,
 			AttributePath:   "priority",
+			Cloud:           model.CloudGCP,
+		}},
+		Cloud: model.CloudGCP,
+	}, {
+		// What the rule set governs is not in the plan, which is the bound AWS
+		// and Azure report for their attachment and GCP reported for nothing.
+		// The milestone claimed it was reported on every finding; it was
+		// reported on two clouds out of three.
+		//
+		// A firewall names a network and, optionally, target tags or service
+		// accounts. Whether any instance is on that network, or carries that
+		// tag, is a fact about instances -- and an instance names the tag, not
+		// the other way round, so it can be created by something this plan does
+		// not contain.
+		CheckID: checkScopeUnknown,
+		Reason: "A firewall applies to the instances on its network that carry its targets, and an " +
+			"instance names the target rather than the other way round, so the plan does not state " +
+			"what this rule set governs.",
+		Sources: []model.Provenance{{
+			ResourceAddress: subject.Address,
+			AttributePath:   "network",
 			Cloud:           model.CloudGCP,
 		}},
 		Cloud: model.CloudGCP,

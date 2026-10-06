@@ -317,3 +317,30 @@ func TestASourceSplitIntoHalvesIsEveryAddress(t *testing.T) {
 		t.Fatalf("opens %q, want tcp/22", got)
 	}
 }
+
+// TestARuleBeingReplacedIsTheRuleThatWillExist covers the difference between a
+// rule going away and a rule being rewritten.
+//
+// A replacement is spelled as a delete and a create together, so testing for a
+// delete alone skipped a firewall that will exist after apply. The verdict is
+// about the state the change produces, and a deny being replaced is part of it.
+//
+// It over-reported rather than under-reported, which is the safe direction and
+// also why nothing noticed.
+func TestARuleBeingReplacedIsTheRuleThatWillExist(t *testing.T) {
+	replaced := firewall(t, "fw-deny-replaced").Network
+
+	if !replaced.PublicIngress.IsKnown() {
+		t.Fatalf("the set was not settled: %v", replaced.PublicIngress.State)
+	}
+	if replaced.PublicIngress.Get() {
+		t.Fatal("a deny being replaced was ignored, so a grant it cancels was reported")
+	}
+
+	// And a deny that is only being deleted is still ignored, or this fix reads
+	// every destruction as a creation.
+	destroyed := firewall(t, "fw-deny-destroyed").Network
+	if !destroyed.PublicIngress.Get() {
+		t.Fatal("a deny being destroyed was applied, so a grant was hidden by a rule that will not exist")
+	}
+}

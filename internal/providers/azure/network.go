@@ -188,7 +188,11 @@ func (m Mapper) ingressGaps(subject terraformplan.ResourceChange) []model.Missin
 func securityRules(related []terraformplan.ResourceChange) []terraformplan.ResourceChange {
 	var out []terraformplan.ResourceChange
 	for _, change := range related {
-		if change.Type == typeSecurityRule && !slices.Contains(change.Actions, terraformplan.ActionDelete) {
+		// Not a delete, or a delete that is half of a replacement: a rule being
+		// rewritten is a rule that will exist, and skipping it would read the
+		// state before the change rather than the one it produces.
+		if change.Type == typeSecurityRule &&
+			(!slices.Contains(change.Actions, terraformplan.ActionDelete) || change.IsReplace()) {
 			out = append(out, change)
 		}
 	}

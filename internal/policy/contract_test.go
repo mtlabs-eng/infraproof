@@ -511,25 +511,91 @@ func TestOneRuleCoversThreeCloudsForIngress(t *testing.T) {
 // would fail if it did is the import boundary one, and this is the other half:
 // the rule reaches a verdict for each cloud without naming any.
 func TestAddingAMapperDoesNotTouchTheRule(t *testing.T) {
-	judged := map[string]int{}
-	for cloud, fixtures := range map[string][]string{
-		"aws":   {"sg-public-inline", "sg-closed-inline", "sg-icmp", "sg-every-protocol"},
-		"azure": {"nsg-public-inline", "nsg-closed-inline", "nsg-icmp", "nsg-every-protocol"},
-		"gcp":   {"fw-public", "fw-closed", "fw-icmp", "fw-every-protocol"},
-	} {
-		for _, fixture := range fixtures {
-			result := evaluateNetwork(t, cloud, fixture, declaringPort())
-			if len(result.Evaluated) == 0 {
-				t.Errorf("%s/%s: the rule judged nothing, so coverage would report it unjudged",
-					cloud, fixture)
+	// One scenario per row, and the verdict the rule must reach for it whatever
+	// cloud states it. The contract declares one port, so an open 22 exceeds it
+	// and a port-less protocol is a question it cannot answer.
+	//
+	// The previous version of this test counted verdicts and compared none. It
+	// asserted that something was judged, which is satisfied by a rule that
+	// reaches a different answer in every cloud -- the one thing it exists to
+	// rule out.
+	scenarios := []struct {
+		name        string
+		fixtures    map[string]string
+		disposition evidence.Disposition
+		observed    string
+	}{{
+		name:        "a port open to any address that the contract does not declare",
+		fixtures:    map[string]string{"aws": "sg-public-inline", "azure": "nsg-public-inline", "gcp": "fw-public"},
+		disposition: evidence.DispositionBlock,
+		observed:    "tcp/22",
+	}, {
+		name:        "a protocol with no ports",
+		fixtures:    map[string]string{"aws": "sg-icmp", "azure": "nsg-icmp", "gcp": "fw-icmp"},
+		disposition: evidence.DispositionWarn,
+		observed:    "icmp",
+	}, {
+		name:        "every protocol on every port",
+		fixtures:    map[string]string{"aws": "sg-every-protocol", "azure": "nsg-every-protocol", "gcp": "fw-every-protocol"},
+		disposition: evidence.DispositionBlock,
+		observed:    "every/0-65535",
+	}}
+
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			for cloud, fixture := range scenario.fixtures {
+				result := evaluateNetwork(t, cloud, fixture, declaringPort())
+
+				if len(result.Evaluated) == 0 {
+					t.Fatalf("%s/%s: the rule judged nothing, so coverage would report it unjudged",
+						cloud, fixture)
+				}
+				if len(result.Findings) != 1 {
+					t.Fatalf("%s/%s: %d findings, want one", cloud, fixture, len(result.Findings))
+				}
+				finding := result.Findings[0]
+				if finding.RuleID != policy.RuleNetworkPublicIngress {
+					t.Errorf("%s/%s: rule %q", cloud, fixture, finding.RuleID)
+				}
+				if finding.Severity != evidence.SeverityHigh {
+					t.Errorf("%s/%s: severity %q, want %q", cloud, fixture,
+						finding.Severity, evidence.SeverityHigh)
+				}
+				if finding.Disposition != scenario.disposition {
+					t.Errorf("%s/%s: disposition %q, want %q", cloud, fixture,
+						finding.Disposition, scenario.disposition)
+				}
+				if finding.Observed == nil {
+					t.Fatalf("%s/%s: the finding observes nothing", cloud, fixture)
+				}
+				if got := finding.Observed.Value.Display(); got != scenario.observed {
+					t.Errorf("%s/%s: observed %q, want %q", cloud, fixture, got, scenario.observed)
+				}
+				// The evidence is the one thing that must differ: it names this
+				// cloud's own attributes, which is how the rule stays ignorant
+				// of them.
+				if len(finding.Evidence) == 0 {
+					t.Errorf("%s/%s: the finding cites nothing", cloud, fixture)
+				}
+				for _, ref := range finding.Evidence {
+					if ref.ResourceAddress == "" || ref.Path == "" {
+						t.Errorf("%s/%s: a citation names no attribute: %+v", cloud, fixture, ref)
+					}
+				}
 			}
-			judged[cloud] += len(result.Evaluated)
-		}
+		})
 	}
 
-	for _, cloud := range []string{"aws", "azure", "gcp"} {
-		if judged[cloud] == 0 {
-			t.Errorf("the rule reached no verdict in %s", cloud)
+	// And the closed case, where no cloud may produce a finding at all.
+	for cloud, fixture := range map[string]string{
+		"aws": "sg-closed-inline", "azure": "nsg-closed-inline", "gcp": "fw-closed",
+	} {
+		result := evaluateNetwork(t, cloud, fixture, declaringPort())
+		if len(result.Findings) != 0 {
+			t.Errorf("%s/%s: a closed set produced %d findings", cloud, fixture, len(result.Findings))
+		}
+		if len(result.Evaluated) == 0 {
+			t.Errorf("%s/%s: a closed set was not judged", cloud, fixture)
 		}
 	}
 }

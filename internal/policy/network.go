@@ -238,13 +238,34 @@ func renderOpen(ranges []model.OpenRange) string {
 	return strings.Join(slices.Compact(texts), ", ")
 }
 
-// renderRanges writes a declared set of ports in the order the contract wrote it.
+// renderRanges writes a declared set of ports in the order the contract wrote
+// it, bounded.
+//
+// A contract may declare any number of ports and this wrote all of them: 1,500
+// entries produced a 49 KB report with almost all of it inside one Markdown
+// table cell. The intent package bounds a quoted contract value for the same
+// reason and says it plainly -- a message that reprints the file is one nobody
+// reads to the end.
+//
+// What is elided is counted. A reader who cannot see the whole declaration must
+// at least be told how much of it there was, or the report quietly implies the
+// contract declared only what fitted.
 func renderRanges(declared []model.PortRange) string {
-	texts := make([]string, 0, len(declared))
-	for _, permitted := range declared {
-		texts = append(texts, renderRange(permitted))
+	const most = 120
+
+	var built strings.Builder
+	for i, permitted := range declared {
+		text := renderRange(permitted)
+		if built.Len() > 0 && built.Len()+len(text)+2 > most {
+			return fmt.Sprintf("%s, and %d more of %d declared",
+				built.String(), len(declared)-i, len(declared))
+		}
+		if built.Len() > 0 {
+			built.WriteString(", ")
+		}
+		built.WriteString(text)
 	}
-	return strings.Join(texts, ", ")
+	return built.String()
 }
 
 // renderRange writes one range: a single port as itself.

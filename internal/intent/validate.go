@@ -3,6 +3,7 @@ package intent
 import (
 	"errors"
 	"fmt"
+	"github.com/mtlabs-eng/infraproof/internal/model"
 	"slices"
 	"strconv"
 	"strings"
@@ -244,10 +245,27 @@ func validateFamilyFields(i int, resource ResourceIntent, present resourcePresen
 				i, FamilyNetwork))
 			break
 		}
+		// Parsed here and compared against what came before, because a
+		// declaration that names one port twice is a mistake in the author's
+		// statement rather than a statement. This package already refuses a
+		// repeated family and a repeated cloud for the same reason, and the
+		// rendered Expected fact of a contract declaring 443 four times read
+		// "443, 443, 443, 443".
+		var accepted []model.PortRange
 		for j, text := range present.rawPorts {
-			if _, err := parsePortRange(text); err != nil {
+			parsed, err := parsePortRange(text)
+			if err != nil {
 				errs = append(errs, fmt.Errorf("resources[%d].public_ports[%d] %w", i, j, err))
+				continue
 			}
+			if overlap, found := overlapping(accepted, parsed); found {
+				errs = append(errs, fmt.Errorf(
+					"resources[%d].public_ports[%d] is %q, whose ports %s already declares; "+
+						"a port may be declared once",
+					i, j, quotable(strings.TrimSpace(text)), renderPorts(overlap)))
+				continue
+			}
+			accepted = append(accepted, parsed)
 		}
 	default:
 		if present.publicPorts {
@@ -305,4 +323,30 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// overlapping finds the already-accepted range sharing a port with this one.
+//
+// Touching counts as overlapping for the purpose of a diagnostic: 80-100 beside
+// 101-200 is two ranges that could have been written as one, and leaving both
+// means the rendered declaration says in two entries what it could say in one.
+// Nothing downstream depends on it -- model.Covers asks the union -- so this is
+// about the contract being a statement a reader can check.
+func overlapping(accepted []model.PortRange, one model.PortRange) (model.PortRange, bool) {
+	for _, already := range accepted {
+		if already.Overlaps(one) || already.To+1 == one.From || one.To+1 == already.From {
+			return already, true
+		}
+	}
+	return model.PortRange{}, false
+}
+
+// renderPorts writes a range for a diagnostic. The rule renders a declaration
+// for a report; this is the same shape for a message, and neither carries
+// provider text.
+func renderPorts(ports model.PortRange) string {
+	if ports.From == ports.To {
+		return strconv.Itoa(ports.From)
+	}
+	return strconv.Itoa(ports.From) + "-" + strconv.Itoa(ports.To)
 }

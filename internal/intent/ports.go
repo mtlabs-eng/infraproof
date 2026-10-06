@@ -41,13 +41,17 @@ func parsePortRange(declared string) (model.PortRange, error) {
 		return model.PortRange{From: port, To: port}, nil
 	}
 
+	// A diagnostic names the declaration the author wrote, not the fragment the
+	// parser was left holding. "1-2-3" is cut at the first dash, so the second
+	// half reaches parsePort as "2-3" and quoting that sent a reader to search
+	// their contract for text that is not in it.
 	from, err := parsePort(low)
 	if err != nil {
-		return model.PortRange{}, err
+		return model.PortRange{}, fmt.Errorf("is %q, and its %s", safe(text), partOf(err, "first"))
 	}
 	to, err := parsePort(high)
 	if err != nil {
-		return model.PortRange{}, err
+		return model.PortRange{}, fmt.Errorf("is %q, and its %s", safe(text), partOf(err, "second"))
 	}
 	if from > to {
 		return model.PortRange{}, fmt.Errorf("is %q, whose range runs backwards", safe(text))
@@ -71,6 +75,13 @@ func parsePort(declared string) (int, error) {
 	if text[0] == '+' || text[0] == '-' {
 		return 0, fmt.Errorf("is %q, which is not a port number", safe(text))
 	}
+	// A leading zero is refused for the reason isPlainNumber refuses one in a
+	// version component: "00443" and "443" are two spellings of one declaration,
+	// and accepting both means two contracts that are not byte-identical say the
+	// same thing -- which a digest over the declaration cannot see.
+	if len(text) > 1 && text[0] == '0' {
+		return 0, fmt.Errorf("is %q, which is a port number written with a leading zero", safe(text))
+	}
 	port, err := strconv.Atoi(text)
 	if err != nil {
 		return 0, fmt.Errorf("is %q, which is not a port number", safe(text))
@@ -89,4 +100,19 @@ func safe(text string) string {
 		return text[:most] + "…"
 	}
 	return text
+}
+
+// partOf turns a port diagnostic into a clause about one end of a range, so the
+// message names the whole declaration and still says which end failed.
+func partOf(err error, which string) string {
+	text := err.Error()
+	// The messages all open with "is " or "names ", neither of which reads as a
+	// clause after "and its first".
+	if after, found := strings.CutPrefix(text, "is "); found {
+		return which + " port is " + after
+	}
+	if after, found := strings.CutPrefix(text, "names "); found {
+		return which + " part names " + after
+	}
+	return which + " port " + text
 }
