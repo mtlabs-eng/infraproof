@@ -31,18 +31,42 @@ type Mapper struct{}
 func (Mapper) Cloud() model.Cloud { return model.CloudAWS }
 
 // Interprets reports the resource types this mapper understands, including the
-// controls it folds into a bucket.
+// controls it folds into a bucket and the rules it folds into a security group.
 func (Mapper) Interprets(resourceType string) bool {
 	switch resourceType {
 	case typeBucket, typePublicAccessBlock, typeBucketPolicy,
-		typeBucketACL, typeOwnershipControls, typeAccountBlock:
+		typeBucketACL, typeOwnershipControls, typeAccountBlock,
+		typeSecurityGroup, typeIngressRule:
 		return true
 	}
 	return false
 }
 
-// IsSubject reports that only the bucket is normalized in its own right.
-func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
+// IsSubject reports the resources normalized in their own right: a bucket, and a
+// security group. Everything else this mapper interprets is a control over one of
+// them.
+func (Mapper) IsSubject(resourceType string) bool {
+	return resourceType == typeBucket || resourceType == typeSecurityGroup
+}
+
+// FamilyOf names the family a resource type belongs to.
+//
+// The normalizer asks rather than assumes, because a control resource carries no
+// capabilities of its own and so cannot be placed by what it returned. Labelling
+// an ingress rule as object storage would report it as a different kind of thing
+// entirely -- and the default that produced that was invisible, because every
+// type this build interpreted was storage until now.
+func (Mapper) FamilyOf(resourceType string) model.Family {
+	switch resourceType {
+	case typeSecurityGroup, typeIngressRule:
+		return model.FamilyNetwork
+	case typeBucket, typePublicAccessBlock, typeBucketPolicy,
+		typeBucketACL, typeOwnershipControls, typeAccountBlock:
+		return model.FamilyObjectStorage
+	default:
+		return model.FamilyUnknown
+	}
+}
 
 // The questions this mapper answers about a bucket, one per thing that can be
 // asked rather than one per thing that can answer.
@@ -97,8 +121,13 @@ func (Mapper) RoleOf(subject, candidate terraformplan.ResourceChange) string {
 // reading a declared environment that differs between clouds.
 const attrTags = "tags"
 
-// Map normalizes a bucket together with the controls that refer to it.
+// Map normalizes a subject together with the resources that refer to it: a
+// bucket with its access controls, a security group with its ingress rules.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
+	if subject.Type == typeSecurityGroup {
+		return m.securityGroup(subject, related)
+	}
+
 	capabilities := model.ObjectStorageCapabilities{
 		PublicAccess: m.publicAccess(subject, related, scope),
 		Unresolved:   unresolvedControls(subject, scope),
@@ -660,7 +689,12 @@ func (Mapper) Bindings() []declared.Binding {
 		relations = append(relations, declared.Binding{
 			From: control, Attribute: "bucket", To: typeBucket})
 	}
-	return relations
+	// An ingress rule names the group it belongs to, and the attribute it names
+	// it by is the provider's own: a rule written against a group the plan does
+	// not contain reaches nothing, which is the honest answer rather than a rule
+	// attached to whichever group happened to be nearby.
+	return append(relations, declared.Binding{
+		From: typeIngressRule, Attribute: "security_group_id", To: typeSecurityGroup})
 }
 
 // Environment reads a resource's declared environment with this provider's

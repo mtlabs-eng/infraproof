@@ -100,7 +100,7 @@ func StorageExposure(contract intent.Contract, graph model.Graph) Result {
 			result.Unknowns = append(result.Unknowns, undeterminedUnknown(resource, capabilities, false))
 		}
 
-		result.Unknowns = append(result.Unknowns, unresolvedUnknowns(resource, capabilities)...)
+		result.Unknowns = append(result.Unknowns, unresolvedUnknowns(resource, capabilities.Unresolved)...)
 	}
 
 	return result
@@ -172,17 +172,19 @@ func undeterminedUnknown(resource model.NormalizedResource, capabilities model.O
 }
 
 // unresolvedUnknowns reports controls that could change the answer but are not
-// in the plan. They are not required: they bound the evidence rather than
+// in the plan. It takes the controls rather than a family's capabilities, because
+// what it does is the same for every family and a second copy of it would be a
+// second chance to disagree about what "not required" means. They are not required: they bound the evidence rather than
 // preventing a conclusion, so they must not on their own turn a PASS into an
 // UNKNOWN.
-func unresolvedUnknowns(resource model.NormalizedResource, capabilities model.ObjectStorageCapabilities) []evidence.Unknown {
-	if len(capabilities.Unresolved) == 0 {
+func unresolvedUnknowns(resource model.NormalizedResource, controls []model.MissingControl) []evidence.Unknown {
+	if len(controls) == 0 {
 		return nil
 	}
 
 	address := inline(resource.Address)
-	out := make([]evidence.Unknown, 0, len(capabilities.Unresolved))
-	for _, control := range capabilities.Unresolved {
+	out := make([]evidence.Unknown, 0, len(controls))
+	for _, control := range controls {
 		out = append(out, evidence.Unknown{
 			CheckID:  control.CheckID,
 			Required: false,

@@ -290,3 +290,357 @@ func TestEveryRegisteredCloudIsCoveredHere(t *testing.T) {
 		t.Fatalf("registry has %d mappers, this test covers %d", len(providers.Default()), len(covered))
 	}
 }
+
+// evaluateNetwork runs a provider fixture through the whole pipeline and applies
+// the universal ingress rule to it.
+func evaluateNetwork(t *testing.T, cloud, fixture string, declared intent.Contract) policy.Result {
+	t.Helper()
+
+	path := filepath.Join("..", "providers", cloud, "testdata", fixture+".json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+	return policy.NetworkExposure(declared, providers.Normalize(plan, providers.Default()))
+}
+
+// declaringPort is the contract these tests evaluate against: the one that
+// declares a single public port. It is what makes an open 22 a block rather than
+// a warning, and it is stated once so every cloud below is compared against the
+// same declared intent.
+func declaringPort() intent.Contract {
+	ports := []model.PortRange{{From: 443, To: 443}}
+	return intent.Contract{
+		SchemaVersion:      "1.1",
+		ChangeID:           "contract-test",
+		Environment:        "test",
+		AllowedClouds:      []string{"aws", "azure", "gcp"},
+		DestructiveChanges: intent.DestructiveForbidden,
+		Resources: []intent.ResourceIntent{
+			{Family: intent.FamilyNetwork, PublicPorts: &ports},
+		},
+	}
+}
+
+// TestOneRuleCoversThreeCloudsForIngress is this milestone's whole claim, and the
+// harder half of the architecture's bet.
+//
+// Storage was the easy case: each control said one thing and the mapper combined
+// them. Here two of the three clouds have priority and deny rules, so no single
+// rule decides anything and the verdict is about an ordered set — and the three
+// disagree about the ordering itself. GCP gives a deny precedence at equal
+// priority, Azure forbids the tie, AWS has no denies at all.
+//
+// If the bet holds, none of that reaches the rule. Equivalent situations produce
+// one finding with the same identifier, severity and disposition, and differ only
+// in the evidence the mappers attached.
+func TestOneRuleCoversThreeCloudsForIngress(t *testing.T) {
+	open := scenario{"sg-public-inline", "nsg-public-inline", "fw-public"}
+	closed := scenario{"sg-closed-inline", "nsg-closed-inline", "fw-closed"}
+	// The same situation in each cloud: a rule that permits ingress from any
+	// address, and a deny below it that takes it away.
+	denied := scenario{"", "nsg-denied-below", "fw-denied-lower"}
+	undetermined := scenario{"sg-no-rules", "nsg-no-rules", "fw-unknown-source"}
+
+	clouds := func(s scenario) map[string]string {
+		out := map[string]string{"azure": s.azure, "gcp": s.gcp}
+		if s.aws != "" {
+			out["aws"] = s.aws
+		}
+		return out
+	}
+
+	t.Run("public everywhere produces one finding", func(t *testing.T) {
+		var seen []evidence.Finding
+		for cloud, fixture := range clouds(open) {
+			t.Run(cloud, func(t *testing.T) {
+				result := evaluateNetwork(t, cloud, fixture, declaringPort())
+
+				findings := findingsFor(result, policy.RuleNetworkPublicIngress)
+				if len(findings) != 1 {
+					t.Fatalf("findings = %d, want 1: %+v", len(findings), findings)
+				}
+				finding := findings[0]
+				if finding.Severity != evidence.SeverityHigh {
+					t.Errorf("severity = %q, want HIGH", finding.Severity)
+				}
+				if finding.Disposition != evidence.DispositionBlock {
+					t.Errorf("disposition = %q, want BLOCK", finding.Disposition)
+				}
+				if finding.Observed == nil || finding.Observed.Value.Display() != "tcp/22" {
+					t.Errorf("observed = %+v, want tcp/22 in every cloud", finding.Observed)
+				}
+				// The evidence is the part that must differ: each cloud names
+				// its own attributes, and a rule that produced identical
+				// evidence everywhere would be one that read nothing.
+				if len(finding.Evidence) == 0 {
+					t.Fatal("the finding cites nothing")
+				}
+				for _, ref := range finding.Evidence {
+					if ref.ResourceAddress == "" || ref.Path == "" {
+						t.Errorf("a reference locates nothing: %+v", ref)
+					}
+				}
+				seen = append(seen, finding)
+			})
+		}
+
+		if len(seen) < 3 {
+			t.Fatalf("only %d clouds were compared", len(seen))
+		}
+		for _, finding := range seen {
+			if finding.RuleID != seen[0].RuleID || finding.Severity != seen[0].Severity ||
+				finding.Disposition != seen[0].Disposition {
+				t.Fatalf("the clouds reached different verdicts: %+v and %+v", seen[0], finding)
+			}
+		}
+		// And the evidence genuinely differs, or "cloud-specific evidence" is a
+		// claim nothing checks.
+		if seen[0].Evidence[0].ResourceAddress == seen[1].Evidence[0].ResourceAddress {
+			t.Fatalf("two clouds cited the same resource: %q", seen[0].Evidence[0].ResourceAddress)
+		}
+	})
+
+	t.Run("closed everywhere produces none", func(t *testing.T) {
+		for cloud, fixture := range clouds(closed) {
+			t.Run(cloud, func(t *testing.T) {
+				result := evaluateNetwork(t, cloud, fixture, declaringPort())
+
+				if findings := findingsFor(result, policy.RuleNetworkPublicIngress); len(findings) != 0 {
+					t.Fatalf("a closed rule set produced %+v", findings)
+				}
+				if unknowns := unknownsFor(result, policy.CheckNetworkIngressDeterminable); len(unknowns) != 0 {
+					t.Fatalf("a closed rule set produced %+v", unknowns)
+				}
+			})
+		}
+	})
+
+	t.Run("a deny below the allow produces none", func(t *testing.T) {
+		// Only the two clouds that have denies. AWS is not missing a case here:
+		// its rules are an allow-only union, and a fixture pretending otherwise
+		// would be testing a cloud that does not exist.
+		for cloud, fixture := range clouds(denied) {
+			t.Run(cloud, func(t *testing.T) {
+				result := evaluateNetwork(t, cloud, fixture, declaringPort())
+
+				if findings := findingsFor(result, policy.RuleNetworkPublicIngress); len(findings) != 0 {
+					t.Fatalf("a denied rule produced %+v", findings)
+				}
+			})
+		}
+	})
+
+	t.Run("an unsettled set is unknown everywhere", func(t *testing.T) {
+		for cloud, fixture := range clouds(undetermined) {
+			t.Run(cloud, func(t *testing.T) {
+				result := evaluateNetwork(t, cloud, fixture, declaringPort())
+
+				unknowns := unknownsFor(result, policy.CheckNetworkIngressDeterminable)
+				if len(unknowns) != 1 {
+					t.Fatalf("unknowns = %d, want 1: %+v", len(unknowns), unknowns)
+				}
+				if !unknowns[0].Required {
+					t.Error("a declaration is waiting on this and the unknown does not prevent a pass")
+				}
+				if len(findingsFor(result, policy.RuleNetworkPublicIngress)) != 0 {
+					t.Error("an unsettled set produced a finding")
+				}
+			})
+		}
+	})
+
+	t.Run("a value the parser could not read is unknown everywhere", func(t *testing.T) {
+		// One field per cloud that the plan states and this build cannot read.
+		// Each fixture differs from its open twin in that one field, so what the
+		// unknown is caused by is not in doubt.
+		unreadable := scenario{"sg-unreadable-protocol", "nsg-unreadable-port", "fw-unreadable-port"}
+		for cloud, fixture := range clouds(unreadable) {
+			t.Run(cloud, func(t *testing.T) {
+				result := evaluateNetwork(t, cloud, fixture, declaringPort())
+
+				if unknowns := unknownsFor(result, policy.CheckNetworkIngressDeterminable); len(unknowns) != 1 {
+					t.Fatalf("unknowns = %d, want 1: %+v", len(unknowns), unknowns)
+				}
+				if findings := findingsFor(result, policy.RuleNetworkPublicIngress); len(findings) != 0 {
+					t.Fatalf("an unreadable value produced %+v", findings)
+				}
+			})
+		}
+	})
+
+	t.Run("the declaration changes the disposition and not the finding", func(t *testing.T) {
+		for cloud, fixture := range clouds(open) {
+			t.Run(cloud, func(t *testing.T) {
+				undeclared := declaringPort()
+				undeclared.Resources = nil
+
+				blocked := findingsFor(evaluateNetwork(t, cloud, fixture, declaringPort()),
+					policy.RuleNetworkPublicIngress)
+				warned := findingsFor(evaluateNetwork(t, cloud, fixture, undeclared),
+					policy.RuleNetworkPublicIngress)
+
+				if len(blocked) != 1 || len(warned) != 1 {
+					t.Fatalf("findings = %d and %d, want one each", len(blocked), len(warned))
+				}
+				if blocked[0].Disposition != evidence.DispositionBlock ||
+					warned[0].Disposition != evidence.DispositionWarn {
+					t.Fatalf("dispositions = %q and %q, want BLOCK and WARN",
+						blocked[0].Disposition, warned[0].Disposition)
+				}
+				if blocked[0].RuleID != warned[0].RuleID || blocked[0].Severity != warned[0].Severity {
+					t.Error("the contract changed the finding and not only its disposition")
+				}
+				if blocked[0].Observed.Value.Display() != warned[0].Observed.Value.Display() {
+					t.Error("the contract changed what was observed, which is a fact about the plan")
+				}
+			})
+		}
+	})
+}
+
+// TestAddingAMapperDoesNotTouchTheRule covers the criterion mechanically rather
+// than by inspection: the rule is applied to every network fixture every mapper
+// produces, and what it reads is the normalized capability alone.
+//
+// A fourth cloud would add fixtures here and change nothing else. The test that
+// would fail if it did is the import boundary one, and this is the other half:
+// the rule reaches a verdict for each cloud without naming any.
+func TestAddingAMapperDoesNotTouchTheRule(t *testing.T) {
+	// One scenario per row, and the verdict the rule must reach for it whatever
+	// cloud states it. The contract declares one port, so an open 22 exceeds it
+	// and a port-less protocol is a question it cannot answer.
+	//
+	// The previous version of this test counted verdicts and compared none. It
+	// asserted that something was judged, which is satisfied by a rule that
+	// reaches a different answer in every cloud -- the one thing it exists to
+	// rule out.
+	scenarios := []struct {
+		name        string
+		fixtures    map[string]string
+		disposition evidence.Disposition
+		observed    string
+	}{{
+		name:        "a port open to any address that the contract does not declare",
+		fixtures:    map[string]string{"aws": "sg-public-inline", "azure": "nsg-public-inline", "gcp": "fw-public"},
+		disposition: evidence.DispositionBlock,
+		observed:    "tcp/22",
+	}, {
+		name:        "a protocol with no ports",
+		fixtures:    map[string]string{"aws": "sg-icmp", "azure": "nsg-icmp", "gcp": "fw-icmp"},
+		disposition: evidence.DispositionWarn,
+		observed:    "icmp",
+	}, {
+		name:        "every protocol on every port",
+		fixtures:    map[string]string{"aws": "sg-every-protocol", "azure": "nsg-every-protocol", "gcp": "fw-every-protocol"},
+		disposition: evidence.DispositionBlock,
+		observed:    "every/0-65535",
+	}}
+
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			for cloud, fixture := range scenario.fixtures {
+				result := evaluateNetwork(t, cloud, fixture, declaringPort())
+
+				if len(result.Evaluated) == 0 {
+					t.Fatalf("%s/%s: the rule judged nothing, so coverage would report it unjudged",
+						cloud, fixture)
+				}
+				if len(result.Findings) != 1 {
+					t.Fatalf("%s/%s: %d findings, want one", cloud, fixture, len(result.Findings))
+				}
+				finding := result.Findings[0]
+				if finding.RuleID != policy.RuleNetworkPublicIngress {
+					t.Errorf("%s/%s: rule %q", cloud, fixture, finding.RuleID)
+				}
+				if finding.Severity != evidence.SeverityHigh {
+					t.Errorf("%s/%s: severity %q, want %q", cloud, fixture,
+						finding.Severity, evidence.SeverityHigh)
+				}
+				if finding.Disposition != scenario.disposition {
+					t.Errorf("%s/%s: disposition %q, want %q", cloud, fixture,
+						finding.Disposition, scenario.disposition)
+				}
+				if finding.Observed == nil {
+					t.Fatalf("%s/%s: the finding observes nothing", cloud, fixture)
+				}
+				if got := finding.Observed.Value.Display(); got != scenario.observed {
+					t.Errorf("%s/%s: observed %q, want %q", cloud, fixture, got, scenario.observed)
+				}
+				// The evidence is the one thing that must differ: it names this
+				// cloud's own attributes, which is how the rule stays ignorant
+				// of them.
+				//
+				// Named, not merely non-empty. The first version checked that
+				// the fields were set, and a mapper citing `ingress[0].access`
+				// on an Azure network security group -- an attribute that does
+				// not exist on that type -- shipped a BLOCK whose evidence led a
+				// reader into the plan to find nothing, with the whole suite
+				// green.
+				if len(finding.Evidence) == 0 {
+					t.Errorf("%s/%s: the finding cites nothing", cloud, fixture)
+				}
+				for _, ref := range finding.Evidence {
+					if ref.ResourceAddress == "" || ref.Path == "" {
+						t.Errorf("%s/%s: a citation names no attribute: %+v", cloud, fixture, ref)
+						continue
+					}
+					root := strings.FieldsFunc(ref.Path, func(r rune) bool {
+						return r == '.' || r == '['
+					})
+					if len(root) == 0 || !citable[cloud][root[0]] {
+						t.Errorf("%s/%s: the evidence cites %q, which is not an attribute this "+
+							"cloud's resources have; a reader following it finds nothing",
+							cloud, fixture, ref.Path)
+					}
+				}
+			}
+		})
+	}
+
+	// And the closed case, where no cloud may produce a finding at all.
+	for cloud, fixture := range map[string]string{
+		"aws": "sg-closed-inline", "azure": "nsg-closed-inline", "gcp": "fw-closed",
+	} {
+		result := evaluateNetwork(t, cloud, fixture, declaringPort())
+		if len(result.Findings) != 0 {
+			t.Errorf("%s/%s: a closed set produced %d findings", cloud, fixture, len(result.Findings))
+		}
+		if len(result.Evaluated) == 0 {
+			t.Errorf("%s/%s: a closed set was not judged", cloud, fixture)
+		}
+	}
+}
+
+// citable is the attributes each cloud's mappers may name in evidence, by their
+// root. It is written out rather than derived, because deriving it from the
+// mappers would make the assertion agree with whatever they do.
+//
+// A reader follows a citation into the plan, so a path whose root is not an
+// attribute of that cloud's resources is a dead end -- and `ingress[0].access`
+// on an Azure network security group is exactly that.
+var citable = map[string]map[string]bool{
+	"aws": {
+		"ingress": true, "protocol": true, "from_port": true, "to_port": true,
+		"cidr_blocks": true, "ipv6_cidr_blocks": true, "prefix_list_ids": true,
+		"ip_protocol": true, "cidr_ipv4": true, "cidr_ipv6": true, "prefix_list_id": true,
+		"tags": true,
+	},
+	"azure": {
+		"security_rule": true, "priority": true, "access": true, "direction": true,
+		"protocol": true, "source_address_prefix": true, "source_address_prefixes": true,
+		"destination_port_range": true, "destination_port_ranges": true,
+		"destination_address_prefix": true, "destination_address_prefixes": true,
+		"tags": true,
+	},
+	"gcp": {
+		"allow": true, "deny": true, "priority": true, "direction": true, "disabled": true,
+		"source_ranges": true, "source_tags": true, "source_service_accounts": true,
+		"target_tags": true, "target_service_accounts": true, "network": true,
+		"labels": true,
+	},
+}

@@ -28,6 +28,7 @@ func Evaluate(contract intent.Contract, graph model.Graph, subject Subject) evid
 	var result Result
 	for _, produced := range []Result{
 		StorageExposure(contract, graph),
+		NetworkExposure(contract, graph),
 		DestructiveChange(contract, graph),
 		CloudAllowed(contract, graph),
 		EnvironmentMatch(contract, graph),

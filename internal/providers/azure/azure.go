@@ -30,14 +30,39 @@ func (Mapper) Cloud() model.Cloud { return model.CloudAzure }
 
 // Interprets reports the resource types this mapper understands.
 func (Mapper) Interprets(resourceType string) bool {
-	return resourceType == typeAccount || resourceType == typeContainer
+	switch resourceType {
+	case typeAccount, typeContainer, typeSecurityGroup, typeSecurityRule:
+		return true
+	}
+	return false
 }
 
 // IsSubject reports that a container is exposed, and so is an account whose
 // containers this plan does not contain — otherwise an account opened up for
 // anonymous access would be reported nowhere at all.
 func (Mapper) IsSubject(resourceType string) bool {
-	return resourceType == typeContainer || resourceType == typeAccount
+	switch resourceType {
+	case typeContainer, typeAccount, typeSecurityGroup:
+		return true
+	}
+	return false
+}
+
+// FamilyOf names the family a resource type belongs to.
+//
+// The normalizer asks because a control resource cannot be placed by what Map
+// returned: a container is placed by its account, and a security rule by its
+// network security group. Assuming one family was invisible until a second one
+// existed, which is what this milestone added.
+func (Mapper) FamilyOf(resourceType string) model.Family {
+	switch resourceType {
+	case typeAccount, typeContainer:
+		return model.FamilyObjectStorage
+	case typeSecurityGroup, typeSecurityRule:
+		return model.FamilyNetwork
+	default:
+		return model.FamilyUnknown
+	}
 }
 
 // The questions this mapper answers. A container asks which account gates it
@@ -71,6 +96,10 @@ const attrTags = "tags"
 // Map normalizes a container together with the account that gates it, or an
 // account that has no container here to speak for it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
+	if subject.Type == typeSecurityGroup {
+		return m.securityGroup(subject, related)
+	}
+
 	resource := model.NormalizedResource{
 		Address:     subject.Address,
 		Provider:    subject.ProviderName,
@@ -266,6 +295,10 @@ func (Mapper) Bindings() []declared.Binding {
 	return []declared.Binding{
 		{From: typeContainer, Attribute: "storage_account_id", To: typeAccount},
 		{From: typeContainer, Attribute: "storage_account_name", To: typeAccount},
+		// A rule names the group it belongs to by name, which is how the
+		// provider writes this relation. A rule written against a group the plan
+		// does not contain reaches nothing, which is the honest answer.
+		{From: typeSecurityRule, Attribute: "network_security_group_name", To: typeSecurityGroup},
 	}
 }
 

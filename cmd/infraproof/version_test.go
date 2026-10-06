@@ -1,7 +1,11 @@
 package main
 
 import (
+	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -86,4 +90,60 @@ func field(fields []string, i int) int {
 		return 0
 	}
 	return value
+}
+
+// TestWhatTheDocumentsTellPeopleToInstallIsThisVersion holds the last pair that
+// nothing held.
+//
+// The command and the adapter are tied to each other, and both to the newest
+// tag. The documents are what a reader actually runs: the README's install line,
+// the pull-request guide, and the example workflow all pin a version, and the
+// guide says why -- a verifier that changes under you is a verdict you cannot
+// reproduce. A release that bumped the constants and left those behind would
+// hand every new reader a build older than the one being released, which is the
+// same defect as a binary wrong about itself, one step further out.
+//
+// Pins are required to match exactly rather than merely not be behind. A
+// document is not mid-release the way a constant is: it either tells people to
+// install this build or it tells them to install another one.
+func TestWhatTheDocumentsTellPeopleToInstallIsThisVersion(t *testing.T) {
+	root := filepath.Join("..", "..")
+	pinned := regexp.MustCompile(`infraproof@v([0-9]+\.[0-9]+\.[0-9]+)`)
+
+	var found int
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if name := entry.Name(); name == ".git" || name == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch filepath.Ext(path) {
+		case ".md", ".yml", ".yaml":
+		default:
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, match := range pinned.FindAllStringSubmatch(string(raw), -1) {
+			found++
+			if match[1] != version {
+				t.Errorf("%s tells a reader to install v%s and this build is %s; a release moves "+
+					"the constants and the documents together, or it publishes instructions for "+
+					"a build nobody is releasing", path, match[1], version)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the documents: %v", err)
+	}
+	if found == 0 {
+		t.Fatal("no document pins a version, so this test asserts nothing")
+	}
 }

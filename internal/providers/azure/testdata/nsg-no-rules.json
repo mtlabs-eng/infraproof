@@ -1,0 +1,41 @@
+{
+ "configuration": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "azurerm_network_security_group.web",
+     "expressions": {},
+     "mode": "managed",
+     "name": "web",
+     "type": "azurerm_network_security_group"
+    }
+   ]
+  }
+ },
+ "format_version": "1.2",
+ "resource_changes": [
+  {
+   "address": "azurerm_network_security_group.web",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "location": "westeurope",
+     "name": "web",
+     "resource_group_name": "rg",
+     "tags": {}
+    },
+    "after_unknown": {
+     "security_rule": true
+    },
+    "before": null
+   },
+   "mode": "managed",
+   "name": "web",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "type": "azurerm_network_security_group"
+  }
+ ],
+ "terraform_version": "1.14.0"
+}

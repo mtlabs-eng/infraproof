@@ -1,0 +1,66 @@
+{
+ "configuration": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "aws_security_group.web",
+     "expressions": {
+      "ingress": [
+       {
+        "name": {
+         "constant_value": "rule"
+        }
+       }
+      ]
+     },
+     "mode": "managed",
+     "name": "web",
+     "type": "aws_security_group"
+    }
+   ]
+  }
+ },
+ "format_version": "1.2",
+ "resource_changes": [
+  {
+   "address": "aws_security_group.web",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "egress": [],
+     "ingress": [
+      {
+       "cidr_blocks": null,
+       "description": "",
+       "from_port": 22,
+       "ipv6_cidr_blocks": [],
+       "prefix_list_ids": [],
+       "protocol": "tcp",
+       "security_groups": [],
+       "self": false,
+       "to_port": 22
+      }
+     ],
+     "name": "web",
+     "tags": {},
+     "vpc_id": "vpc-1"
+    },
+    "after_unknown": {
+     "ingress": [
+      {
+       "cidr_blocks": true
+      }
+     ]
+    },
+    "before": null
+   },
+   "mode": "managed",
+   "name": "web",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "type": "aws_security_group"
+  }
+ ],
+ "terraform_version": "1.14.0"
+}

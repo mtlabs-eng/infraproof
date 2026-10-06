@@ -372,8 +372,8 @@ func ContractCoverage(contract intent.Contract, graph model.Graph) Result {
 			CheckID:  CheckContractFamilyAbsent,
 			Required: true,
 			Reason: fmt.Sprintf(
-				"The contract declares %s exposure for %s, and the plan contains no resource of that "+
-					"family, so the declaration was not exercised.", declared.Exposure, declared.Family),
+				"The contract declares %s, and the plan contains no resource of that family, so the "+
+					"declaration was not exercised.", declaredAs(declared)),
 			Evidence: []evidence.EvidenceRef{{Source: "intent_contract", Path: "resources"}},
 		})
 	}
@@ -382,6 +382,22 @@ func ContractCoverage(contract intent.Contract, graph model.Graph) Result {
 		return strings.Compare(a.Reason, b.Reason)
 	})
 	return result
+}
+
+// declaredAs names what an entry declared, in the vocabulary of its own family.
+//
+// Each family declares what its own rule reads -- storage an exposure, network a
+// set of ports -- so one sentence cannot describe both. Writing "declares
+// exposure for network" would be this check reporting a field that family does
+// not have.
+func declaredAs(declared intent.ResourceIntent) string {
+	if declared.Family == intent.FamilyNetwork {
+		if declared.PublicPorts == nil || len(*declared.PublicPorts) == 0 {
+			return "that no port of " + intent.FamilyNetwork + " may be reachable from any address"
+		}
+		return "the ports of " + intent.FamilyNetwork + " that may be reachable from any address"
+	}
+	return fmt.Sprintf("%s exposure for %s", declared.Exposure, declared.Family)
 }
 
 // ResourceCoverage reports resources a mapper understood and no rule judged.

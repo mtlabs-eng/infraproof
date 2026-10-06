@@ -400,6 +400,12 @@ func TestTwoAccountsAreAmbiguousNotAbsent(t *testing.T) {
 	if control.CheckID == "AZURE_STORAGE_ACCOUNT_NOT_IN_PLAN" {
 		t.Fatal("both accounts are in the plan; the gap is which one governs the container")
 	}
+	// Named, not merely distinguished from the other one. Asserting only what it
+	// is not left the identifier deletable, which the network family's backstop
+	// then found.
+	if control.CheckID != "AZURE_STORAGE_ACCOUNT_AMBIGUOUS" {
+		t.Fatalf("the gap is reported as %q", control.CheckID)
+	}
 	if control.Reason == "" {
 		t.Fatal("the gap is named but not explained")
 	}

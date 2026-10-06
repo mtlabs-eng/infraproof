@@ -7,6 +7,10 @@ const (
 	// FamilyObjectStorage covers buckets, containers and the controls over
 	// them.
 	FamilyObjectStorage Family = "object_storage"
+	// FamilyNetwork covers the ingress rule sets that decide who can reach a
+	// resource: security groups, network security groups, firewalls, and the
+	// rule resources that belong to them.
+	FamilyNetwork Family = "network"
 	// FamilyUnknown covers every resource no mapper claimed. Such a resource is
 	// retained rather than dropped, and must never read as one that was
 	// examined and found safe.
@@ -73,9 +77,11 @@ type NormalizedResource struct {
 	// contract's own environment: a resource that did not say where it belongs
 	// has not agreed with anything.
 	Environment Fact[string]
-	// ObjectStorage holds the normalized capabilities, and is nil for an opaque
-	// resource. Nil means "not interpreted", never "nothing to worry about".
+	// ObjectStorage and Network hold the normalized capabilities of their
+	// family, and are nil for a resource of another family or for an opaque one.
+	// Nil means "not interpreted", never "nothing to worry about".
 	ObjectStorage *ObjectStorageCapabilities
+	Network       *NetworkCapabilities
 }
 
 // ObjectStorageCapabilities is the cloud-neutral view of an object store.

@@ -1,0 +1,140 @@
+{
+ "configuration": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_compute_firewall.web",
+     "expressions": {
+      "network": {
+       "references": [
+        "google_compute_network.default.name",
+        "google_compute_network.default"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "web",
+     "type": "google_compute_firewall"
+    },
+    {
+     "address": "google_compute_firewall.block",
+     "expressions": {
+      "network": {
+       "references": [
+        "google_compute_network.default.name",
+        "google_compute_network.default"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "block",
+     "type": "google_compute_firewall"
+    },
+    {
+     "address": "google_compute_network.default",
+     "expressions": {},
+     "mode": "managed",
+     "name": "default",
+     "type": "google_compute_network"
+    }
+   ]
+  }
+ },
+ "format_version": "1.2",
+ "resource_changes": [
+  {
+   "address": "google_compute_firewall.web",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "allow": [
+      {
+       "ports": [
+        "22"
+       ],
+       "protocol": "tcp"
+      }
+     ],
+     "deny": [],
+     "description": "",
+     "direction": "INGRESS",
+     "disabled": false,
+     "name": "web",
+     "network": "default",
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": null,
+     "source_tags": null,
+     "target_service_accounts": null,
+     "target_tags": null
+    },
+    "after_unknown": {},
+    "before": null
+   },
+   "mode": "managed",
+   "name": "web",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_compute_firewall"
+  },
+  {
+   "address": "google_compute_firewall.block",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "allow": [],
+     "deny": [
+      {
+       "ports": null,
+       "protocol": "all"
+      }
+     ],
+     "description": "",
+     "direction": "INGRESS",
+     "disabled": false,
+     "name": "block",
+     "network": "default",
+     "priority": 999,
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": null,
+     "source_tags": null,
+     "target_service_accounts": null,
+     "target_tags": null
+    },
+    "before": null
+   },
+   "mode": "managed",
+   "name": "block",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_compute_firewall"
+  },
+  {
+   "address": "google_compute_network.default",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "name": "default",
+     "priority": 999
+    },
+    "after_unknown": {
+     "id": true,
+     "self_link": true
+    },
+    "before": null
+   },
+   "mode": "managed",
+   "name": "default",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_compute_network"
+  }
+ ],
+ "terraform_version": "1.14.0"
+}

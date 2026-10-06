@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/mtlabs-eng/infraproof/internal/model"
 )
 
 // Load reads and validates a contract from a file.
@@ -465,9 +467,10 @@ type wireContract struct {
 }
 
 type wireResource struct {
-	Family   *string `json:"family"`
-	Exposure *string `json:"exposure"`
-	Purpose  string  `json:"purpose"`
+	Family      *string   `json:"family"`
+	Exposure    *string   `json:"exposure"`
+	PublicPorts *[]string `json:"public_ports"`
+	Purpose     string    `json:"purpose"`
 }
 
 // Pointers, like every other optional field in the wire contract: a field the
@@ -490,7 +493,13 @@ func (w wireContract) contract() Contract {
 		contract.Resources = append(contract.Resources, ResourceIntent{
 			Family:   derefString(resource.Family),
 			Exposure: Exposure(derefString(resource.Exposure)),
-			Purpose:  resource.Purpose,
+			// Parsed best-effort here and validated from the raw values
+			// recorded below. This function cannot report an error, and a
+			// declaration nobody could parse must be refused rather than
+			// quietly dropped -- so the raw strings travel to validation,
+			// which is the only place that can say what was wrong with them.
+			PublicPorts: parsedPorts(resource.PublicPorts),
+			Purpose:     resource.Purpose,
 		})
 	}
 	if w.Constraints != nil {
@@ -512,8 +521,10 @@ func (w wireContract) contract() Contract {
 	}
 	for _, resource := range w.Resources {
 		contract.present.resourceFields = append(contract.present.resourceFields, resourcePresence{
-			family:   resource.Family != nil,
-			exposure: resource.Exposure != nil,
+			family:      resource.Family != nil,
+			exposure:    resource.Exposure != nil,
+			publicPorts: resource.PublicPorts != nil,
+			rawPorts:    derefSlice(resource.PublicPorts),
 		})
 	}
 	return contract
@@ -539,4 +550,22 @@ func derefString(s *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*s)
+}
+
+// parsedPorts turns a declaration into ranges, keeping only what parsed.
+//
+// What it drops is what validation refuses, so a contract that reaches a rule has
+// every port it declared. The pointer is preserved: an empty declaration is a
+// statement and must not become an absent one.
+func parsedPorts(declared *[]string) *[]model.PortRange {
+	if declared == nil {
+		return nil
+	}
+	ranges := make([]model.PortRange, 0, len(*declared))
+	for _, text := range *declared {
+		if parsed, err := parsePortRange(text); err == nil {
+			ranges = append(ranges, parsed)
+		}
+	}
+	return &ranges
 }

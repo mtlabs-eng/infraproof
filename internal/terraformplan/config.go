@@ -58,6 +58,10 @@ type configResource struct {
 	providerConfigKey string
 	repeated          bool
 	references        []ExpressionReference
+	stated            []string
+	// recorded reports that the entry carries an expressions object, which is
+	// what makes stated an answer rather than a silence.
+	recorded bool
 }
 
 func resolveReferences(refs []ExpressionReference, byAddress map[string]configResource) []ExpressionReference {
@@ -167,6 +171,8 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 					providerConfigKey: optionalString(fields, "provider_config_key", entryPath+".provider_config_key", errs),
 					repeated:          byForEach || byCount,
 					references:        parseExpressions(entryPath, fields, addressPrefix, errs),
+					stated:            statedArguments(fields),
+					recorded:          recordsArguments(fields),
 				}
 			}
 		}
@@ -208,6 +214,68 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 		}
 		walkModule(callPath+".module", address, inner, byAddress, calls, errs)
 	}
+}
+
+// recordsArguments reports that the entry carries an expressions object.
+//
+// Without one, the configuration says that the resource exists and nothing about
+// what was written in it, and the two must not be confused. Terraform emits such
+// an entry for a resource whose body is only a dynamic block, and a sanitizer
+// that strips expressions -- the one place literal values live -- leaves every
+// entry in that shape.
+//
+// Reading it as an author who wrote nothing hands every Optional and Computed
+// attribute its provider default. An independent review turned that into PASS,
+// exit 0, with no findings, on a firewall opening SSH to 0.0.0.0/0: the deny's
+// unknown direction was defaulted to INGRESS and cancelled the grant.
+//
+// An empty expressions object is a different thing and is recorded: the author
+// wrote a resource with no arguments, which is an answer.
+func recordsArguments(fields map[string]any) bool {
+	raw, present := fields["expressions"]
+	if !present || raw == nil {
+		return false
+	}
+	_, ok := raw.(map[string]any)
+	return ok
+}
+
+// statedArguments names every argument a resource's configuration writes.
+//
+// The keys of the expressions object are the arguments the author wrote as
+// arguments, whether they hold a constant, a reference, or a nested block
+// written in block syntax. Meta-arguments live outside it and are not arguments
+// of the resource.
+//
+// A `dynamic` block is not represented here at all, which is why the absence of
+// an expressions object has to mean "not recorded" rather than "nothing written":
+// a body that is only a dynamic block produces no object, and a body that mixes
+// one with static arguments produces an object that does not mention the dynamic
+// attribute. A caller must therefore never read the absence of a name as proof
+// that nothing writes it -- only as the absence of a stated argument.
+//
+// Sorted, for a binary search and so that two plans differing only in key order
+// -- which JSON object order is -- produce the same answer.
+func statedArguments(fields map[string]any) []string {
+	raw, present := fields["expressions"]
+	if !present || raw == nil {
+		return nil
+	}
+	body, ok := raw.(map[string]any)
+	if !ok {
+		// parseExpressions reports the malformed shape; naming the arguments of
+		// something that is not an object is not this function's to invent.
+		return nil
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(body))
+	for name := range body {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // parseExpressions reads every reference a resource's configuration makes:
@@ -401,6 +469,8 @@ func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
 		change.ProviderAlias = plan.ProviderConfigs[configured.providerConfigKey].Alias
 		change.DeclaredRepeated = configured.repeated
 		change.References = configured.references
+		change.Configured = configured.recorded
+		change.Stated = configured.stated
 	}
 }
 

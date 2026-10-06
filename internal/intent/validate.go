@@ -3,6 +3,7 @@ package intent
 import (
 	"errors"
 	"fmt"
+	"github.com/mtlabs-eng/infraproof/internal/model"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,8 +25,13 @@ type presence struct {
 }
 
 type resourcePresence struct {
-	family   bool
-	exposure bool
+	family      bool
+	exposure    bool
+	publicPorts bool
+	// rawPorts are the port declarations exactly as the document wrote them.
+	// Validation reads these rather than the parsed ranges, because what a
+	// reader needs to be told is which spelling was refused.
+	rawPorts []string
 }
 
 // clouds this build understands. The set is closed: a contract naming a cloud
@@ -33,7 +39,7 @@ type resourcePresence struct {
 var knownClouds = []string{"aws", "azure", "gcp"}
 
 // knownFamilies is closed for the same reason.
-var knownFamilies = []string{FamilyObjectStorage}
+var knownFamilies = []string{FamilyObjectStorage, FamilyNetwork}
 
 func (c Contract) validate() error {
 	var errs []error
@@ -211,6 +217,62 @@ func (c Contract) validateResources() []error {
 		}
 		seen[resource.Family] = true
 
+		errs = append(errs, validateFamilyFields(i, resource, present)...)
+	}
+	return errs
+}
+
+// validateFamilyFields holds each family to the field its own rule reads, and to
+// no other.
+//
+// A network entry carrying an exposure, or a storage entry carrying ports, states
+// two things that can contradict each other -- "private" beside a port that may
+// be public. Refusing the pair is cheaper than deciding which one wins, and much
+// cheaper than a reader believing the one that was ignored.
+func validateFamilyFields(i int, resource ResourceIntent, present resourcePresence) []error {
+	var errs []error
+
+	switch resource.Family {
+	case FamilyNetwork:
+		if present.exposure {
+			errs = append(errs, fmt.Errorf(
+				"resources[%d].exposure does not apply to family %q, which declares public_ports",
+				i, FamilyNetwork))
+		}
+		if !present.publicPorts {
+			errs = append(errs, fmt.Errorf(
+				"resources[%d].public_ports is required for family %q; write [] to declare that no port may be reachable from any address",
+				i, FamilyNetwork))
+			break
+		}
+		// Parsed here and compared against what came before, because a
+		// declaration that names one port twice is a mistake in the author's
+		// statement rather than a statement. This package already refuses a
+		// repeated family and a repeated cloud for the same reason, and the
+		// rendered Expected fact of a contract declaring 443 four times read
+		// "443, 443, 443, 443".
+		var accepted []model.PortRange
+		for j, text := range present.rawPorts {
+			parsed, err := parsePortRange(text)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("resources[%d].public_ports[%d] %w", i, j, err))
+				continue
+			}
+			if overlap, found := overlapping(accepted, parsed); found {
+				errs = append(errs, fmt.Errorf(
+					"resources[%d].public_ports[%d] is %q, and %s is already declared; "+
+						"a port may be declared once",
+					i, j, quotable(strings.TrimSpace(text)), renderPorts(overlap)))
+				continue
+			}
+			accepted = append(accepted, parsed)
+		}
+	default:
+		if present.publicPorts {
+			errs = append(errs, fmt.Errorf(
+				"resources[%d].public_ports does not apply to family %q, which declares an exposure",
+				i, quotable(resource.Family)))
+		}
 		switch {
 		case !present.exposure:
 			errs = append(errs, fmt.Errorf("resources[%d].exposure is required; write %q to record that it was considered and left open",
@@ -261,4 +323,30 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// overlapping finds the already-accepted range sharing a port with this one.
+//
+// Touching counts as overlapping for the purpose of a diagnostic: 80-100 beside
+// 101-200 is two ranges that could have been written as one, and leaving both
+// means the rendered declaration says in two entries what it could say in one.
+// Nothing downstream depends on it -- model.Covers asks the union -- so this is
+// about the contract being a statement a reader can check.
+func overlapping(accepted []model.PortRange, one model.PortRange) (model.PortRange, bool) {
+	for _, already := range accepted {
+		if already.Overlaps(one) || already.To+1 == one.From || one.To+1 == already.From {
+			return already, true
+		}
+	}
+	return model.PortRange{}, false
+}
+
+// renderPorts writes a range for a diagnostic. The rule renders a declaration
+// for a report; this is the same shape for a message, and neither carries
+// provider text.
+func renderPorts(ports model.PortRange) string {
+	if ports.From == ports.To {
+		return strconv.Itoa(ports.From)
+	}
+	return strconv.Itoa(ports.From) + "-" + strconv.Itoa(ports.To)
 }

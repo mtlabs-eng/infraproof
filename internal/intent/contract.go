@@ -1,9 +1,11 @@
 package intent
 
+import "github.com/mtlabs-eng/infraproof/internal/model"
+
 // SchemaVersion is the contract version this build understands. The major
 // version is the compatibility boundary: a contract written against a later
 // major version is rejected rather than read partially.
-const SchemaVersion = "1.0"
+const SchemaVersion = "1.1"
 
 // Contract is a Version 1 Intent Contract.
 //
@@ -70,8 +72,18 @@ func (p DestructivePolicy) Valid() bool {
 type ResourceIntent struct {
 	// Family is the resource family, such as "object_storage".
 	Family string
-	// Exposure is the declared exposure of the family.
+	// Exposure is the declared exposure of the family. It belongs to
+	// object_storage; the network family declares ports instead.
 	Exposure Exposure
+	// PublicPorts are the ports the network family may make reachable from any
+	// address, parsed. It belongs to the network family and no other.
+	//
+	// A pointer, because presence is not length. An empty list is the most
+	// restrictive thing this field can say -- no port may be public -- and an
+	// omitted field is the absence of a statement, under which any public
+	// ingress needs a human. Reading presence off the length collapses the two,
+	// and the collapse favours the permissive reading.
+	PublicPorts *[]model.PortRange
 	// Purpose is an optional human note. No rule reads it.
 	Purpose string
 }
@@ -103,7 +115,15 @@ func (e Exposure) Valid() bool {
 // Families this build understands. A contract naming any other family is
 // invalid: silently accepting a family no rule evaluates would let a contract
 // appear to constrain something nothing checks.
-const FamilyObjectStorage = "object_storage"
+//
+// Each declares what its own rule reads, and only that. Storage declares an
+// exposure; network declares ports. An entry carrying both would be two fields
+// that can contradict each other, and refusing that is cheaper than deciding
+// which one wins.
+const (
+	FamilyObjectStorage = "object_storage"
+	FamilyNetwork       = "network"
+)
 
 // Constraints are explicit restrictions the contract records.
 //
@@ -156,6 +176,23 @@ func (c Contract) ExposureOf(family string) (Exposure, bool) {
 		}
 	}
 	return "", false
+}
+
+// PublicPortsOf returns the ports a family may make reachable from any address,
+// and whether the contract declared any at all.
+//
+// The two answers are separate because they mean different things to a rule. No
+// declaration is silence, and silence is not permission: public ingress then
+// needs a human. A declaration of none is a statement, and exceeding it is a
+// violation.
+func (c Contract) PublicPortsOf(family string) ([]model.PortRange, bool) {
+	for _, resource := range c.Resources {
+		if resource.Family != family || resource.PublicPorts == nil {
+			continue
+		}
+		return *resource.PublicPorts, true
+	}
+	return nil, false
 }
 
 // AllowsCloud reports whether a cloud is in the allowed set.

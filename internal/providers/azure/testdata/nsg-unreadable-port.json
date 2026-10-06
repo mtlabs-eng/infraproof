@@ -1,0 +1,72 @@
+{
+ "configuration": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "azurerm_network_security_group.web",
+     "expressions": {
+      "security_rule": [
+       {
+        "name": {
+         "constant_value": "ssh"
+        }
+       }
+      ]
+     },
+     "mode": "managed",
+     "name": "web",
+     "type": "azurerm_network_security_group"
+    }
+   ]
+  }
+ },
+ "format_version": "1.2",
+ "resource_changes": [
+  {
+   "address": "azurerm_network_security_group.web",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "location": "westeurope",
+     "name": "web",
+     "resource_group_name": "rg",
+     "security_rule": [
+      {
+       "access": "Allow",
+       "description": "",
+       "destination_address_prefix": "*",
+       "destination_address_prefixes": [],
+       "destination_application_security_group_ids": [],
+       "destination_port_range": null,
+       "destination_port_ranges": [],
+       "direction": "Inbound",
+       "name": "ssh",
+       "priority": 100,
+       "protocol": "Tcp",
+       "source_address_prefix": "*",
+       "source_address_prefixes": [],
+       "source_application_security_group_ids": [],
+       "source_port_range": "*"
+      }
+     ],
+     "tags": {}
+    },
+    "after_unknown": {
+     "security_rule": [
+      {
+       "destination_port_range": true
+      }
+     ]
+    },
+    "before": null
+   },
+   "mode": "managed",
+   "name": "web",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "type": "azurerm_network_security_group"
+  }
+ ],
+ "terraform_version": "1.14.0"
+}

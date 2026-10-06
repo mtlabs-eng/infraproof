@@ -1,0 +1,110 @@
+# Network fixtures
+
+Hand-authored, and the only cloud here where that is still true.
+
+AWS and GCP carry real `terraform plan` output beside their hand-written
+fixtures. Azure cannot: the provider acquires an AAD token before it finishes
+building, so `terraform plan` fails at `building account: could not acquire
+access token` before any resource is planned. It does reach
+`login.microsoftonline.com` and get an HTTP 400 for the placeholder credentials
+-- an earlier version of this paragraph said there was no cloud to reach, which
+is wrong about what the attempt does. Standing up something for it to
+authenticate against is not work this project will do.
+
+So these are shaped from the **authoritative provider schema**
+(`terraform providers schema -json`, which settles every Required/Optional/Computed
+question) rather than from documentation prose. The leaf spellings inside
+`after`/`after_unknown` — `""` for an unset optional string, `[]` for an unset
+set, per-element unknowns inside the `security_rule` set — are inferred from SDKv2
+semantics and from the AWS set behaviour that was observed on a real plan. They
+are not measured, and that is this cloud's weakest link.
+
+What was verified against the schema or the provider's documentation, rather than
+assumed:
+
+- A `security_rule` block takes `name`, `description`, `protocol` (`Tcp`, `Udp`,
+  `Icmp`, `Esp`, `Ah` or `*`), `source_port_range`/`source_port_ranges`,
+  `destination_port_range`/`destination_port_ranges`,
+  `source_address_prefix`/`source_address_prefixes`, the destination equivalents,
+  the application security group lists, `access` (`Allow`/`Deny`), `priority`
+  (100–4096, **lower number is higher precedence**) and `direction`
+  (`Inbound`/`Outbound`).
+- `security_rule` is a set of object, Optional **and Computed**, with 16 keys. An
+  unset inline set is therefore emitted as unknown rather than as `[]`, which is
+  what the fixtures here said until a review pointed at the schema. A group plus
+  separate `azurerm_network_security_rule` resources — the most common Azure shape
+  — reported UNKNOWN on the real shape where the fixture said KNOWN(true).
+- A rule has a **destination** as well as a source:
+  `destination_address_prefix`/`destination_address_prefixes`. It narrows what is
+  reachable rather than whether ingress is permitted, which is sound for an allow
+  and inverted for a deny — a deny scoped to one host is not a deny covering the
+  subnet.
+- Of the three service tags, only `Internet` is every public address.
+  `VirtualNetwork` and `AzureLoadBalancer` are not reachable from the internet and
+  are read as narrow. `AzureCloud` is Azure's own public IP space and is
+  deliberately left in the unreadable case.
+- `source_address_prefix` accepts a CIDR, an IP, `*`, or a service tag such as
+  `Internet`, `VirtualNetwork` or `AzureLoadBalancer`. **`source_address_prefixes`
+  may not carry tags.** That asymmetry is the provider's, not a simplification
+  made here.
+- Only one of each range/ranges pair may be set per rule.
+- Inline `security_rule` blocks and `azurerm_network_security_rule` resources
+  overwrite each other, and the provider **does not refuse the combination** --
+  the documentation advises against it. This line used to draw the opposite
+  conclusion ("that is what makes an inline set a complete one"), which is the
+  same false inference the milestone retracted for AWS after a review planned the
+  mix successfully. An inline set is the whole set as this plan writes it, and the
+  bound is reported rather than assumed away.
+- A priority must be unique within a set.
+
+Each fixture is one question:
+
+| fixture | what it asks |
+| --- | --- |
+| `nsg-public-inline` | a set the plan holds in full, open to the world on 22 |
+| `nsg-closed-inline` | the same shape, reachable only from inside |
+| `nsg-internet-tag` | the `Internet` service tag, which only the singular field may carry |
+| `nsg-prefix-list` | `0.0.0.0/0` in the plural field, which may not carry a tag |
+| `nsg-ipv6` | `::/0` alone |
+| `nsg-every-protocol` | `*` on `*`, every protocol on every port |
+| `nsg-icmp` | a protocol with no ports |
+| `nsg-esp` | a real protocol this build does not interpret, which is not ICMP |
+| `nsg-port-list` | `destination_port_ranges`, the plural form |
+| `nsg-denied-below` | a deny at a **lower** number, which takes precedence |
+| `nsg-deny-above` | the same deny at a **higher** number, which changes nothing |
+| `nsg-equal-priority` | two rules at one priority, which Azure refuses; the grant stands |
+| `nsg-deny-partial-ports` | a deny covering part of a range, leaving the rest exactly |
+| `nsg-deny-disjoint` | a deny that does not overlap, leaving the range as it was |
+| `nsg-deny-partial-protocol` | a deny narrower by protocol, which is not expressible as a remainder |
+| `nsg-icmp-denied` | a deny reaching a protocol with no ports, which reaches all of it |
+| `nsg-two-allows` | two allows, so the reported order is the set's own |
+| `nsg-outbound-only` | outbound, which says nothing about who can reach in |
+| `nsg-separate-open` | a separate rule resource that grants |
+| `nsg-separate-closed` | a separate rule resource that does not, where the rest is elsewhere |
+| `nsg-no-rules` | a group with no rules in the plan at all |
+| `nsg-unreadable-priority` | a priority the plan has not determined, so nothing can be ordered |
+| `nsg-deny-one-host` | a deny limited to one destination, which cannot be shown to cover the allow |
+| `nsg-deny-destination-list` | the same question through the plural destination field |
+| `nsg-deny-destination-any` | a deny whose destination is a zero-bit prefix, which does cover |
+| `nsg-deny-disjoint-protocol` | a deny narrower by protocol whose ports do not meet the allow's, so nothing is approximated |
+| `nsg-virtual-network-tag` | the documented tag for the virtual network, which is not the internet |
+| `nsg-load-balancer-tag` | the documented tag for the platform probe, which is not the internet |
+| `nsg-tag-in-plural` | a service tag in the field that may not carry one |
+| `nsg-inline-unwritten` | no inline rules written, so the attribute is unknown, with a separate rule that grants |
+| `nsg-inline-unwritten-closed` | the same shape with no grant, which cannot be shown closed |
+| `nsg-no-destination-port` | a rule stating no destination port, which the provider requires |
+| `nsg-unreadable-direction` | a direction this build cannot name, which is not the opposite of the one it can |
+| `nsg-unreadable-access` | an access this build cannot name, for the same reason |
+| `nsg-split-source` | a source written as two halves of IPv4, which together are every address |
+| `nsg-rule-replaced` | a separate rule being replaced, which is a rule that will exist |
+| `nsg-deny-private-source` | a deny reaching only private addresses, which cannot cancel a world-open grant |
+| `nsg-unreadable-source` | an address the plan has not determined, which could be every address |
+| `nsg-unreadable-port` | a port the plan has not determined |
+| `nsg-unreadable-protocol` | a protocol spelling this build does not know |
+| `nsg-unknown-service-tag` | a service tag this build has not heard of, which could be every address |
+| `nsg-explicitly-empty` | `security_rule = []`: the whole set stated, and it is empty |
+| `nsg-inline-and-separate` | the mix the provider does not refuse, where the two forms overwrite each other |
+| `nsg-icmp-deny-one-port` | a deny limited to one port, which cannot reach a protocol that has none |
+| `nsg-deny-one-host-above` | a deny limited to one destination, above the allow, so it reaches nothing |
+| `nsg-deny-one-host-other-protocol` | the same deny on another protocol entirely |
+| `nsg-deny-one-host-other-port` | the same deny on a port the allow does not use, so nothing is narrowed |

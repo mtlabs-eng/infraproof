@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "change_id": "baseline",
+  "environment": "staging",
+  "allowed_clouds": ["aws", "azure", "gcp"],
+  "destructive_changes": "allowed_with_warning",
+  "resources": [
+    {
+      "family": "object_storage",
+      "exposure": "private",
+      "purpose": "the baseline every fixture is compared against"
+    }
+  ]
+}

@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/mtlabs-eng/infraproof/internal/render"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
@@ -374,5 +376,119 @@ func TestEveryFixtureIsUnchangedWhenNothingMatches(t *testing.T) {
 				t.Fatalf("a verification with no configuration directory carried a location: %s", want)
 			}
 		})
+	}
+}
+
+// baselineKey names a fixture's golden by its path, flattened. Two fixtures in
+// different directories share a file name, and the key has to tell them apart.
+func baselineKey(fixture string) string {
+	cleaned := filepath.ToSlash(filepath.Clean(fixture))
+	cleaned = strings.TrimPrefix(cleaned, "../../")
+	cleaned = strings.TrimSuffix(cleaned, ".json")
+	return strings.ReplaceAll(cleaned, "/", "_") + ".json"
+}
+
+// TestEveryFixtureProducesItsBaselineBundle is the mechanical form of the
+// milestone 08 criterion that object-storage verdicts do not change.
+//
+// The goldens were generated from the commit before any of that milestone's
+// behaviour landed, against a contract this repository ships, so each one records
+// what this build said about that plan before the network family existed. A
+// normalizer change that moved a storage verdict by one field would otherwise be
+// argued about; here it is a diff.
+//
+// The contract is a committed file rather than a temporary one so that the bundle
+// records a stable intent source and digest. A path under t.TempDir() would make
+// every golden depend on where the test ran.
+//
+// What it covers, measured rather than claimed: making the AWS mapper stop
+// claiming buckets fails 36 of these subtests. What it does not cover is a branch
+// this one contract never reaches -- it declares object storage private, so the
+// disposition for an undeclared exposure is never taken here. That branch is held
+// by internal/policy's own tests, and mutating it fails two of them. Recording a
+// second contract to reach it would double 63 goldens to catch what is already
+// caught where it belongs.
+func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
+	intent := filepath.Join("testdata", "baseline", "intent.json")
+
+	// Atomic because subtests may run in parallel; nothing here asks for that
+	// today, and a counter that silently undercounts if one ever does would
+	// weaken the only assertion holding this test up.
+	var compared atomic.Int64
+	// Every golden has to be consumed by a comparison, which is the assertion a
+	// floor cannot make. planFixtures discards a plan terraformplan refuses --
+	// before any subtest exists -- so a stricter parse removed the fixture from
+	// the loop and the count simply dropped. That is the exact verdict change
+	// the Fatalf below says this test catches, and it slipped past a floor three
+	// below the real count.
+	consumed := map[string]bool{}
+	for _, fixture := range planFixtures(t) {
+		key := baselineKey(fixture)
+		golden := filepath.Join("testdata", "baseline", key)
+		want, err := os.ReadFile(golden)
+		if err != nil {
+			// A fixture with no baseline was added after the baseline was
+			// recorded, which is what a milestone adding a family does. There is
+			// nothing to compare it against, and recording one now from the
+			// current behaviour would be calling today's answer a baseline.
+			continue
+		}
+
+		t.Run(fixture, func(t *testing.T) {
+			bundle, err := verify.FromFiles(intent, fixture, verify.Options{})
+			if err != nil {
+				// Not a skip. A fixture that had a baseline and stopped being
+				// verifiable is the verdict change this test exists to catch --
+				// a stricter parse, a new refusal, a recovered panic. Skipping
+				// it hid all 63 comparisons behind a green run, which an
+				// independent review demonstrated by making every verification
+				// return an error and watching this test pass.
+				t.Fatalf("this fixture had a baseline and is no longer verifiable: %v", err)
+			}
+			got, err := render.JSON(bundle)
+			if err != nil {
+				t.Fatalf("render.JSON: %v", err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("this plan's verdict changed since the baseline was recorded\n--- now ---\n%s\n--- baseline ---\n%s",
+					got, want)
+			}
+			compared.Add(1)
+		})
+		consumed[key] = true
+	}
+
+	// Every recorded golden, compared. Not a floor: a floor three below the real
+	// count let three goldens go missing in silence, and the fixture a stricter
+	// parse would drop is exactly the one this test exists for.
+	//
+	// The count is incremented inside the subtest, after the comparison.
+	// Counting fixtures that had a baseline counted intent rather than work.
+	entries, err := filepath.Glob(filepath.Join("testdata", "baseline", "internal_*.json"))
+	if err != nil {
+		t.Fatalf("listing the baselines: %v", err)
+	}
+	// intent.json lives here too and is the contract, not a golden; the prefix
+	// is what baselineKey produces from a fixture path.
+	goldens := entries
+	// The recorded set, as a number, because comparing the count against itself
+	// cannot see a baseline going missing: delete a golden and both sides of the
+	// equality fall together. Raise it when a baseline is deliberately added;
+	// never lower it. This is the guard the version constant has, for the same
+	// reason.
+	const recorded = 63
+	if len(goldens) < recorded {
+		t.Fatalf("found %d baselines and %d are recorded; a verdict nobody compares is a "+
+			"verdict that can change in silence", len(goldens), recorded)
+	}
+	for _, golden := range goldens {
+		if !consumed[filepath.Base(golden)] {
+			t.Errorf("%s is recorded and no fixture reached it; a plan this build stopped being "+
+				"able to read is removed from the loop rather than failing in it",
+				filepath.Base(golden))
+		}
+	}
+	if total := int(compared.Load()); total != len(goldens) {
+		t.Fatalf("compared %d fixtures against %d recorded baselines", total, len(goldens))
 	}
 }

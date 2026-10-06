@@ -168,6 +168,8 @@ internal/evidence
 internal/render
 ```
 
+Ordering lives in the mapper, not in the rule. Two of the three clouds resolve ingress through an ordered set with deny rules and priorities, and they disagree about the ordering itself: GCP gives a deny precedence over an allow of equal priority, Azure forbids the tie, AWS has neither. A rule that knew any of that would be a rule that has to change when a fourth cloud arrives. By the time a rule reads a capability, the answer is about the set.
+
 Provider packages may depend on `model`. The policy engine depends on `model` and intent types. Core packages must not import provider packages, CLI packages, MCP code, or LLM clients.
 
 `internal/tfconfig` reads Terraform configuration to say where a declaration is written. It is the only package that reads a `.tf` file, it reads nothing outside the directory the caller supplies, and neither `policy` nor `model` may import it: a rule that could reach the filesystem would be a rule whose verdict changed when a file moved. It depends on `terraformplan` for the identity of each declaration, because deriving one from an address text would be a second grammar almost the same as the first.
@@ -183,3 +185,47 @@ Provider packages may depend on `model`. The policy engine depends on `model` an
 - Optional Terraform mock-provider generation of fixtures; committed sanitized JSON remains the deterministic test input
 
 No MVP test requires a cloud account.
+
+## Ask the plan what the author wrote
+
+An attribute a provider marks Optional **and Computed** is emitted as unknown in
+two opposite situations: the author left it out, where the provider's documented
+default applies, or the author set it from something the plan cannot resolve,
+where nothing does. The plan gives both the same shape.
+
+Reading every such unknown as unreadable answers `UNKNOWN` for the ordinary case.
+That is how the GCP mapper came to produce no verdict on a real plan: `direction`
+is Optional and Computed, so every firewall that does not spell out
+`direction = "INGRESS"` emitted it unknown, and the answer was `UNKNOWN` before
+anything else was read. Reading every such unknown as the default invents a value
+for the interpolated case, which this project forbids.
+
+The configuration block separates them, because it records which arguments a
+resource's configuration writes. `terraformplan` exposes that as
+`ResourceChange.Stated`, with `Configured` saying whether the question is
+answerable at all — a sanitized plan does not record what was written, and a
+default applied on the strength of a silence nobody recorded is an invented fact.
+`declared.Unwritten` is the question a mapper asks.
+
+`Configured` means **the arguments were recorded**, not that the configuration
+declares the resource. The two look alike and differ in exactly the dangerous
+direction: Terraform emits a configuration entry with no `expressions` object for
+a body that is only a `dynamic` block, and any sanitizer that strips expressions
+leaves every entry in that shape. Read as an author's silence, it hands every
+Optional and Computed attribute its default — which produced `PASS`, exit 0, with
+no findings, on a firewall opening SSH to `0.0.0.0/0`.
+
+The same asymmetry runs through the other direction. A `dynamic` block is not
+represented in a resource's arguments at all, so an argument's *absence* proves
+nothing, while its *presence* proves the author wrote it. Anything deciding that
+a rule set is complete has to ask the positive form, `declared.Written`; anything
+applying a provider default asks the negative one. Two questions, because one
+answer is reliable and the other is not.
+
+The general rule this is an instance of: **when a mapper needs to know something
+about a provider's semantics, ask the authority rather than model it.** Milestone
+07 asks `terraform validate` directly. This family has no such oracle for provider
+schemas, so it does the next best thing — real `terraform plan` output committed
+as a fixture, with a guard test pinning the shape each one exists to carry. Three
+of the defects that reached a review were hand-written fixtures encoding shapes
+Terraform does not emit, and every one of them was permissive.

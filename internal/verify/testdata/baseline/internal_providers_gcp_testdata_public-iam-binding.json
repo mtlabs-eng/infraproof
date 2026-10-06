@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.2",
+  "decision": "BLOCK",
+  "summary": "The change violates the intent contract in 1 way.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:dd4acc8fc7f10c1463eacb02c894ddafa337acb2e2f72231cda3dadd9a278760"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "STORAGE_PUBLIC",
+      "severity": "CRITICAL",
+      "disposition": "BLOCK",
+      "claim": "The change grants public access to object storage the intent contract requires to be private.",
+      "resource": {
+        "address": "google_storage_bucket.assets",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "expected": {
+        "path": "object_storage.public_access",
+        "value": false
+      },
+      "observed": {
+        "path": "object_storage.public_access",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_storage_bucket_iam_binding.readers",
+          "path": "members",
+          "redacted": false
+        }
+      ],
+      "remediation": "Remove the grant that exposes this storage publicly, or record the exposure as intended in the intent contract."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_storage_bucket.assets",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_storage_bucket.assets",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_storage_bucket_iam_binding.readers",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_storage_bucket_iam_binding.readers",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_ORGANIZATION_PUBLIC_ACCESS_POLICY",
+      "required": false,
+      "reason": "Public access prevention is inherited, and the organization policy it inherits from is not part of this plan.",
+      "resource_address": "google_storage_bucket.assets",
+      "evidence": []
+    }
+  ]
+}
