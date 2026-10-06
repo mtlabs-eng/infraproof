@@ -324,28 +324,16 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 // address. Reading the old default here would invent a grant on every
 // tag-scoped rule in every plan.
 func sourceReach(change terraformplan.ResourceChange) (any, unread bool) {
-	ranges := change.After.Field("source_ranges")
-	switch ranges.State() {
-	case terraformplan.StateAbsent:
-		return false, false
-	case terraformplan.StateKnown:
-	default:
+	// The whole list, not one entry at a time: `0.0.0.0/1, 128.0.0.0/1` is two
+	// narrow prefixes and every address in IPv4.
+	switch declared.ListReach(change.After.Field("source_ranges")) {
+	case declared.ReachAnyAddress:
+		return true, false
+	case declared.ReachUnreadable:
 		return false, true
+	default:
+		return false, false
 	}
-
-	for i := range ranges.Len() {
-		element := ranges.At(i)
-		if element.State() != terraformplan.StateKnown {
-			return false, true
-		}
-		switch declared.AddressReach(element.Text()) {
-		case declared.ReachAnyAddress:
-			return true, false
-		case declared.ReachUnreadable:
-			return false, true
-		}
-	}
-	return false, false
 }
 
 // targetsOf reads one of the two fields that narrow a firewall to some instances.

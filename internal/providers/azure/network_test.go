@@ -285,3 +285,29 @@ func TestAProtocolThisBuildCannotNameIsUndetermined(t *testing.T) {
 			capabilities.OpenToAnyAddress)
 	}
 }
+
+// TestASourceSplitIntoHalvesIsEveryAddress covers address arithmetic, which this
+// mapper did not do.
+//
+// What a rule admits is the union of its source entries. Asking one entry at a
+// time, `0.0.0.0/1, 128.0.0.0/1` is two prefixes that each constrain a bit, so
+// each read as narrower than any address and the set read as proven closed --
+// Known(false), meaning the plan proves nothing is open, on a rule admitting
+// every address in IPv4.
+//
+// A split of the space is not an exotic spelling. It is what a pair of halves
+// looks like, and the answer must not depend on how the author chose to write
+// the same set.
+func TestASourceSplitIntoHalvesIsEveryAddress(t *testing.T) {
+	capabilities := securityGroup(t, "nsg-split-source").Network
+
+	if !capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("a readable pair of prefixes was not settled: %v", capabilities.PublicIngress.State)
+	}
+	if !capabilities.PublicIngress.Get() {
+		t.Fatal("a source covering every IPv4 address was read as narrower than any address")
+	}
+	if got := rendered(capabilities.OpenToAnyAddress); got != "tcp/22" {
+		t.Fatalf("opens %q, want tcp/22", got)
+	}
+}

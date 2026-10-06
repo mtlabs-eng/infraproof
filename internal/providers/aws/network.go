@@ -351,19 +351,15 @@ func reachOf(source reachable) (any, unread bool) {
 			declared.AddressReach(source.value.Text()) == declared.ReachUnreadable
 	}
 
-	for i := range source.value.Len() {
-		element := source.value.At(i)
-		if element.State() != terraformplan.StateKnown {
-			return false, true
-		}
-		switch declared.AddressReach(element.Text()) {
-		case declared.ReachAnyAddress:
-			return true, false
-		case declared.ReachUnreadable:
-			return false, true
-		}
+	// The whole list, not one entry at a time.
+	switch declared.ListReach(source.value) {
+	case declared.ReachAnyAddress:
+		return true, false
+	case declared.ReachUnreadable:
+		return false, true
+	default:
+		return false, false
 	}
-	return false, false
 }
 
 // protocolOf normalizes the protocol spellings this provider uses.

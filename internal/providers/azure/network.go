@@ -382,23 +382,16 @@ func sourceReach(rule terraformplan.Value) (any, unread bool) {
 		return false, true
 	}
 
-	plural := rule.Field("source_address_prefixes")
-	if plural.State() != terraformplan.StateKnown && plural.State() != terraformplan.StateAbsent {
+	// The plural field may not carry a service tag, so every entry is an
+	// address, and what it admits is the union of them.
+	switch declared.ListReach(rule.Field("source_address_prefixes")) {
+	case declared.ReachAnyAddress:
+		return true, false
+	case declared.ReachUnreadable:
 		return false, true
+	default:
+		return false, false
 	}
-	for i := range plural.Len() {
-		element := plural.At(i)
-		if element.State() != terraformplan.StateKnown {
-			return false, true
-		}
-		switch declared.AddressReach(element.Text()) {
-		case declared.ReachAnyAddress:
-			return true, false
-		case declared.ReachUnreadable:
-			return false, true
-		}
-	}
-	return false, false
 }
 
 // protocolOf normalizes this provider's protocol spellings.
