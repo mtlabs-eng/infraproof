@@ -24,8 +24,13 @@ type presence struct {
 }
 
 type resourcePresence struct {
-	family   bool
-	exposure bool
+	family      bool
+	exposure    bool
+	publicPorts bool
+	// rawPorts are the port declarations exactly as the document wrote them.
+	// Validation reads these rather than the parsed ranges, because what a
+	// reader needs to be told is which spelling was refused.
+	rawPorts []string
 }
 
 // clouds this build understands. The set is closed: a contract naming a cloud
@@ -33,7 +38,7 @@ type resourcePresence struct {
 var knownClouds = []string{"aws", "azure", "gcp"}
 
 // knownFamilies is closed for the same reason.
-var knownFamilies = []string{FamilyObjectStorage}
+var knownFamilies = []string{FamilyObjectStorage, FamilyNetwork}
 
 func (c Contract) validate() error {
 	var errs []error
@@ -211,6 +216,45 @@ func (c Contract) validateResources() []error {
 		}
 		seen[resource.Family] = true
 
+		errs = append(errs, validateFamilyFields(i, resource, present)...)
+	}
+	return errs
+}
+
+// validateFamilyFields holds each family to the field its own rule reads, and to
+// no other.
+//
+// A network entry carrying an exposure, or a storage entry carrying ports, states
+// two things that can contradict each other -- "private" beside a port that may
+// be public. Refusing the pair is cheaper than deciding which one wins, and much
+// cheaper than a reader believing the one that was ignored.
+func validateFamilyFields(i int, resource ResourceIntent, present resourcePresence) []error {
+	var errs []error
+
+	switch resource.Family {
+	case FamilyNetwork:
+		if present.exposure {
+			errs = append(errs, fmt.Errorf(
+				"resources[%d].exposure does not apply to family %q, which declares public_ports",
+				i, FamilyNetwork))
+		}
+		if !present.publicPorts {
+			errs = append(errs, fmt.Errorf(
+				"resources[%d].public_ports is required for family %q; write [] to declare that no port may be reachable from any address",
+				i, FamilyNetwork))
+			break
+		}
+		for j, text := range present.rawPorts {
+			if _, err := parsePortRange(text); err != nil {
+				errs = append(errs, fmt.Errorf("resources[%d].public_ports[%d] %w", i, j, err))
+			}
+		}
+	default:
+		if present.publicPorts {
+			errs = append(errs, fmt.Errorf(
+				"resources[%d].public_ports does not apply to family %q, which declares an exposure",
+				i, quotable(resource.Family)))
+		}
 		switch {
 		case !present.exposure:
 			errs = append(errs, fmt.Errorf("resources[%d].exposure is required; write %q to record that it was considered and left open",
