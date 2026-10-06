@@ -1,0 +1,169 @@
+# Milestone 09: database exposure
+
+## Objective
+
+Detect a managed database the change makes reachable from the public internet,
+across AWS, Azure and GCP, through one universal rule — and find out whether a
+family that **composes two existing ones** can be added without either of them
+changing.
+
+## Why this family
+
+The tool decides two families. Object storage asks "who may read this data", and
+network exposure asks "who may reach this port". A managed database is the first
+resource where the answer needs both at once, and it is where the two previous
+milestones' machinery either pays off or does not.
+
+It is also the highest-impact thing the build still cannot decide. A publicly
+reachable Postgres instance is reported today as a resource no mapper
+interpreted.
+
+## What makes this different from 08
+
+Every cloud splits the question into two independent facts, and **both** must be
+true for the database to be reachable:
+
+| | public endpoint switch | who may reach it |
+| --- | --- | --- |
+| AWS `aws_db_instance`, `aws_rds_cluster_instance` | `publicly_accessible` | `vpc_security_group_ids` — the security groups milestone 08 already resolves |
+| Azure `azurerm_mssql_server`, `azurerm_postgresql_flexible_server` | `public_network_access_enabled` | separate firewall-rule resources, as start/end IP **ranges** |
+| GCP `google_sql_database_instance` | `settings.ip_configuration.ipv4_enabled` | `authorized_networks` CIDRs inside the same block |
+
+Neither fact alone is a finding. A public endpoint nobody is admitted to is not
+reachable; an allow list on a database with no public endpoint reaches nothing.
+Reporting either alone would produce a finding on the ordinary shape, which is
+how a tool teaches people to ignore it.
+
+That conjunction is the whole milestone. It is also why this family is worth
+doing third rather than a fourth independent one: it is the first test of whether
+the normalized model composes, instead of growing a parallel column per family.
+
+## What the provider schemas and real plans say
+
+Measured against `terraform providers schema -json` and against genuine
+`terraform plan` output, not against documentation prose. Milestone 08 shipped
+three defects that came from reading docs instead of plans.
+
+- **AWS is the easy cloud this time.** `publicly_accessible` is `Optional` and
+  *not* `Computed`: a real plan emits `false` when it is unwritten, which is both
+  the provider's default and the safe one. No configuration guard is needed.
+- **AWS splits the switch away from the cluster.** `aws_rds_cluster` has no
+  `publicly_accessible` at all; `aws_rds_cluster_instance` does. An Aurora
+  cluster is reachable through its instances, so the subject is the instance and
+  a cluster with no instance in the plan settles nothing.
+- **GCP repeats milestone 08's worst trap.** An instance that writes no
+  `ip_configuration` emits the whole block as *unknown*, and Google's documented
+  default for `ipv4_enabled` is a public IP. `declared.Unwritten` is exactly the
+  question this needs, and it already exists.
+- **Azure's allow list is not CIDR.** A firewall rule is `start_ip_address` and
+  `end_ip_address`, both Required. `0.0.0.0` to `255.255.255.255` is the whole
+  internet, and the well-known `0.0.0.0`–`0.0.0.0` rule means "Azure services"
+  rather than one host. `declared.SetReach` is already interval arithmetic
+  internally, so a range maps onto it without a second implementation.
+- **`port` is never in the plan.** It is `Optional` and `Computed` on every AWS
+  database resource and comes back unknown on a create even when `engine` is
+  written. Any design that needs the port has to get it from somewhere else.
+- **Azure cannot be planned offline**, as in milestone 08: the provider acquires
+  an AAD token before it finishes building. Its fixtures come from the
+  authoritative schema and say so.
+
+## Product decisions taken before implementation
+
+- **The rule asserts that the change makes a database reachable from any
+  address**, which requires the public endpoint *and* an allow covering every
+  address. Neither alone is reported as a finding. Where one is known and the
+  other is not in the plan, the answer is `UNKNOWN` with the missing half named —
+  which, for AWS, is the common case, because a security group is usually
+  elsewhere.
+- **The contract declares an exposure, not ports.** A `database` family entry
+  takes `exposure` with the same three values object storage uses, because the
+  question is binary: reachable from the internet, or not. Ports belong to the
+  `network` family, where the author is describing a service they chose to
+  publish; nobody publishes a database port on purpose and then wants to name it.
+  Intent Contract becomes `1.2`; `1.1` and `1.0` keep loading.
+- **Severity is `HIGH`, not `CRITICAL`.** Public object storage is `CRITICAL`
+  because it exposes the data itself to anyone; a reachable database still
+  demands credentials, so it is one layer of several — the same reading network
+  exposure already uses. Severity communicates impact and may not depend on the
+  contract.
+- **The port comes from the engine, through a closed table.** `engine` is in the
+  plan and `port` is not, so the mapper maps the documented default port for the
+  engines it can name — the same argument this build already accepted for IANA
+  protocol numbers in `declared.ProtocolNumber`, and refused for anything
+  outside a closed set. An engine this build cannot name makes the port
+  undetermined, and an undetermined port means any public ingress is reported as
+  possibly reaching it, with the approximation recorded. Over-reporting is the
+  safe direction; silently requiring a port match would hide a finding whenever
+  the table is incomplete.
+- **A database is a subject; its firewall rules and security groups are
+  controls.** The correlation goes through references, by instance, using
+  `declared.Target` — not by comparing attribute values, which are unknown until
+  apply.
+
+## Open question this milestone must answer, not assume
+
+**What a shared security group means.** A security group open to `0.0.0.0/0` on
+443 attached to a publicly accessible Postgres instance reaches the endpoint only
+if 443 is the database's port. With the engine table above the answer is usually
+no, and the finding is correctly absent. The decision to confirm against a real
+deployment is whether that silence is right when the engine is one the table does
+not name — the design says report and record the approximation, and that is the
+choice most likely to be wrong in practice.
+
+## Scope
+
+- AWS: `aws_db_instance`, `aws_rds_cluster`, `aws_rds_cluster_instance`, joined
+  to `aws_security_group` through `vpc_security_group_ids`.
+- Azure: `azurerm_mssql_server`, `azurerm_postgresql_flexible_server`, joined to
+  `azurerm_mssql_firewall_rule` and
+  `azurerm_postgresql_flexible_server_firewall_rule`.
+- GCP: `google_sql_database_instance`, whose allow list is inside it.
+- One universal rule in `internal/policy`, naming no cloud and no attribute.
+- `model.DatabaseCapabilities`, carrying the two facts separately so a reader is
+  told which half is missing.
+
+## Acceptance criteria
+
+1. An equivalent publicly-reachable database in all three clouds produces one
+   finding with the same rule identifier, severity and disposition, and
+   cloud-specific evidence.
+2. An equivalent private database in all three clouds produces none.
+3. A public endpoint with no allow covering every address produces no finding,
+   and an allow covering every address with no public endpoint produces none.
+4. A plan holding one half of the pair and not the other produces `UNKNOWN`, and
+   the missing control names which half.
+5. An AWS database joined to a security group milestone 08 reports as open to any
+   address is reported through that same resolution, with **no change to the
+   network mapper or to `NetworkExposure`**. This is the composition criterion and
+   the reason the milestone exists.
+6. A GCP instance that writes no `ip_configuration` takes the provider's
+   documented default, and one that writes it from an unresolvable value is
+   `UNKNOWN` — both proven against real `terraform plan` output committed as a
+   fixture, with a guard test pinning the shape.
+7. An Azure firewall rule spanning `0.0.0.0`–`255.255.255.255` is every address,
+   a rule spanning one host is not, and the pair is decided by the same
+   arithmetic `declared.SetReach` already uses.
+8. An Aurora cluster whose instances are not in the plan settles nothing, and
+   says so.
+9. The declared exposure changes the disposition and not the finding.
+10. Object-storage and network verdicts are unchanged: every committed fixture
+    produces the bundle it produced before this milestone, proven by comparing
+    binaries built at both ends.
+
+## Out of scope
+
+Database users, grants and password policy. Encryption at rest and in transit —
+a different question about the same resource, and one the contract does not yet
+describe. Reachability through a bastion, a VPN, a peering or a private endpoint.
+Whether a database that is reachable is also authenticated weakly. Managed
+caches, search clusters and data warehouses: `aws_elasticache_*`,
+`aws_redshift_cluster` and `aws_docdb_cluster` have the same shape and are left
+until the shape is proven on the three above.
+
+## Prerequisites
+
+Milestones 03, 04 and 08. This milestone adds no new machinery of its own: it
+uses `declared.Unwritten` for the GCP default, `declared.Target` for the
+correlation, `declared.SetReach` for the address arithmetic, and milestone 08's
+security-group resolution unchanged. If it needs any of them changed, that is a
+finding about the architecture and is worth more than the family.
