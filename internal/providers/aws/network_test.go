@@ -72,6 +72,12 @@ func TestIngressDetermination(t *testing.T) {
 		"sg-public-rule":         {model.FactKnown, true, "tcp/22"},
 		"sg-rule-every-protocol": {model.FactKnown, true, "every/0-65535"},
 		"sg-unreadable-port":     {model.FactUnknown, false, ""},
+		// A port that is not a number, and a protocol spelling this build does
+		// not know. Either could mean more is open than it can see, and
+		// guessing between "one protocol" and "every protocol" is guessing
+		// between nothing and a grant.
+		"sg-malformed-port":      {model.FactUnknown, false, ""},
+		"sg-unreadable-protocol": {model.FactUnknown, false, ""},
 		// An address the plan has not determined could be 0.0.0.0/0, and
 		// reading it as narrower would be reading an unknown as a reassurance.
 		"sg-unreadable-address": {model.FactUnknown, false, ""},

@@ -43,6 +43,8 @@ InfraProof independently verifies agent-generated Terraform and OpenTofu changes
 - Versioned normalized change graph
 - AWS, Azure, and GCP provider mappers
 - Object-storage public-access detection as the first vertical slice
+- Public-ingress detection as the second: security groups, network security groups
+  and firewalls, through one rule that names no cloud
 - Generic destructive-change and environment-mismatch rules
 - JSON and Markdown Evidence Bundle output
 - Fixture-driven tests with no cloud accounts
@@ -57,6 +59,16 @@ Exposure routes outside the current model are not examined: Azure static
 websites and network rules, GCP IAM conditions and legacy ACLs, AWS inline
 bucket `acl`, `policy` and `grant` arguments, and any control applied outside
 the plan.
+
+For network exposure the claim is narrower still, and deliberately so. A finding
+says the change **permits ingress from any address**, not that anything becomes
+reachable: reachability needs the attachment — an instance, a subnet, an
+association — which is usually in another resource, another module, or already
+exists. Asserting reachability would make most real plans `UNKNOWN`; the limit is
+reported beside the finding instead. And one more asymmetry runs through this
+family: a grant can be proven from part of a rule set, while closure cannot, so a
+security group whose rules live in separate resources is `UNKNOWN` rather than
+closed.
 
 Where the plan does not determine exposure, InfraProof answers `UNKNOWN`, and
 `UNKNOWN` is not `PASS`. It is the honest answer in more cases than a reader may

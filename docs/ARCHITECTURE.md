@@ -168,6 +168,8 @@ internal/evidence
 internal/render
 ```
 
+Ordering lives in the mapper, not in the rule. Two of the three clouds resolve ingress through an ordered set with deny rules and priorities, and they disagree about the ordering itself: GCP gives a deny precedence over an allow of equal priority, Azure forbids the tie, AWS has neither. A rule that knew any of that would be a rule that has to change when a fourth cloud arrives. By the time a rule reads a capability, the answer is about the set.
+
 Provider packages may depend on `model`. The policy engine depends on `model` and intent types. Core packages must not import provider packages, CLI packages, MCP code, or LLM clients.
 
 `internal/tfconfig` reads Terraform configuration to say where a declaration is written. It is the only package that reads a `.tf` file, it reads nothing outside the directory the caller supplies, and neither `policy` nor `model` may import it: a rule that could reach the filesystem would be a rule whose verdict changed when a file moved. It depends on `terraformplan` for the identity of each declaration, because deriving one from an address text would be a second grammar almost the same as the first.

@@ -45,6 +45,15 @@ outside the plan — an account-level block on AWS, an organization policy behin
 default. Where that is so, the answer is `UNKNOWN` and the missing control is named. That is the
 common case, not an edge one, and reporting `PASS` there would be a guess.
 
+Ingress asks the same question of a different machinery. A security group, a
+network security group and a firewall all answer "reachable by whom?", and two of
+the three do it through an ordered set where a deny at a lower priority takes away
+what an allow permits. One rule reads all three, and the contract declares which
+ports may be reachable from any address — `public_ports: ["443"]` — because
+`0.0.0.0/0` on 443 is a web server and on 22 is an incident, and a fixed list of
+sensitive ports in this build would be this build deciding someone else's security
+policy.
+
 **A result is about the plan, not about the infrastructure.** `PASS` means no plan-provable public
 exposure was found among the resource types this build understands — not that nothing is public. See
 [what a result means](docs/PRODUCT.md#what-a-result-means).

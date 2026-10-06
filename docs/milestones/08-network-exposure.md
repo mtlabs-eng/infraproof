@@ -114,3 +114,38 @@ Both are recorded here rather than left to be inferred from the code.
 - Every fact records the provider attribute it came from.
 - Object-storage verdicts are unchanged: every committed fixture produces the
   same bundle it produced before this milestone.
+
+## Limitations of this milestone, as built
+
+- **The claim is about the change, not about reachability.** Nothing here reads
+  an attachment: a security group's instances, an NSG's subnets, a firewall's
+  target tags beyond comparing them with a deny's. The attachment is reported as
+  a non-required unknown on every finding.
+- **A grant is provable from part of a rule set; closure is not.** A security
+  group or an NSG whose rules are separate resources is `UNKNOWN` unless one of
+  the rules in the plan grants. Only an inline set can be shown closed, because
+  the provider refuses to mix the two forms and an inline set is therefore the
+  whole set.
+- **One approximation, and it is upward.** A deny narrower by protocol than the
+  allow it meets cannot be subtracted: a range carries one protocol and "every
+  protocol except TCP" is not one. The wider range is reported and a missing
+  control says so. Dropping the grant would hide that the other protocols are
+  still open.
+- **GCP target scopes are compared as sets, not resolved.** A deny whose
+  `target_tags` do not cover the allow's is not applied, and the narrowing is
+  reported. Whether any instance actually carries a tag is not in the firewall.
+- **A protocol with no ports cannot be permitted by a port list.** ICMP, ESP, AH,
+  a protocol number, a spelling this build does not know: each is reported and
+  each needs a human, because a port declaration can neither permit nor forbid it
+  and this build will not decide on its own that ping from the internet is a
+  violation.
+- **Source ports and destination addresses are not read.** A source port is the
+  client's and says nothing; a destination address narrows what is reachable
+  rather than whether ingress is permitted.
+- **Azure's and GCP's platform defaults are relied on, not modelled.** Both deny
+  inbound traffic no rule allows, which is what makes a readable set with no
+  grant a proven closure. The default rules themselves are not in any plan.
+- **Fixtures are hand-authored from provider documentation.** There is no offline
+  authority for a provider schema, so milestone 07's agreement harness has no
+  equivalent here. What was verified, and against which document, is recorded in
+  a README beside each cloud's fixtures.

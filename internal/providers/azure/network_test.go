@@ -104,6 +104,15 @@ func TestIngressDetermination(t *testing.T) {
 		"nsg-no-rules":        {model.FactUnknown, false, ""},
 		// Which rule wins cannot be decided without the priority.
 		"nsg-unreadable-priority": {model.FactUnknown, false, ""},
+		// A port, a source and a protocol the plan or this build cannot read.
+		// Each is unknown rather than absent: an unreadable value could be the
+		// one that opens everything.
+		"nsg-unreadable-port":     {model.FactUnknown, false, ""},
+		"nsg-unreadable-source":   {model.FactUnknown, false, ""},
+		"nsg-unreadable-protocol": {model.FactUnknown, false, ""},
+		// A service tag this build does not interpret. Azure adds them, and one
+		// nobody here has heard of could be every address.
+		"nsg-unknown-service-tag": {model.FactUnknown, false, ""},
 		// Two rules at one priority, which Azure refuses. The grant stands,
 		// because letting an equal deny win would hide a grant on a set the
 		// platform would not have accepted in the first place.

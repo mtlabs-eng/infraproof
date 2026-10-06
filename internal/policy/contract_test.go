@@ -454,6 +454,25 @@ func TestOneRuleCoversThreeCloudsForIngress(t *testing.T) {
 		}
 	})
 
+	t.Run("a value the parser could not read is unknown everywhere", func(t *testing.T) {
+		// One field per cloud that the plan states and this build cannot read.
+		// Each fixture differs from its open twin in that one field, so what the
+		// unknown is caused by is not in doubt.
+		unreadable := scenario{"sg-unreadable-protocol", "nsg-unreadable-port", "fw-unreadable-port"}
+		for cloud, fixture := range clouds(unreadable) {
+			t.Run(cloud, func(t *testing.T) {
+				result := evaluateNetwork(t, cloud, fixture, declaringPort())
+
+				if unknowns := unknownsFor(result, policy.CheckNetworkIngressDeterminable); len(unknowns) != 1 {
+					t.Fatalf("unknowns = %d, want 1: %+v", len(unknowns), unknowns)
+				}
+				if findings := findingsFor(result, policy.RuleNetworkPublicIngress); len(findings) != 0 {
+					t.Fatalf("an unreadable value produced %+v", findings)
+				}
+			})
+		}
+	})
+
 	t.Run("the declaration changes the disposition and not the finding", func(t *testing.T) {
 		for cloud, fixture := range clouds(open) {
 			t.Run(cloud, func(t *testing.T) {

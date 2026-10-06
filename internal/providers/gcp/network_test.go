@@ -118,6 +118,10 @@ func TestIngressDetermination(t *testing.T) {
 		// What the plan has not determined.
 		"fw-unknown-direction": {model.FactUnknown, false, ""},
 		"fw-unknown-source":    {model.FactUnknown, false, ""},
+		// A priority the plan has not determined, so nothing can be ordered
+		// against it, and a port that is not a port.
+		"fw-unknown-priority": {model.FactUnknown, false, ""},
+		"fw-unreadable-port":  {model.FactUnknown, false, ""},
 	}
 
 	for fixture, want := range cases {
