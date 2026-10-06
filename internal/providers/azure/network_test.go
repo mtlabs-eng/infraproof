@@ -634,3 +634,57 @@ func TestADenyLimitedToOnePortCannotCoverAProtocolWithNoPorts(t *testing.T) {
 		t.Error("a deny reaching every port stopped covering a protocol with no ports")
 	}
 }
+
+// TestAnInlineSetBesideASeparateRuleCannotBeShownClosed covers the mix the
+// provider does not refuse, which is the whole reason closure requires no
+// separate rule resources.
+//
+// A plan carrying inline `security_rule` blocks and an
+// azurerm_network_security_rule on the same group states neither the result --
+// the two forms overwrite each other -- so nothing here can show the set permits
+// nothing. No fixture mixed them, so dropping the clause survived the suite.
+func TestAnInlineSetBesideASeparateRuleCannotBeShownClosed(t *testing.T) {
+	capabilities := securityGroup(t, "nsg-inline-and-separate").Network
+
+	if capabilities.PublicIngress.IsKnown() && !capabilities.PublicIngress.Get() {
+		t.Fatal("a group whose two rule forms overwrite each other was reported as a proven closure")
+	}
+}
+
+// TestADenyThatRemovesNothingRaisesNoDestinationFlag is the destination flag's
+// own version of the gate its sibling already had.
+//
+// The flag was raised before the priority and protocol were considered, so a deny
+// above the allow -- which reaches nothing -- and a deny on another protocol both
+// produced it. An approximation reported where nothing was approximated is how a
+// reader learns to ignore the one that matters, which is the reason the protocol
+// flag was gated in the first place.
+func TestADenyThatRemovesNothingRaisesNoDestinationFlag(t *testing.T) {
+	for _, fixture := range []string{
+		"nsg-deny-one-host-above", "nsg-deny-one-host-other-protocol", "nsg-deny-one-host-other-port",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			capabilities := securityGroup(t, fixture).Network
+
+			if !capabilities.PublicIngress.Get() {
+				t.Fatal("the grant is gone, so this test is about something else now")
+			}
+			for _, control := range capabilities.Unresolved {
+				if control.CheckID == "AZURE_NSG_DENY_NARROWER_BY_DESTINATION" {
+					t.Errorf("a deny that removes nothing is reported as narrowing: %q", control.Reason)
+				}
+			}
+		})
+	}
+
+	// And the one that does bear on the allow still reports.
+	var said bool
+	for _, control := range securityGroup(t, "nsg-deny-one-host").Network.Unresolved {
+		if control.CheckID == "AZURE_NSG_DENY_NARROWER_BY_DESTINATION" {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("the narrowing that is real stopped being reported")
+	}
+}

@@ -133,6 +133,14 @@ func ListReach(field terraformplan.Value) Reach {
 		return ReachUnreadable
 	}
 
+	// A known value that is not a list is a boundary, and this build validates
+	// them everywhere else. Value.Len() is 0 for anything that is not an array,
+	// so a scalar where a set belongs produced SetReach(nil) -- narrower, no
+	// grant, a proven closure. An empty list is a list and names nobody.
+	if field.Kind() != terraformplan.KindArray && field.Kind() != terraformplan.KindNull {
+		return ReachUnreadable
+	}
+
 	texts := make([]string, 0, field.Len())
 	for i := range field.Len() {
 		element := field.At(i)

@@ -77,10 +77,10 @@ func TestIngressDetermination(t *testing.T) {
 		// guessing between "one protocol" and "every protocol" is guessing
 		// between nothing and a grant.
 		"sg-malformed-port": {model.FactUnknown, false, ""},
-		// A range whose ends are the wrong way round. The provider would
-		// refuse it, so a plan carrying one is not producible -- but this
-		// build does not know which end was meant, and guessing here is
-		// guessing about how much is open.
+		// A range whose ends are the wrong way round, which the provider plans
+		// without complaint -- this fixture is real output, after an earlier
+		// comment here called the shape unproducible. This build does not know
+		// which end was meant, and guessing is guessing about how much is open.
 		"sg-backwards-ports":     {model.FactUnknown, false, ""},
 		"sg-unreadable-protocol": {model.FactUnknown, false, ""},
 		// An address the plan has not determined could be 0.0.0.0/0, and

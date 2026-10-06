@@ -1,0 +1,378 @@
+{
+ "applyable": true,
+ "complete": true,
+ "configuration": {
+  "provider_config": {
+   "google": {
+    "expressions": {
+     "project": {
+      "constant_value": "fake-project"
+     },
+     "region": {
+      "constant_value": "us-central1"
+     }
+    },
+    "full_name": "registry.terraform.io/hashicorp/google",
+    "name": "google",
+    "version_constraint": "~> 6.0"
+   }
+  },
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_compute_firewall.ssh",
+     "expressions": {
+      "allow": [
+       {
+        "ports": {
+         "constant_value": [
+          "22"
+         ]
+        },
+        "protocol": {
+         "constant_value": "tcp"
+        }
+       }
+      ],
+      "direction": {
+       "constant_value": "INGRESS"
+      },
+      "name": {
+       "constant_value": "ssh-open"
+      },
+      "network": {
+       "constant_value": "net-one"
+      },
+      "priority": {
+       "constant_value": 1000
+      },
+      "source_ranges": {
+       "constant_value": [
+        "0.0.0.0/0"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "ssh",
+     "provider_config_key": "google",
+     "schema_version": 1,
+     "type": "google_compute_firewall"
+    },
+    {
+     "address": "google_compute_firewall.ssh_shut",
+     "expressions": {
+      "deny": [
+       {
+        "ports": {
+         "constant_value": [
+          "22"
+         ]
+        },
+        "protocol": {
+         "constant_value": "tcp"
+        }
+       }
+      ],
+      "direction": {
+       "constant_value": "INGRESS"
+      },
+      "disabled": {
+       "constant_value": true
+      },
+      "name": {
+       "constant_value": "ssh-shut"
+      },
+      "network": {
+       "constant_value": "net-one"
+      },
+      "priority": {
+       "constant_value": 500
+      },
+      "source_ranges": {
+       "constant_value": [
+        "0.0.0.0/0"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "ssh_shut",
+     "provider_config_key": "google",
+     "schema_version": 1,
+     "type": "google_compute_firewall"
+    }
+   ]
+  }
+ },
+ "errored": false,
+ "format_version": "1.2",
+ "planned_values": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_compute_firewall.ssh",
+     "mode": "managed",
+     "name": "ssh",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 1,
+     "sensitive_values": {
+      "allow": [
+       {
+        "ports": [
+         false
+        ]
+       }
+      ],
+      "deny": [],
+      "destination_ranges": [],
+      "log_config": [],
+      "params": [],
+      "source_ranges": [
+       false
+      ]
+     },
+     "type": "google_compute_firewall",
+     "values": {
+      "allow": [
+       {
+        "ports": [
+         "22"
+        ],
+        "protocol": "tcp"
+       }
+      ],
+      "deny": [],
+      "description": null,
+      "direction": "INGRESS",
+      "disabled": null,
+      "log_config": [],
+      "name": "ssh-open",
+      "network": "net-one",
+      "params": [],
+      "priority": 1000,
+      "project": "fake-project",
+      "source_ranges": [
+       "0.0.0.0/0"
+      ],
+      "source_service_accounts": null,
+      "source_tags": null,
+      "target_service_accounts": null,
+      "target_tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "google_compute_firewall.ssh_shut",
+     "mode": "managed",
+     "name": "ssh_shut",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 1,
+     "sensitive_values": {
+      "allow": [],
+      "deny": [
+       {
+        "ports": [
+         false
+        ]
+       }
+      ],
+      "destination_ranges": [],
+      "log_config": [],
+      "params": [],
+      "source_ranges": [
+       false
+      ]
+     },
+     "type": "google_compute_firewall",
+     "values": {
+      "allow": [],
+      "deny": [
+       {
+        "ports": [
+         "22"
+        ],
+        "protocol": "tcp"
+       }
+      ],
+      "description": null,
+      "direction": "INGRESS",
+      "disabled": true,
+      "log_config": [],
+      "name": "ssh-shut",
+      "network": "net-one",
+      "params": [],
+      "priority": 500,
+      "project": "fake-project",
+      "source_ranges": [
+       "0.0.0.0/0"
+      ],
+      "source_service_accounts": null,
+      "source_tags": null,
+      "target_service_accounts": null,
+      "target_tags": null,
+      "timeouts": null
+     }
+    }
+   ]
+  }
+ },
+ "resource_changes": [
+  {
+   "address": "google_compute_firewall.ssh",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "allow": [
+      {
+       "ports": [
+        "22"
+       ],
+       "protocol": "tcp"
+      }
+     ],
+     "deny": [],
+     "description": null,
+     "direction": "INGRESS",
+     "disabled": null,
+     "log_config": [],
+     "name": "ssh-open",
+     "network": "net-one",
+     "params": [],
+     "priority": 1000,
+     "project": "fake-project",
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": null,
+     "source_tags": null,
+     "target_service_accounts": null,
+     "target_tags": null,
+     "timeouts": null
+    },
+    "after_sensitive": {
+     "allow": [
+      {
+       "ports": [
+        false
+       ]
+      }
+     ],
+     "deny": [],
+     "destination_ranges": [],
+     "log_config": [],
+     "params": [],
+     "source_ranges": [
+      false
+     ]
+    },
+    "after_unknown": {
+     "allow": [
+      {
+       "ports": [
+        false
+       ]
+      }
+     ],
+     "creation_timestamp": true,
+     "deny": [],
+     "destination_ranges": true,
+     "enable_logging": true,
+     "id": true,
+     "log_config": [],
+     "params": [],
+     "self_link": true,
+     "source_ranges": [
+      false
+     ]
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "ssh",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_compute_firewall"
+  },
+  {
+   "address": "google_compute_firewall.ssh_shut",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "allow": [],
+     "deny": [
+      {
+       "ports": [
+        "22"
+       ],
+       "protocol": "tcp"
+      }
+     ],
+     "description": null,
+     "direction": "INGRESS",
+     "disabled": true,
+     "log_config": [],
+     "name": "ssh-shut",
+     "network": "net-one",
+     "params": [],
+     "priority": 500,
+     "project": "fake-project",
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": null,
+     "source_tags": null,
+     "target_service_accounts": null,
+     "target_tags": null,
+     "timeouts": null
+    },
+    "after_sensitive": {
+     "allow": [],
+     "deny": [
+      {
+       "ports": [
+        false
+       ]
+      }
+     ],
+     "destination_ranges": [],
+     "log_config": [],
+     "params": [],
+     "source_ranges": [
+      false
+     ]
+    },
+    "after_unknown": {
+     "allow": [],
+     "creation_timestamp": true,
+     "deny": [
+      {
+       "ports": [
+        false
+       ]
+      }
+     ],
+     "destination_ranges": true,
+     "enable_logging": true,
+     "id": true,
+     "log_config": [],
+     "params": [],
+     "self_link": true,
+     "source_ranges": [
+      false
+     ]
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "ssh_shut",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_compute_firewall"
+  }
+ ],
+ "terraform_version": "1.14.0",
+ "timestamp": "2026-10-06T13:20:45Z"
+}

@@ -207,6 +207,21 @@ answerable at all — a sanitized plan does not record what was written, and a
 default applied on the strength of a silence nobody recorded is an invented fact.
 `declared.Unwritten` is the question a mapper asks.
 
+`Configured` means **the arguments were recorded**, not that the configuration
+declares the resource. The two look alike and differ in exactly the dangerous
+direction: Terraform emits a configuration entry with no `expressions` object for
+a body that is only a `dynamic` block, and any sanitizer that strips expressions
+leaves every entry in that shape. Read as an author's silence, it hands every
+Optional and Computed attribute its default — which produced `PASS`, exit 0, with
+no findings, on a firewall opening SSH to `0.0.0.0/0`.
+
+The same asymmetry runs through the other direction. A `dynamic` block is not
+represented in a resource's arguments at all, so an argument's *absence* proves
+nothing, while its *presence* proves the author wrote it. Anything deciding that
+a rule set is complete has to ask the positive form, `declared.Written`; anything
+applying a provider default asks the negative one. Two questions, because one
+answer is reliable and the other is not.
+
 The general rule this is an instance of: **when a mapper needs to know something
 about a provider's semantics, ask the authority rather than model it.** Milestone
 07 asks `terraform validate` directly. This family has no such oracle for provider

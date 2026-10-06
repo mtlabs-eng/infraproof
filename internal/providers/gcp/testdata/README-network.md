@@ -8,6 +8,13 @@ network so the firewalls do not interact, because a firewall's rule set is scope
 to one network. They are this milestone's authority test; the fixtures cut from
 them keep their shapes.
 
+`real-interpolated.json`, `fw-deny-other-network-key`,
+`fw-deny-other-network-count`, `fw-deny-network-conditional`, `fw-deny-disabled`
+and `fw-split-source` are real output too, and each carries a shape that caught a
+defect: an attribute the author wrote and the plan cannot resolve, a deny on
+another instance of a repeated network, a disabled deny, and a source written as
+two halves of IPv4.
+
 The rest are hand-authored, which is how this mapper came to produce no verdict on
 real input. `direction` is Optional **and Computed**, so a create plan emits it as
 unknown for every firewall that does not spell it out — and all 25 hand-written
@@ -90,3 +97,5 @@ Each fixture is one question:
 | `fw-deny-tag-source` | the same narrowing by source tag |
 | `fw-unreadable-port` | a port that is not a port |
 | `fw-unknown-priority` | a priority the plan has not determined, so nothing can be ordered against it |
+| `fw-icmp-deny-one-port` | a deny limited to one port, which cannot reach a protocol that has none |
+| `fw-default-priority-tied` | a deny at 1000 against an unstated priority, which pins the default exactly |

@@ -68,6 +68,19 @@ func TestTheMapperAgreesWithARealPlan(t *testing.T) {
 		// bounded: the provider does not refuse a standalone rule elsewhere.
 		"closed": {model.FactKnown, false, "",
 			"an inline set none of whose rules reaches any address opens nothing"},
+		// Sources that name no address: another group, and the group itself.
+		"groupsourced": {model.FactKnown, false, "",
+			"a rule admitting a security group reaches no part of the internet"},
+		// A standalone rule whose only source is a prefix list this build cannot
+		// read.
+		"prefixlistrule": {model.FactUnknown, false, "",
+			"a prefix list this build cannot read may contain every address"},
+		// An inline set written as explicitly empty: stated in full, and empty.
+		"attrempty": {model.FactKnown, false, "",
+			"`ingress = []` states the whole set and the set is empty"},
+		// A range the provider plans and the API will not.
+		"backwards": {model.FactUnknown, false, "",
+			"this build cannot know which end of a reversed range was meant"},
 	}
 
 	for name, want := range cases {
@@ -99,7 +112,7 @@ func TestTheMapperAgreesWithARealPlan(t *testing.T) {
 // identifiers that are the whole reason a reader gets for the unknown never
 // fired on real input.
 func TestAGroupThatCannotBeSettledSaysSoOnARealPlan(t *testing.T) {
-	for _, name := range []string{"norules", "prefixlist"} {
+	for _, name := range []string{"norules", "prefixlist", "prefixlistrule"} {
 		t.Run(name, func(t *testing.T) {
 			found, ok := normalize(t, "real-groups").At("aws_security_group." + name)
 			if !ok {
@@ -107,9 +120,16 @@ func TestAGroupThatCannotBeSettledSaysSoOnARealPlan(t *testing.T) {
 			}
 			capabilities := found.Network
 
-			if len(capabilities.Unresolved) == 0 {
-				t.Fatal("an unsettled rule set reports no missing control")
-			}
+			// Named, not merely non-empty. Every AWS group carries the
+			// attachment control unconditionally, so "Unresolved is not empty"
+			// was satisfied whatever happened to the two identifiers this test
+			// says it exists for.
+			want := map[string]string{
+				"norules":        "AWS_SECURITY_GROUP_RULES_INCOMPLETE",
+				"prefixlist":     "AWS_SECURITY_GROUP_PREFIX_LIST_UNREAD",
+				"prefixlistrule": "AWS_SECURITY_GROUP_PREFIX_LIST_UNREAD",
+			}[name]
+			var said bool
 			for _, control := range capabilities.Unresolved {
 				if control.CheckID == "" || control.Reason == "" {
 					t.Fatalf("a missing control says nothing: %+v", control)
@@ -117,7 +137,52 @@ func TestAGroupThatCannotBeSettledSaysSoOnARealPlan(t *testing.T) {
 				if strings.Contains(control.Reason, "aws_security_group") {
 					t.Fatalf("the reason interpolates a plan value: %q", control.Reason)
 				}
+				if control.CheckID == want {
+					said = true
+				}
+			}
+			if !said {
+				t.Errorf("%s is not reported, so the unknown has no explanation", want)
 			}
 		})
 	}
+}
+
+// TestEveryGroupInTheRealPlanCarriesAnExpectation keeps the authority fixture
+// from growing a resource nothing asserts.
+//
+// A real plan is only an authority over what it is asked about. Two groups in it
+// carried no expectation at all, which is a fixture that looks like coverage and
+// is not -- and GCP's equivalent guard is what made that visible here.
+func TestEveryGroupInTheRealPlanCarriesAnExpectation(t *testing.T) {
+	graph := normalize(t, "real-groups")
+
+	var groups int
+	for _, found := range graph.Resources {
+		if found.Network == nil || found.Family != model.FamilyNetwork {
+			continue
+		}
+		// The standalone rule resources defer to their group and carry no
+		// capabilities of their own.
+		groups++
+		name := found.Address[strings.LastIndex(found.Address, ".")+1:]
+		if !expectedGroups[name] {
+			t.Errorf("%s is in the real plan and no case expects anything of it", found.Address)
+		}
+	}
+	if groups == 0 {
+		t.Fatal("the real plan holds no group")
+	}
+	if groups != len(expectedGroups) {
+		t.Errorf("the plan holds %d groups and %d are expected", groups, len(expectedGroups))
+	}
+}
+
+// expectedGroups names every group the real plan contains, so adding one to the
+// fixture without an expectation fails rather than passing quietly.
+var expectedGroups = map[string]bool{
+	"norules": true, "mixed": true, "prefixlist": true, "ipv6": true,
+	"protonum": true, "everyproto": true, "closed": true, "splitsource": true,
+	"protoall": true, "icmpv6": true, "prefixlistrule": true, "groupsourced": true,
+	"attrempty": true, "backwards": true,
 }

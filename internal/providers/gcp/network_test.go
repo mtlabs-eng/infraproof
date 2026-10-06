@@ -499,3 +499,57 @@ func TestADenyLimitedToOnePortCannotCoverAProtocolWithNoPorts(t *testing.T) {
 		t.Fatalf("opens %q, want icmp", got)
 	}
 }
+
+// TestADisabledDenyIsNotEnforced covers the half of `disabled` nothing tested.
+//
+// fw-disabled covers the subject being disabled, which is the direction that
+// over-reports. A disabled *deny* is the direction that hides a grant: the
+// network behaves as if the rule did not exist, so a disabled deny cancels
+// nothing, and removing the guard turned a real plan from BLOCK into PASS with
+// the whole suite green.
+//
+// Real `terraform plan` output: an allow of tcp/22 from 0.0.0.0/0 at priority
+// 1000 beside a disabled deny of the same at 500.
+func TestADisabledDenyIsNotEnforced(t *testing.T) {
+	graph := graphOf(t, "fw-deny-disabled")
+	found, ok := graph.At("google_compute_firewall.ssh")
+	if !ok {
+		t.Fatal("the fixture holds no granting firewall")
+	}
+	if found.Network == nil {
+		t.Fatal("the mapper produced no network capabilities")
+	}
+
+	if !found.Network.PublicIngress.IsKnown() || !found.Network.PublicIngress.Get() {
+		t.Fatalf("a disabled deny cancelled a grant (%v)", found.Network.PublicIngress.State)
+	}
+	if got := rendered(found.Network.OpenToAnyAddress); got != "tcp/22" {
+		t.Fatalf("opens %q, want tcp/22", got)
+	}
+}
+
+// TestADenyThisBuildCannotPlaceIsNotApplied covers the invariant the network
+// correlation exists to defend, which nothing held: a deny that cannot be shown
+// to reach this firewall must not be used to show it is closed.
+//
+// fw-denied-unknown-network asserts a closure where both firewalls reference the
+// same network, and fw-unknown-network only asserts the control is emitted.
+// Neither had a case where applying an unplaceable deny would change the verdict,
+// so deleting the skip survived the suite.
+func TestADenyThisBuildCannotPlaceIsNotApplied(t *testing.T) {
+	for _, fixture := range []string{"fw-deny-other-network-count", "fw-deny-network-conditional"} {
+		t.Run(fixture, func(t *testing.T) {
+			graph := graphOf(t, fixture)
+			found, ok := graph.At("google_compute_firewall.open")
+			if !ok {
+				found, ok = graph.At("google_compute_firewall.open[0]")
+			}
+			if !ok {
+				t.Fatalf("fixture %s has no granting firewall", fixture)
+			}
+			if !found.Network.PublicIngress.Get() {
+				t.Fatal("a deny this build cannot place was used to prove the set closed")
+			}
+		})
+	}
+}

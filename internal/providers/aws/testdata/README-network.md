@@ -71,12 +71,24 @@ Each fixture is one question:
 | `sg-prefix-list-rule` | the same question on a separate rule resource, where the field is singular |
 | `sg-group-sourced` | sources naming no address at all: another group, and the group itself |
 | `sg-split-source` | a source written as two halves of IPv4, which together are every address |
-| `sg-backwards-ports` | a range whose ends are the wrong way round, which the provider would refuse |
+| `sg-backwards-ports` | a range whose ends are the wrong way round, which the provider plans without complaint (real output) |
 | `sg-unreadable-protocol` | a protocol spelling this build does not know, which could be any protocol |
-| `real-groups` | real `terraform plan` output: nine groups, the authority the rest are checked against |
+| `real-groups` | real `terraform plan` output: 13 groups, 6 standalone rules and a VPC -- the authority the rest are checked against |
 
-`sg-malformed-port` holds `"from_port": "twenty-two"`, a JSON string where the
-schema says a number, and `sg-unreadable-element` holds a per-element unknown the
-format collapses. Neither is producible by Terraform. Both are kept because the
-guards they exercise are the right ones to have, and both are labelled here so
-nobody reads them as evidence about real output.
+Two fixtures here are not producible by Terraform. `sg-malformed-port` holds
+`"from_port": "twenty-two"`, a JSON string where the schema says a number, and
+`sg-unreadable-element` holds a per-element unknown the format collapses into a
+whole-attribute one. Both are kept because the guards they exercise are the right
+ones to have, and both are labelled so nobody reads them as evidence about real
+output.
+
+A third was listed here as unproducible and is not: the provider plans
+`from_port = 443, to_port = 22` with no error and no warning, so
+`sg-backwards-ports` is real output and the mapper's answer -- undetermined,
+because it cannot know which end was meant -- is about a shape authors can
+actually write.
+
+Besides `real-groups`, these are cut from real plan output and keep its shapes:
+`sg-prefix-list-inline`, `sg-prefix-list-rule`, `sg-group-sourced`,
+`sg-split-source`, `sg-explicitly-empty`, `sg-dynamic-block` and
+`sg-backwards-ports`.

@@ -424,8 +424,11 @@ func portsOf(protocol model.Protocol, from, to terraformplan.Value) (model.PortR
 		return model.PortRange{}, false
 	}
 	if low > high {
-		// A range the provider would refuse. This build does not know which end
-		// was meant, and a guess here is a guess about how much is open.
+		// A range the provider accepts and the API will not. `from_port = 443,
+		// to_port = 22` plans without a complaint -- a review measured it, after
+		// this comment claimed the provider refused it -- so the shape is real
+		// and this build does not know which end was meant. A guess here is a
+		// guess about how much is open.
 		return model.PortRange{}, false
 	}
 	return model.PortRange{From: low, To: high}, true

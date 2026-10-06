@@ -4,7 +4,15 @@
    "resources": [
     {
      "address": "azurerm_network_security_group.web",
-     "expressions": {},
+     "expressions": {
+      "security_rule": [
+       {
+        "name": {
+         "constant_value": "ssh"
+        }
+       }
+      ]
+     },
      "mode": "managed",
      "name": "web",
      "type": "azurerm_network_security_group"
@@ -38,10 +46,26 @@
      "location": "westeurope",
      "name": "web",
      "resource_group_name": "rg",
+     "security_rule": [
+      {
+       "access": "Allow",
+       "description": "",
+       "destination_address_prefix": "*",
+       "destination_address_prefixes": [],
+       "destination_application_security_group_ids": [],
+       "destination_port_range": "22",
+       "destination_port_ranges": [],
+       "direction": "Inbound",
+       "name": "ssh",
+       "priority": 100,
+       "protocol": "Tcp",
+       "source_address_prefix": "10.0.0.0/8",
+       "source_address_prefixes": [],
+       "source_application_security_group_ids": [],
+       "source_port_range": "*"
+      }
+     ],
      "tags": {}
-    },
-    "after_unknown": {
-     "security_rule": true
     },
     "before": null
    },
@@ -54,7 +78,6 @@
    "address": "azurerm_network_security_rule.open",
    "change": {
     "actions": [
-     "delete",
      "create"
     ],
     "after": {
@@ -71,7 +94,7 @@
      "priority": 100,
      "protocol": "Tcp",
      "resource_group_name": "rg",
-     "source_address_prefix": "*",
+     "source_address_prefix": "10.0.0.0/8",
      "source_address_prefixes": [],
      "source_application_security_group_ids": [],
      "source_port_range": "*"
@@ -79,25 +102,7 @@
     "after_unknown": {
      "id": true
     },
-    "before": {
-     "access": "Allow",
-     "description": "",
-     "destination_address_prefix": "*",
-     "destination_address_prefixes": [],
-     "destination_application_security_group_ids": [],
-     "destination_port_range": "22",
-     "destination_port_ranges": [],
-     "direction": "Inbound",
-     "name": "ssh",
-     "network_security_group_name": "web",
-     "priority": 100,
-     "protocol": "Tcp",
-     "resource_group_name": "rg",
-     "source_address_prefix": "*",
-     "source_address_prefixes": [],
-     "source_application_security_group_ids": [],
-     "source_port_range": "*"
-    }
+    "before": null
    },
    "mode": "managed",
    "name": "open",

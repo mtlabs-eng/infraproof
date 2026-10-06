@@ -4,9 +4,12 @@ Hand-authored, and the only cloud here where that is still true.
 
 AWS and GCP carry real `terraform plan` output beside their hand-written
 fixtures. Azure cannot: the provider acquires an AAD token before it finishes
-building, so `terraform plan` fails at `clientCredentialsToken: AADSTS700038`
-with no cloud to reach. Standing up something for it to authenticate against is
-not work this project will do.
+building, so `terraform plan` fails at `building account: could not acquire
+access token` before any resource is planned. It does reach
+`login.microsoftonline.com` and get an HTTP 400 for the placeholder credentials
+-- an earlier version of this paragraph said there was no cloud to reach, which
+is wrong about what the attempt does. Standing up something for it to
+authenticate against is not work this project will do.
 
 So these are shaped from the **authoritative provider schema**
 (`terraform providers schema -json`, which settles every Required/Optional/Computed
@@ -26,7 +29,7 @@ assumed:
   the application security group lists, `access` (`Allow`/`Deny`), `priority`
   (100–4096, **lower number is higher precedence**) and `direction`
   (`Inbound`/`Outbound`).
-- `security_rule` is a set of object, Optional **and Computed**, with 17 keys. An
+- `security_rule` is a set of object, Optional **and Computed**, with 16 keys. An
   unset inline set is therefore emitted as unknown rather than as `[]`, which is
   what the fixtures here said until a review pointed at the schema. A group plus
   separate `azurerm_network_security_rule` resources — the most common Azure shape
@@ -46,7 +49,12 @@ assumed:
   made here.
 - Only one of each range/ranges pair may be set per rule.
 - Inline `security_rule` blocks and `azurerm_network_security_rule` resources
-  conflict. That is what makes an inline set a complete one.
+  overwrite each other, and the provider **does not refuse the combination** --
+  the documentation advises against it. This line used to draw the opposite
+  conclusion ("that is what makes an inline set a complete one"), which is the
+  same false inference the milestone retracted for AWS after a review planned the
+  mix successfully. An inline set is the whole set as this plan writes it, and the
+  bound is reported rather than assumed away.
 - A priority must be unique within a set.
 
 Each fixture is one question:
@@ -94,3 +102,9 @@ Each fixture is one question:
 | `nsg-unreadable-port` | a port the plan has not determined |
 | `nsg-unreadable-protocol` | a protocol spelling this build does not know |
 | `nsg-unknown-service-tag` | a service tag this build has not heard of, which could be every address |
+| `nsg-explicitly-empty` | `security_rule = []`: the whole set stated, and it is empty |
+| `nsg-inline-and-separate` | the mix the provider does not refuse, where the two forms overwrite each other |
+| `nsg-icmp-deny-one-port` | a deny limited to one port, which cannot reach a protocol that has none |
+| `nsg-deny-one-host-above` | a deny limited to one destination, above the allow, so it reaches nothing |
+| `nsg-deny-one-host-other-protocol` | the same deny on another protocol entirely |
+| `nsg-deny-one-host-other-port` | the same deny on a port the allow does not use, so nothing is narrowed |

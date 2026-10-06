@@ -249,12 +249,6 @@ func resolve(rules []inbound) (opened []model.OpenRange, approximated, narrowedB
 			switch {
 			case deny.allow || !deny.inbound || !deny.anySource || deny.unread:
 				continue
-			case !deny.anyDestination:
-				// The deny reaches some of what the allow reaches, and "some"
-				// cannot prove prevention. The grant stands, which is the safe
-				// direction, and the narrowing is reported.
-				narrowedByDestination = true
-				continue
 			case deny.priority >= allow.priority:
 				// Azure requires a priority to be unique within a set, so this
 				// is the deny that comes after: it never reaches traffic the
@@ -268,6 +262,19 @@ func resolve(rules []inbound) (opened []model.OpenRange, approximated, narrowedB
 				// learns to ignore the one that matters.
 				if allow.protocol == model.ProtocolEvery && meets(allow.ports, deny.ports) {
 					approximated = true
+				}
+				continue
+			case !deny.anyDestination:
+				// The deny reaches some of what the allow reaches, and "some"
+				// cannot prove prevention. The grant stands, which is the safe
+				// direction, and the narrowing is reported.
+				//
+				// Last of the four, and gated the way its sibling is. Raised
+				// before the priority and the protocol were considered, it
+				// reported a deny above the allow -- which reaches nothing --
+				// and a deny on another protocol as narrowing something.
+				if meets(allow.ports, deny.ports) {
+					narrowedByDestination = true
 				}
 				continue
 			}

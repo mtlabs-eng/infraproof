@@ -136,12 +136,37 @@ changed is recorded in the commits; what follows is what the build actually does
   add, no error and no warning. The documentation advises against mixing; nothing
   prevents it.
 - **An Optional and Computed attribute that nobody wrote takes the provider's
-  documented default.** `direction`, `ingress` and `security_rule` are all emitted
-  as unknown when the author leaves them out, which is the common case rather than
-  an edge one. The configuration block says which arguments were written, so the
-  default is applied only where the author was silent; an attribute somebody set
-  from an unresolvable value stays unknown. Without a configuration block — a
-  sanitized plan — nothing is assumed either way.
+  documented default.** `direction`, `ingress` and `security_rule` are the three,
+  and all are emitted as unknown when the author leaves them out — the common case
+  rather than an edge one. `priority` and `disabled` are Optional and *not*
+  Computed, so an unknown value there is always author-written and no default
+  applies; the code applied the mechanism to them too and its comments claimed
+  they were Computed, which the authoritative schema disproves.
+  - The question is whether the configuration **recorded this resource's
+    arguments**, not whether it declares the resource. Terraform emits an entry
+    with no `expressions` object — a body that is only a `dynamic` block does it,
+    and a sanitizer stripping expressions does it to everything — and reading that
+    as an author who wrote nothing produced `PASS`, exit 0, on a firewall opening
+    SSH to `0.0.0.0/0`.
+  - A `dynamic` block is absent from a resource's recorded arguments altogether,
+    so an argument's **absence** never proves nothing writes it. Its **presence**
+    does, because block and attribute syntax cannot both name one attribute, and
+    that is the direction closure is decided in.
+  - Without a configuration — a sanitized plan — nothing is assumed either way.
+- **Correlation between two resources is by instance, not by address.** A
+  reference carries its target with count and `for_each` keys stripped, and the
+  keys are the only thing separating one instance from its sibling. Comparing the
+  stripped addresses read a deny on `google_compute_network.vpc["b"]` as applying
+  to a firewall on `vpc["a"]` and proved the grant closed. The question has three
+  answers — one instance, no reference, or undecidable — and an undecidable deny
+  is skipped and reported rather than allowed to settle anything. A reference
+  naming no instance of a repeated target, or an attribute naming two targets, is
+  undecidable.
+- **A deny is only applied as far as it can be shown to reach.** Its source, its
+  destination, its target scope, its protocol, its priority and **its ports** all
+  bound it. The last was the one place a deny was applied without being read: a
+  protocol with no ports has nothing to subtract, so a deny limited to port 80
+  cancelled an ICMP-from-anywhere grant whole, in both ordered clouds.
 - **Two approximations, both upward, each with its own identifier.** A deny
   narrower by protocol than the allow it meets cannot be subtracted: a range
   carries one protocol and "every protocol except TCP" is not one. A deny narrower
@@ -171,6 +196,10 @@ changed is recorded in the commits; what follows is what the build actually does
 - **Azure's and GCP's platform defaults are relied on, not modelled.** Both deny
   inbound traffic no rule allows, which is what makes a readable set with no grant
   a proven closure. The default rules themselves are not in any plan.
+- **A port range the provider plans is not a port range the API accepts.**
+  `from_port = 443, to_port = 22` plans with no error and no warning. This build
+  answers UNKNOWN because it cannot know which end was meant; the milestone first
+  claimed the provider refused the shape, which a review disproved by planning it.
 - **The fixtures now include real plans, for two clouds of three.** AWS and GCP
   carry genuine `terraform show -json` output committed as `real-*.json`, which is
   this milestone's authority test and what caught the Optional-and-Computed
