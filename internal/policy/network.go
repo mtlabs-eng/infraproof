@@ -100,7 +100,19 @@ func ingressFinding(resource model.NormalizedResource, capabilities model.Networ
 	claim := "The change permits ingress from any address, and the intent contract does not declare " +
 		"which ports may be reachable from any address."
 	remediation := "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+	// A violation outranks a question: an undeclared port open to the internet is
+	// a statement the contract contradicts, a protocol a port list cannot
+	// describe is a question it cannot answer, and a disposition must never be
+	// lowered by an additional fact. The claim has to account for both when both
+	// are present, or part of a BLOCK's evidence supports a conclusion the claim
+	// never states.
 	switch {
+	case stated && len(exceeding) > 0 && len(undescribable) > 0:
+		disposition = evidence.DispositionBlock
+		claim = "The change permits ingress from any address on a port the intent contract does not " +
+			"declare as reachable from any address, and on a protocol the contract cannot describe."
+		remediation = "Remove the rule that permits ingress from any address, declare the port in the " +
+			"intent contract, and confirm that the protocol is intended to be reachable from any address."
 	case stated && len(exceeding) > 0:
 		disposition = evidence.DispositionBlock
 		claim = "The change permits ingress from any address on a port the intent contract does not " +
@@ -108,7 +120,7 @@ func ingressFinding(resource model.NormalizedResource, capabilities model.Networ
 		remediation = "Remove the rule that permits ingress from any address, or declare the port in the intent contract."
 	case len(undescribable) > 0:
 		claim = "The change permits ingress from any address on a protocol the intent contract cannot " +
-			"describe, because the protocol has no ports."
+			"describe, because a port declaration can neither permit nor forbid it."
 		remediation = "Confirm that this protocol is intended to be reachable from any address, or remove the rule."
 	}
 
@@ -133,10 +145,18 @@ func ingressFinding(resource model.NormalizedResource, capabilities model.Networ
 // beyondDeclaration splits what the change opens into the ranges the contract did
 // not declare and the ranges it cannot describe at all.
 //
-// A declared range permits another only by containing all of it. Partial overlap
-// is not permission: a contract declaring 8000-8100 has not declared 7999, and
-// reading an overlap as permission is how a declaration comes to cover a port
-// nobody wrote down.
+// A declaration permits a range only by covering all of it, between all the
+// ranges it names. Partial overlap is not permission: a contract declaring
+// 8000-8100 has not declared 7999, and reading an overlap as permission is how a
+// declaration comes to cover a port nobody wrote down. The union matters as much
+// -- asking whether any one declared range contained the whole opened range
+// reported a violation on a contract declaring 80 and 81 against an opened
+// 80-81, with a claim untrue of every port involved.
+//
+// Every protocol at once is never fully permitted by a port list, whatever its
+// ports. It carries the protocols that have no ports, and this build's own
+// doctrine is that a port declaration can neither permit nor forbid those. ICMP
+// alone needed a human; ICMP as part of "every protocol" was permitted outright.
 func beyondDeclaration(opened []model.OpenRange, declared []model.PortRange,
 	stated bool) (exceeding, undescribable []model.OpenRange) {
 
@@ -145,11 +165,19 @@ func beyondDeclaration(opened []model.OpenRange, declared []model.PortRange,
 			undescribable = append(undescribable, open)
 			continue
 		}
-		if stated && slices.ContainsFunc(declared, func(permitted model.PortRange) bool {
-			return permitted.Contains(open.Ports)
-		}) {
+		if open.Protocol == model.ProtocolEvery {
+			// A port declaration cannot describe all of this, so it needs a
+			// human whatever the ports say. The ports are still compared below,
+			// because an undeclared one is a violation in its own right.
+			undescribable = append(undescribable, open)
+		}
+		if stated && model.Covers(declared, open.Ports) {
 			continue
 		}
+		// Every protocol with an undeclared port is both: a question the port
+		// list cannot answer and a port it contradicts. It lands in both lists
+		// and renderOpen compacts the repeat, so the observed value says it once
+		// while the disposition accounts for both.
 		exceeding = append(exceeding, open)
 	}
 	return exceeding, undescribable
@@ -199,10 +227,10 @@ func renderOpen(ranges []model.OpenRange) string {
 	texts := make([]string, 0, len(ranges))
 	for _, open := range ranges {
 		if !open.Protocol.HasPorts() {
-			texts = append(texts, string(open.Protocol))
+			texts = append(texts, open.Protocol.Name())
 			continue
 		}
-		texts = append(texts, string(open.Protocol)+"/"+renderRange(open.Ports))
+		texts = append(texts, open.Protocol.Name()+"/"+renderRange(open.Ports))
 	}
 	// Sorted and deduplicated, so two runs over one plan say the same thing and
 	// a rule set that opens one port twice says it once.
@@ -228,12 +256,28 @@ func renderRange(ports model.PortRange) string {
 }
 
 // ingressEvidence locates the fact and the ranges a finding rests on.
+// The deciding fact first, because it is the one citation a reader cannot do
+// without, and the ranges carry their own sources -- so dropping the fact's
+// provenance left the list non-empty and every assertion satisfied.
+//
+// Deduplicated: the fact and the ranges cite overlapping attributes, and a reader
+// shown the same source three times stops reading the list.
 func ingressEvidence(capabilities model.NetworkCapabilities, ranges []model.OpenRange) []evidence.EvidenceRef {
 	refs := referencesOf(capabilities.PublicIngress)
 	for _, open := range ranges {
 		refs = append(refs, locate(open.Sources)...)
 	}
-	return refs
+
+	seen := make(map[evidence.EvidenceRef]bool, len(refs))
+	unique := make([]evidence.EvidenceRef, 0, len(refs))
+	for _, ref := range refs {
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		unique = append(unique, ref)
+	}
+	return unique
 }
 
 // undeterminedIngress reports ingress the rule could not settle.

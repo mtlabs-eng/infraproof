@@ -496,3 +496,196 @@ func TestAFindingStatesNoExpectationNobodyDeclared(t *testing.T) {
 		t.Fatalf("expected = %q, want the declared ports", got)
 	}
 }
+
+// TestADeclarationPermitsWhatItsRangesCoverTogether covers the arithmetic of the
+// declaration side, which asked whether any one declared range contained the
+// whole opened range and never whether the declaration covered it between them.
+//
+// A contract declaring 80 and 81 has declared 80-81. Reporting a BLOCK there
+// produced a finding whose claim -- "on a port the intent contract does not
+// declare" -- was untrue of every port involved, and a BLOCK is required to rest
+// on deterministic evidence rather than on arithmetic.
+func TestADeclarationPermitsWhatItsRangesCoverTogether(t *testing.T) {
+	cases := map[string]struct {
+		declared []model.PortRange
+		opened   model.OpenRange
+		findings int
+		why      string
+	}{
+		"two adjacent single ports covering a range": {
+			[]model.PortRange{port(80), port(81)}, tcp(80, 81), 0,
+			"80 and 81 declared is 80-81 declared"},
+		"overlapping declarations covering a range": {
+			[]model.PortRange{{From: 8000, To: 8050}, {From: 8040, To: 8100}}, tcp(8000, 8100), 0,
+			"the two together cover every port opened; overlap is not a gap"},
+		"three ranges meeting exactly": {
+			[]model.PortRange{{From: 1, To: 10}, {From: 11, To: 20}, {From: 21, To: 30}},
+			tcp(1, 30), 0, "a declaration written in pieces is still a declaration"},
+		// The direction that must not move: a gap in the declaration is a port
+		// nobody declared, and reading the union as permission must not paper
+		// over it.
+		"two ranges with a gap": {
+			[]model.PortRange{{From: 1, To: 10}, {From: 12, To: 30}}, tcp(1, 30), 1,
+			"port 11 is opened and declared nowhere"},
+		"a declaration one port short": {
+			[]model.PortRange{port(80)}, tcp(80, 81), 1,
+			"81 is opened and not declared"},
+		"partial overlap is still not permission": {
+			[]model.PortRange{{From: 8000, To: 8100}}, tcp(7999, 8000), 1,
+			"7999 is opened and not declared"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			result := policy.NetworkExposure(declaring(c.declared), open(c.opened))
+
+			if got := len(result.Findings); got != c.findings {
+				t.Fatalf("%d findings, want %d: %s\n%+v", got, c.findings, c.why, result.Findings)
+			}
+		})
+	}
+}
+
+// TestEveryProtocolIsNeverFullyPermittedByAPortList covers the one protocol a
+// port declaration cannot describe while still having ports.
+//
+// `every` carries ports, so it was compared by ports alone and a declaration of
+// 0-65535 permitted it outright -- including the port-less protocols inside it
+// that this build's own doctrine says a port list can neither permit nor forbid.
+// ICMP alone needed a human; ICMP plus everything else did not.
+func TestEveryProtocolIsNeverFullyPermittedByAPortList(t *testing.T) {
+	everything := model.OpenRange{
+		Protocol: model.ProtocolEvery,
+		Ports:    model.EveryPort(),
+		Sources:  tcp(0, 0).Sources,
+	}
+	onePort := model.OpenRange{
+		Protocol: model.ProtocolEvery,
+		Ports:    port(443),
+		Sources:  tcp(0, 0).Sources,
+	}
+
+	for name, opened := range map[string]model.OpenRange{
+		"every port": everything,
+		"one port":   onePort,
+	} {
+		t.Run(name, func(t *testing.T) {
+			declaredEverything := []model.PortRange{model.EveryPort()}
+			result := policy.NetworkExposure(declaring(declaredEverything), open(opened))
+
+			if len(result.Findings) != 1 {
+				t.Fatalf("a grant on every protocol produced %d findings; a port list cannot permit "+
+					"the protocols inside it that have no ports", len(result.Findings))
+			}
+			if got := result.Findings[0].Claim; !strings.Contains(got, "protocol") {
+				t.Errorf("the claim does not mention the protocol: %q", got)
+			}
+		})
+	}
+
+	// And ICMP alone, which already worked, has to keep answering the same way:
+	// the two are the same question and must not diverge.
+	icmp := model.OpenRange{Protocol: model.ProtocolICMP, Sources: tcp(0, 0).Sources}
+	result := policy.NetworkExposure(declaring([]model.PortRange{model.EveryPort()}), open(icmp))
+	if len(result.Findings) != 1 {
+		t.Fatalf("ICMP alone produced %d findings", len(result.Findings))
+	}
+}
+
+// TestAContractViolationOutranksAQuestion covers the precedence between the two
+// dispositions this rule can reach, which nothing tested.
+//
+// An undeclared port open to the internet is a statement the contract
+// contradicts. A port-less protocol is a question the contract cannot answer. A
+// disposition must never be lowered by an additional fact, so when both are
+// present the answer is BLOCK -- and reversing the two switch arms turned a
+// contract violation into a warning with a green suite.
+func TestAContractViolationOutranksAQuestion(t *testing.T) {
+	undeclared := tcp(22, 22)
+	portless := model.OpenRange{Protocol: model.ProtocolICMP, Sources: tcp(0, 0).Sources}
+	declared := []model.PortRange{port(443)}
+
+	result := policy.NetworkExposure(declaring(declared), open(undeclared, portless))
+
+	if len(result.Findings) != 1 {
+		t.Fatalf("%d findings, want one finding about the set", len(result.Findings))
+	}
+	finding := result.Findings[0]
+	if finding.Disposition != evidence.DispositionBlock {
+		t.Fatalf("disposition = %q, want %q: an undeclared port open to the internet is a violation "+
+			"whether or not something else alongside it needs a human",
+			finding.Disposition, evidence.DispositionBlock)
+	}
+
+	// And the claim has to account for everything the Observed value carries, or
+	// part of a BLOCK's evidence supports a conclusion the claim never states.
+	if finding.Observed == nil {
+		t.Fatal("the finding observes nothing")
+	}
+	observed := finding.Observed.Value.Display()
+	if !strings.Contains(observed, "tcp/22") || !strings.Contains(observed, "icmp") {
+		t.Fatalf("observed = %q, want both facts", observed)
+	}
+	if !strings.Contains(finding.Claim, "port") || !strings.Contains(finding.Claim, "protocol") {
+		t.Fatalf("the claim covers only part of what it observed: %q\nobserved: %q",
+			finding.Claim, observed)
+	}
+}
+
+// TestTheDecidingFactIsAlwaysCited covers the one citation a reader cannot do
+// without. The ranges carry their own sources, so dropping the provenance of the
+// fact the verdict rests on left the evidence list non-empty and every existing
+// assertion satisfied.
+func TestTheDecidingFactIsAlwaysCited(t *testing.T) {
+	result := policy.NetworkExposure(declaring([]model.PortRange{port(443)}), open(tcp(22, 22)))
+
+	if len(result.Findings) != 1 {
+		t.Fatalf("%d findings, want one", len(result.Findings))
+	}
+	var cited bool
+	for _, ref := range result.Findings[0].Evidence {
+		if ref.Path == "ingress[0].cidr_blocks[0]" {
+			cited = true
+		}
+	}
+	if !cited {
+		t.Fatalf("the fact the verdict rests on is not cited: %+v", result.Findings[0].Evidence)
+	}
+
+	// And no citation appears twice. The deciding fact and the ranges overlap,
+	// so a reader was shown each source two and three times over, which is how
+	// an evidence list stops being read.
+	seen := map[evidence.EvidenceRef]bool{}
+	for _, ref := range result.Findings[0].Evidence {
+		if seen[ref] {
+			t.Errorf("the evidence cites %+v twice", ref)
+		}
+		seen[ref] = true
+	}
+}
+
+// TestNoRangeEverCarriesAProtocolWithNoName covers the mandatory observed fact.
+//
+// ProtocolUnrecognized is the empty string, deliberately: it is the zero value so
+// that a protocol nobody read cannot be mistaken for one that was. But a range
+// carrying it renders as nothing, and a finding whose one required observed fact
+// is "" tells a reader less than no finding would. The mappers now refuse such a
+// protocol outright, and this is the assertion that keeps them doing it.
+func TestNoRangeEverCarriesAProtocolWithNoName(t *testing.T) {
+	unnameable := model.OpenRange{Protocol: model.ProtocolUnrecognized, Sources: tcp(0, 0).Sources}
+
+	result := policy.NetworkExposure(declaring([]model.PortRange{port(443)}),
+		open(unnameable, tcp(22, 22)))
+
+	if len(result.Findings) != 1 {
+		t.Fatalf("%d findings, want one", len(result.Findings))
+	}
+	observed := result.Findings[0].Observed
+	if observed == nil {
+		t.Fatal("the finding observes nothing")
+	}
+	got := observed.Value.Display()
+	if got == "" || strings.HasPrefix(got, ",") || strings.Contains(got, ", ,") {
+		t.Fatalf("observed = %q: a range whose protocol has no name reached the reader as nothing", got)
+	}
+}

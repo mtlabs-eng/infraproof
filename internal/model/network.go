@@ -23,6 +23,22 @@ const (
 	ProtocolEvery Protocol = "every"
 )
 
+// Name writes a protocol for a reader.
+//
+// ProtocolUnrecognized is the empty string on purpose -- it is the zero value, so
+// a protocol nobody read cannot be mistaken for one that was -- and that makes it
+// render as nothing. A finding whose one mandatory observed fact is "" tells a
+// reader less than no finding would, and an empty entry beside a readable one
+// came out as a leading comma. The mappers refuse an unnameable protocol rather
+// than emitting a range carrying this, so Name is the backstop and not the
+// expected path.
+func (p Protocol) Name() string {
+	if p == ProtocolUnrecognized {
+		return "a protocol this build cannot name"
+	}
+	return string(p)
+}
+
 // HasPorts reports whether a port constrains this protocol at all.
 //
 // It is the distinction the network rule turns on. A contract declares ports, so
