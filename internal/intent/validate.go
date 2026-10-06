@@ -260,7 +260,7 @@ func validateFamilyFields(i int, resource ResourceIntent, present resourcePresen
 			}
 			if overlap, found := overlapping(accepted, parsed); found {
 				errs = append(errs, fmt.Errorf(
-					"resources[%d].public_ports[%d] is %q, whose ports %s already declares; "+
+					"resources[%d].public_ports[%d] is %q, and %s is already declared; "+
 						"a port may be declared once",
 					i, j, quotable(strings.TrimSpace(text)), renderPorts(overlap)))
 				continue
