@@ -201,3 +201,56 @@ func TestObjectStorageIsUntouched(t *testing.T) {
 		t.Fatal("a bucket carries network capabilities")
 	}
 }
+
+// TestASourceThisBuildCannotResolveIsNotReadAsNarrow covers the sources the
+// mapper used to ignore entirely.
+//
+// AWS documents five ways to name who a rule admits: cidr_blocks,
+// ipv6_cidr_blocks, prefix_list_ids, security_groups and self. The first two are
+// addresses this build reads. The last two name other groups or the group
+// itself, which is narrower than any address by construction. A managed prefix
+// list is neither: it is a list of addresses held somewhere this plan does not
+// reach, and it may contain 0.0.0.0/0.
+//
+// Ignoring it reported a group whose only rule admits the entire internet as
+// deterministically closed, which is the under-reporting failure this project
+// ranks worst.
+func TestASourceThisBuildCannotResolveIsNotReadAsNarrow(t *testing.T) {
+	for _, fixture := range []string{"sg-prefix-list-inline", "sg-prefix-list-rule"} {
+		t.Run(fixture, func(t *testing.T) {
+			capabilities := securityGroup(t, fixture).Network
+
+			if capabilities.PublicIngress.IsKnown() {
+				t.Fatalf("a rule sourced from a prefix list was settled as %v",
+					capabilities.PublicIngress.Get())
+			}
+			if len(capabilities.OpenToAnyAddress) != 0 {
+				t.Fatalf("an undetermined source opens %v", capabilities.OpenToAnyAddress)
+			}
+			var said bool
+			for _, control := range capabilities.Unresolved {
+				if strings.Contains(control.Reason, "prefix list") {
+					said = true
+				}
+			}
+			if !said {
+				t.Error("the unresolved source is not named, so a reader cannot tell what would settle it")
+			}
+		})
+	}
+}
+
+// TestAGroupAndSelfSourcedRuleIsStillClosed is the other side, and it has to
+// hold or the fix above turns every ordinary rule into an unknown. A rule
+// admitting another security group, or the group itself, names no address and
+// reaches no part of the internet.
+func TestAGroupAndSelfSourcedRuleIsStillClosed(t *testing.T) {
+	capabilities := securityGroup(t, "sg-group-sourced").Network
+
+	if !capabilities.PublicIngress.IsKnown() {
+		t.Fatal("a rule sourced from another security group was read as undetermined")
+	}
+	if capabilities.PublicIngress.Get() {
+		t.Fatal("a rule naming no address was read as permitting ingress from any address")
+	}
+}

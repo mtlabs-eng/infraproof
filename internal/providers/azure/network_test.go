@@ -93,7 +93,11 @@ func TestIngressDetermination(t *testing.T) {
 		"nsg-port-list": {model.FactKnown, true, "tcp/80, tcp/443"},
 		// The ordering, read rather than assumed.
 		"nsg-denied-below": {model.FactKnown, false, ""},
-		"nsg-deny-above":   {model.FactKnown, true, "tcp/22"},
+		// A deny that reaches only private addresses cannot cancel a grant open
+		// to the world. This mapper was right about it and nothing proved it,
+		// which is how its GCP twin shipped wrong.
+		"nsg-deny-private-source": {model.FactKnown, true, "tcp/22"},
+		"nsg-deny-above":          {model.FactKnown, true, "tcp/22"},
 		// A deny covering part of the range leaves the rest open, exactly.
 		"nsg-deny-partial-ports": {model.FactKnown, true, "tcp/20-21, tcp/23-30"},
 		// Outbound says nothing about who can reach in.
@@ -113,6 +117,11 @@ func TestIngressDetermination(t *testing.T) {
 		// A service tag this build does not interpret. Azure adds them, and one
 		// nobody here has heard of could be every address.
 		"nsg-unknown-service-tag": {model.FactUnknown, false, ""},
+		// Esp and Ah are real protocols this build cannot name. It used to
+		// report them as a grant on an unnameable protocol, which made two
+		// different protocols compare equal; they are undetermined now, as AWS
+		// already reported them.
+		"nsg-esp": {model.FactUnknown, false, ""},
 		// Two rules at one priority, which Azure refuses. The grant stands,
 		// because letting an equal deny win would hide a grant on a set the
 		// platform would not have accepted in the first place.
@@ -265,20 +274,14 @@ func TestObjectStorageIsUntouched(t *testing.T) {
 // treats both the same way -- a protocol a port list cannot describe needs a
 // human -- so nothing downstream changes, and that is exactly why the mapper has
 // to be the thing that keeps them apart.
-func TestAProtocolThisBuildDoesNotInterpretStaysUnrecognized(t *testing.T) {
+func TestAProtocolThisBuildCannotNameIsUndetermined(t *testing.T) {
 	capabilities := securityGroup(t, "nsg-esp").Network
 
-	if !capabilities.PublicIngress.IsKnown() || !capabilities.PublicIngress.Get() {
-		t.Fatal("a rule opening Esp to any address was not read as a grant")
+	if capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("a protocol this build cannot name was settled as %v", capabilities.PublicIngress.Get())
 	}
-	if len(capabilities.OpenToAnyAddress) != 1 {
-		t.Fatalf("opens %+v, want one range", capabilities.OpenToAnyAddress)
-	}
-	open := capabilities.OpenToAnyAddress[0]
-	if open.Protocol != model.ProtocolUnrecognized {
-		t.Fatalf("protocol = %q, want it unrecognized rather than folded into another", open.Protocol)
-	}
-	if open.Protocol.HasPorts() {
-		t.Fatal("a protocol this build does not interpret claims to have ports")
+	if len(capabilities.OpenToAnyAddress) != 0 {
+		t.Fatalf("opens %+v, want nothing: a range whose protocol has no name renders as an empty string",
+			capabilities.OpenToAnyAddress)
 	}
 }

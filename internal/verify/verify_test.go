@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/render"
@@ -410,7 +411,10 @@ func baselineKey(fixture string) string {
 func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 	intent := filepath.Join("testdata", "baseline", "intent.json")
 
-	compared := 0
+	// Atomic because subtests may run in parallel; nothing here asks for that
+	// today, and a counter that silently undercounts if one ever does would
+	// weaken the only assertion holding this test up.
+	var compared atomic.Int64
 	for _, fixture := range planFixtures(t) {
 		golden := filepath.Join("testdata", "baseline", baselineKey(fixture))
 		want, err := os.ReadFile(golden)
@@ -425,7 +429,13 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 		t.Run(fixture, func(t *testing.T) {
 			bundle, err := verify.FromFiles(intent, fixture, verify.Options{})
 			if err != nil {
-				t.Skipf("this fixture is not verifiable: %v", err)
+				// Not a skip. A fixture that had a baseline and stopped being
+				// verifiable is the verdict change this test exists to catch --
+				// a stricter parse, a new refusal, a recovered panic. Skipping
+				// it hid all 63 comparisons behind a green run, which an
+				// independent review demonstrated by making every verification
+				// return an error and watching this test pass.
+				t.Fatalf("this fixture had a baseline and is no longer verifiable: %v", err)
 			}
 			got, err := render.JSON(bundle)
 			if err != nil {
@@ -435,13 +445,17 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 				t.Fatalf("this plan's verdict changed since the baseline was recorded\n--- now ---\n%s\n--- baseline ---\n%s",
 					got, want)
 			}
+			compared.Add(1)
 		})
-		compared++
 	}
 
 	// A comparison that compared nothing passes. The count is what keeps this
 	// from going quiet if the keys, the paths or the fixtures move.
-	if compared < 60 {
-		t.Fatalf("compared %d fixtures against their baselines, which is too few to be the set", compared)
+	//
+	// It is incremented inside the subtest, after the comparison. Counting
+	// fixtures that had a baseline instead counted intent rather than work: the
+	// number reached 63 whether or not a single bundle was ever rendered.
+	if total := compared.Load(); total < 60 {
+		t.Fatalf("compared %d fixtures against their baselines, which is too few to be the set", total)
 	}
 }

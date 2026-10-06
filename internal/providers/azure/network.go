@@ -420,7 +420,11 @@ func protocolOf(value terraformplan.Value) (model.Protocol, bool) {
 	case "icmp":
 		return model.ProtocolICMP, true
 	case "esp", "ah":
-		return model.ProtocolUnrecognized, true
+		// Real protocols with no ports that this build cannot interpret. They
+		// used to be reported as a grant on an unnameable protocol, which made
+		// Esp and Ah compare equal and let a deny on one cancel an allow on the
+		// other -- and rendered an empty string as the observed fact.
+		return model.ProtocolUnrecognized, false
 	default:
 		return model.ProtocolUnrecognized, false
 	}

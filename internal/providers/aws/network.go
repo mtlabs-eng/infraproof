@@ -18,6 +18,8 @@ const (
 const (
 	checkRuleSetIncomplete = "AWS_SECURITY_GROUP_RULES_INCOMPLETE"
 	checkAttachmentUnknown = "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN"
+	checkPrefixListUnread  = "AWS_SECURITY_GROUP_PREFIX_LIST_UNREAD"
+	checkRuleSetOpenEnded  = "AWS_SECURITY_GROUP_RULES_MAY_EXIST_ELSEWHERE"
 )
 
 // securityGroup normalizes a security group and the ingress rules the plan joins
@@ -65,10 +67,17 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	for i := range inline.Len() {
 		found = found.and(inlineRule(subject.Address, inline.At(i), i))
 	}
-	if inline.State() != terraformplan.StateKnown && inline.State() != terraformplan.StateAbsent {
-		// The set itself could not be read. A port, protocol or address the
-		// parser could not read is unknown rather than absent, and so is a whole
-		// rule list.
+	// `ingress` is Optional and Computed, so a group that writes no inline rules
+	// has the attribute emitted as unknown rather than empty -- which is what a
+	// real create plan does and what no hand-written fixture here did. An
+	// unknown nobody wrote is not an unreadable rule set; it is the absence of
+	// one, and reading it as unreadable threw away a grant provable from a
+	// separate rule resource.
+	noInlineRules := declared.Unwritten(subject, "ingress")
+	if !noInlineRules &&
+		inline.State() != terraformplan.StateKnown && inline.State() != terraformplan.StateAbsent {
+		// A port, protocol or address the parser could not read is unknown
+		// rather than absent, and so is a whole rule list somebody did write.
 		found.unread = true
 	}
 
@@ -81,13 +90,23 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 
 	capabilities := model.NetworkCapabilities{
 		OpenToAnyAddress: found.ranges,
-		Unresolved:       m.ingressGaps(subject),
+		Unresolved:       append(m.ingressGaps(subject), found.gaps...),
 	}
 
-	// The whole set is in the plan only when the group writes it inline. The
-	// provider refuses to mix the two forms, so inline rules mean there are no
-	// separate ones -- and no separate ones in this plan does not mean none
-	// anywhere.
+	// Closure is provable only from an inline set, and only as far as this plan
+	// goes.
+	//
+	// This used to say the provider refuses to mix the two forms, so an inline
+	// set had to be the whole set. It does not refuse: a plan carrying inline
+	// `ingress` and an `aws_vpc_security_group_ingress_rule` on the same group
+	// plans without an error or even a warning -- the documentation only advises
+	// against it. So an inline set is the whole set as this plan writes it, and
+	// a rule resource in a module the plan does not contain could still add to
+	// it. That bound is reported rather than assumed away, which is what a
+	// non-required unknown is for.
+	//
+	// A plan that does mix them cannot be settled either way: the two forms
+	// overwrite each other, so neither states the result.
 	stated := inline.Len() > 0 && len(separate) == 0
 
 	switch {
@@ -97,6 +116,16 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		capabilities.PublicIngress = model.Unknown[bool](found.cited...)
 	case stated:
 		capabilities.PublicIngress = model.Known(false, found.cited...)
+		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
+			CheckID: checkRuleSetOpenEnded,
+			Reason: "The group writes its rules inline and the provider does not refuse a separate " +
+				"ingress-rule resource on the same group, so a rule declared outside this plan " +
+				"could admit more than the set written here.",
+			Sources: []model.Provenance{
+				declared.Source(model.CloudAWS, subject.Address, "ingress", inline),
+			},
+			Cloud: model.CloudAWS,
+		})
 	default:
 		capabilities.PublicIngress = model.Unknown[bool](found.cited...)
 		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
@@ -146,6 +175,9 @@ type openness struct {
 	// unread records that something the answer depends on could not be read, so
 	// this rule can neither open anything nor prove that it does not.
 	unread bool
+	// gaps are the controls this rule left unresolved, which is how an unknown
+	// from one rule names its own reason rather than borrowing the set's.
+	gaps   []model.MissingControl
 	ranges []model.OpenRange
 	// cited is what was read to decide, whichever way it went. A fact that
 	// concluded nothing still has to say what it looked at.
@@ -157,6 +189,7 @@ type openness struct {
 func (o openness) and(other openness) openness {
 	return openness{
 		unread: o.unread || other.unread,
+		gaps:   append(o.gaps, other.gaps...),
 		ranges: append(o.ranges, other.ranges...),
 		cited:  append(o.cited, other.cited...),
 	}
@@ -168,6 +201,13 @@ func inlineRule(address string, block terraformplan.Value, index int) openness {
 	addresses := []reachable{
 		{value: block.Field("cidr_blocks"), path: path + ".cidr_blocks", list: true},
 		{value: block.Field("ipv6_cidr_blocks"), path: path + ".ipv6_cidr_blocks", list: true},
+		// AWS names five kinds of source. security_groups and self name other
+		// groups or this one, which is narrower than any address by
+		// construction, so they are read as reaching nothing public. A prefix
+		// list is neither: ignoring it reported a group whose only rule admits
+		// the entire internet as deterministically closed.
+		{value: block.Field("prefix_list_ids"), path: path + ".prefix_list_ids",
+			list: true, opaque: true, gap: checkPrefixListUnread},
 	}
 	return rule(address, path, addresses,
 		block.Field("protocol"), path+".protocol",
@@ -184,6 +224,8 @@ func standaloneRule(change terraformplan.ResourceChange) openness {
 	addresses := []reachable{
 		{value: change.After.Field("cidr_ipv4"), path: "cidr_ipv4"},
 		{value: change.After.Field("cidr_ipv6"), path: "cidr_ipv6"},
+		{value: change.After.Field("prefix_list_id"), path: "prefix_list_id",
+			opaque: true, gap: checkPrefixListUnread},
 	}
 	return rule(change.Address, "", addresses,
 		change.After.Field("ip_protocol"), "ip_protocol",
@@ -196,6 +238,14 @@ type reachable struct {
 	path  string
 	// list records that the field holds several expressions rather than one.
 	list bool
+	// opaque records that the field names a source held somewhere this plan does
+	// not reach, so a value here can neither be read as any address nor as
+	// narrower than one. A managed prefix list is the case: it is a list of
+	// addresses kept outside the plan, and it may contain 0.0.0.0/0.
+	opaque bool
+	// gap is the control a non-empty opaque field leaves unresolved, so the
+	// unknown it produces says what would settle it.
+	gap string
 }
 
 // rule decides what one ingress rule contributes, whichever form it was written
@@ -217,6 +267,18 @@ func rule(address, path string, addresses []reachable,
 			found.unread = true
 			found.cited = append(found.cited,
 				declared.Source(model.CloudAWS, address, source.path, source.value))
+			if source.gap == checkPrefixListUnread {
+				found.gaps = append(found.gaps, model.MissingControl{
+					CheckID: checkPrefixListUnread,
+					Reason: "A rule names a managed prefix list as a source, and the addresses in a " +
+						"prefix list are not part of this plan, so whether it reaches every address " +
+						"cannot be determined here.",
+					Sources: []model.Provenance{
+						declared.Source(model.CloudAWS, address, source.path, source.value),
+					},
+					Cloud: model.CloudAWS,
+				})
+			}
 			continue
 		}
 		if reach {
@@ -274,6 +336,15 @@ func reachOf(source reachable) (any, unread bool) {
 	}
 	if source.value.State() != terraformplan.StateKnown {
 		return false, true
+	}
+	if source.opaque {
+		// Whether the source names anything at all is readable; what it names
+		// is not. An empty list names nobody, which is the ordinary case and
+		// has to stay settled or every rule becomes an unknown.
+		if source.list {
+			return false, source.value.Len() > 0
+		}
+		return false, source.value.Text() != ""
 	}
 	if !source.list {
 		return declared.AddressReach(source.value.Text()) == declared.ReachAnyAddress,
