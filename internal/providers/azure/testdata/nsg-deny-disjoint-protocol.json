@@ -8,12 +8,12 @@
       "security_rule": [
        {
         "name": {
-         "constant_value": "ssh"
+         "constant_value": "all"
         }
        },
        {
         "name": {
-         "constant_value": "alt"
+         "constant_value": "deny-tcp"
         }
        }
       ]
@@ -44,27 +44,27 @@
        "destination_address_prefix": "*",
        "destination_address_prefixes": [],
        "destination_application_security_group_ids": [],
-       "destination_port_range": "22",
+       "destination_port_range": "443",
        "destination_port_ranges": [],
        "direction": "Inbound",
-       "name": "ssh",
+       "name": "all",
        "priority": 200,
-       "protocol": "Tcp",
+       "protocol": "*",
        "source_address_prefix": "*",
        "source_address_prefixes": [],
        "source_application_security_group_ids": [],
        "source_port_range": "*"
       },
       {
-       "access": "Allow",
+       "access": "Deny",
        "description": "",
        "destination_address_prefix": "*",
        "destination_address_prefixes": [],
        "destination_application_security_group_ids": [],
-       "destination_port_range": "8080",
+       "destination_port_range": "22",
        "destination_port_ranges": [],
        "direction": "Inbound",
-       "name": "alt",
+       "name": "deny-tcp",
        "priority": 100,
        "protocol": "Tcp",
        "source_address_prefix": "*",

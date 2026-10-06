@@ -1,53 +1,61 @@
 {
-  "format_version": "1.2",
-  "terraform_version": "1.14.0",
-  "resource_changes": [
+ "configuration": {
+  "root_module": {
+   "resources": [
     {
-      "address": "aws_security_group.web",
-      "mode": "managed",
-      "type": "aws_security_group",
-      "name": "web",
-      "provider_name": "registry.terraform.io/hashicorp/aws",
-      "change": {
-        "actions": [
-          "create"
-        ],
-        "before": null,
-        "after": {
-          "name": "web",
-          "vpc_id": "vpc-1",
-          "ingress": [
-            {
-              "from_port": 22,
-              "to_port": 22,
-              "protocol": "tcp",
-              "cidr_blocks": [
-                "0.0.0.0/0"
-              ],
-              "ipv6_cidr_blocks": [],
-              "prefix_list_ids": [],
-              "security_groups": [],
-              "self": false,
-              "description": ""
-            }
-          ],
-          "egress": [],
-          "tags": {}
+     "address": "aws_security_group.web",
+     "expressions": {
+      "ingress": [
+       {
+        "name": {
+         "constant_value": "rule"
         }
-      }
-    }
-  ],
-  "configuration": {
-    "root_module": {
-      "resources": [
-        {
-          "address": "aws_security_group.web",
-          "mode": "managed",
-          "type": "aws_security_group",
-          "name": "web",
-          "expressions": {}
-        }
+       }
       ]
+     },
+     "mode": "managed",
+     "name": "web",
+     "type": "aws_security_group"
     }
+   ]
   }
+ },
+ "format_version": "1.2",
+ "resource_changes": [
+  {
+   "address": "aws_security_group.web",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "egress": [],
+     "ingress": [
+      {
+       "cidr_blocks": [
+        "0.0.0.0/0"
+       ],
+       "description": "",
+       "from_port": 22,
+       "ipv6_cidr_blocks": [],
+       "prefix_list_ids": [],
+       "protocol": "tcp",
+       "security_groups": [],
+       "self": false,
+       "to_port": 22
+      }
+     ],
+     "name": "web",
+     "tags": {},
+     "vpc_id": "vpc-1"
+    },
+    "before": null
+   },
+   "mode": "managed",
+   "name": "web",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "type": "aws_security_group"
+  }
+ ],
+ "terraform_version": "1.14.0"
 }

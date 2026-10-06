@@ -28,6 +28,7 @@ const (
 	checkRuleSetIncomplete  = "AZURE_NSG_RULES_INCOMPLETE"
 	checkAssociationUnknown = "AZURE_NSG_ASSOCIATION_UNKNOWN"
 	checkDenyNarrower       = "AZURE_NSG_DENY_NARROWER_THAN_ALLOW"
+	checkDenyNarrowerByDest = "AZURE_NSG_DENY_NARROWER_BY_DESTINATION"
 )
 
 // securityGroup normalizes a network security group and its rules.
@@ -66,8 +67,18 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		declared.Source(model.CloudAzure, subject.Address, attrSecurityRule, inline),
 	}
 
+	// `security_rule` is Optional and Computed, so a group writing no inline
+	// rules has the attribute emitted as unknown rather than empty -- which is
+	// what a real plan does and what no hand-written fixture here did. An unknown
+	// nobody wrote is the absence of an inline set, not an unreadable one, and
+	// reading it as unreadable discarded grants provable from a separate rule
+	// resource. One NSG plus separate azurerm_network_security_rule resources is
+	// the most common Azure shape there is.
+	noInlineRules := declared.Unwritten(subject, attrSecurityRule)
+
 	var rules []inbound
-	unread := inline.State() != terraformplan.StateKnown && inline.State() != terraformplan.StateAbsent
+	unread := !noInlineRules &&
+		inline.State() != terraformplan.StateKnown && inline.State() != terraformplan.StateAbsent
 	for i := range inline.Len() {
 		path := fmt.Sprintf("%s[%d]", attrSecurityRule, i)
 		rules = append(rules, readRule(subject.Address, path, inline.At(i)))
@@ -85,7 +96,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		cited = append(cited, rule.cited...)
 	}
 
-	opened, approximated := resolve(rules)
+	opened, approximated, narrowedByDestination := resolve(rules)
 
 	capabilities := model.NetworkCapabilities{
 		OpenToAnyAddress: opened,
@@ -100,11 +111,24 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			Cloud: model.CloudAzure,
 		})
 	}
+	if narrowedByDestination {
+		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
+			CheckID: checkDenyNarrowerByDest,
+			Reason: "A deny rule below an allow rule is limited to a destination narrower than the " +
+				"addresses the allow reaches, so it cannot be shown to prevent what the allow " +
+				"permits and the grant stands.",
+			Cloud: model.CloudAzure,
+		})
+	}
 
-	// The whole set is in the plan only when the group writes it inline. The
-	// provider refuses to mix the two forms, so inline rules mean there are no
-	// separate ones -- and no separate ones in this plan does not mean none
-	// anywhere.
+	// Closure is provable only from an inline set, and only as far as this plan
+	// goes.
+	//
+	// This used to say the provider refuses to mix the two forms. It does not:
+	// the documentation advises against it and the plan accepts it, so an
+	// inline set is the whole set as this plan writes it and a rule resource
+	// elsewhere could still add to it. That bound is reported rather than
+	// assumed away.
 	stated := inline.Len() > 0 && len(separate) == 0
 
 	switch {
@@ -112,6 +136,13 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		capabilities.PublicIngress = model.Unknown[bool](cited...)
 	case len(opened) > 0:
 		capabilities.PublicIngress = model.Known(true, cited...)
+		if !stated {
+			// A grant is provable from part of a rule set, and this is that
+			// part. What is not here is a deny at a lower priority, which would
+			// mean the set permits less than this grant says -- the risk GCP
+			// attaches to every firewall and this branch said nothing about.
+			capabilities.Unresolved = append(capabilities.Unresolved, incompleteSet())
+		}
 	case stated:
 		// Every rule in the set was read and none of them opens anything. The
 		// platform's own default denies inbound traffic no rule allows, so a set
@@ -119,15 +150,22 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		capabilities.PublicIngress = model.Known(false, cited...)
 	default:
 		capabilities.PublicIngress = model.Unknown[bool](cited...)
-		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
-			CheckID: checkRuleSetIncomplete,
-			Reason: "This network security group's rules are not written in the group itself, so the " +
-				"plan does not state the whole set and nothing here can show that no rule permits " +
-				"ingress from any address.",
-			Cloud: model.CloudAzure,
-		})
+		capabilities.Unresolved = append(capabilities.Unresolved, incompleteSet())
 	}
 	return capabilities
+}
+
+// incompleteSet is the control a plan holding only part of a rule set leaves
+// unresolved. Both branches that reach it say the same thing, and saying it in
+// one place is what keeps the grant branch from falling silent again.
+func incompleteSet() model.MissingControl {
+	return model.MissingControl{
+		CheckID: checkRuleSetIncomplete,
+		Reason: "This network security group's rules are not written in the group itself, so the " +
+			"plan does not state the whole set: a rule declared elsewhere could permit more, and a " +
+			"deny at a lower priority could permit less.",
+		Cloud: model.CloudAzure,
+	}
 }
 
 // ingressGaps names what the plan does not say about where this set applies.
@@ -167,8 +205,16 @@ type inbound struct {
 	ports    []model.PortRange
 	// anySource records that the rule's source covers every address.
 	anySource bool
-	unread    bool
-	cited     []model.Provenance
+	// anyDestination records that the rule's destination covers every address.
+	//
+	// It is read for the same reason the source is and used only for a deny. A
+	// narrow destination on an allow narrows what is reachable rather than
+	// whether ingress is permitted; on a deny it decides whether the deny can be
+	// shown to cover the allow at all, and ignoring it made a deny scoped to one
+	// host look like a deny covering the subnet.
+	anyDestination bool
+	unread         bool
+	cited          []model.Provenance
 }
 
 // resolve reads the ordered set and returns what it leaves open.
@@ -180,7 +226,7 @@ type inbound struct {
 // except TCP" is not one. Rather than drop the grant, which would hide that UDP
 // and ICMP are still open, the wider range is reported and the approximation is
 // returned so the caller can say so.
-func resolve(rules []inbound) (opened []model.OpenRange, approximated bool) {
+func resolve(rules []inbound) (opened []model.OpenRange, approximated, narrowedByDestination bool) {
 	ordered := slices.Clone(rules)
 	slices.SortStableFunc(ordered, func(a, b inbound) int { return a.priority - b.priority })
 
@@ -195,13 +241,24 @@ func resolve(rules []inbound) (opened []model.OpenRange, approximated bool) {
 			switch {
 			case deny.allow || !deny.inbound || !deny.anySource || deny.unread:
 				continue
+			case !deny.anyDestination:
+				// The deny reaches some of what the allow reaches, and "some"
+				// cannot prove prevention. The grant stands, which is the safe
+				// direction, and the narrowing is reported.
+				narrowedByDestination = true
+				continue
 			case deny.priority >= allow.priority:
 				// Azure requires a priority to be unique within a set, so this
 				// is the deny that comes after: it never reaches traffic the
 				// allow has already permitted.
 				continue
 			case !covers(deny.protocol, allow.protocol):
-				if allow.protocol == model.ProtocolEvery {
+				// Approximated only if the deny would have removed something.
+				// A deny whose ports do not meet the allow's removes nothing,
+				// so the range is exact and warning that it may be wider than
+				// reality is a warning about nothing -- which is how a reader
+				// learns to ignore the one that matters.
+				if allow.protocol == model.ProtocolEvery && meets(allow.ports, deny.ports) {
 					approximated = true
 				}
 				continue
@@ -236,7 +293,85 @@ func resolve(rules []inbound) (opened []model.OpenRange, approximated bool) {
 			})
 		}
 	}
-	return opened, approximated
+	return opened, approximated, narrowedByDestination
+}
+
+// meets reports whether any port in either set is in the other, so an
+// approximation is only claimed when something was actually approximated.
+//
+// A protocol with no ports meets anything: a deny that reaches it reaches all of
+// it, and there are no ports to compare.
+func meets(allow, deny []model.PortRange) bool {
+	if len(allow) == 0 || len(deny) == 0 {
+		return true
+	}
+	for _, a := range allow {
+		for _, d := range deny {
+			if a.Overlaps(d) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// privateServiceTag names the documented service tags for these fields that are
+// not reachable from the internet.
+//
+// The provider documents three: Internet is every public address, VirtualNetwork
+// is the address space of the virtual network, and AzureLoadBalancer is the
+// platform's health probe. The set is closed deliberately -- Azure adds tags, and
+// one nobody here has heard of could be every address, so anything outside this
+// list stays unreadable rather than being assumed narrow.
+//
+// AzureCloud is not here on purpose: it is Azure's own public IP space, which is
+// public, and it correctly lands in the unreadable case rather than being read as
+// every address or as none.
+func privateServiceTag(text string) bool {
+	switch text {
+	case "VirtualNetwork", "AzureLoadBalancer":
+		return true
+	default:
+		return false
+	}
+}
+
+// destinationReach reads the destination the same way the source is read. The
+// plural field may not carry a tag, and the singular one may -- and of the three
+// documented tags only Internet is every public address, which for a destination
+// is still narrower than every address.
+func destinationReach(rule terraformplan.Value) (any, unread bool) {
+	singular := rule.Field("destination_address_prefix")
+	switch singular.State() {
+	case terraformplan.StateKnown:
+		switch {
+		case singular.Text() == anyAddressWildcard:
+			return true, false
+		case singular.Text() == "":
+			// The plural field is in use.
+		default:
+			switch declared.AddressReach(singular.Text()) {
+			case declared.ReachAnyAddress:
+				return true, false
+			case declared.ReachUnreadable:
+				return false, true
+			default:
+				return false, false
+			}
+		}
+	case terraformplan.StateAbsent:
+	default:
+		return false, true
+	}
+
+	switch declared.ListReach(rule.Field("destination_address_prefixes")) {
+	case declared.ReachAnyAddress:
+		return true, false
+	case declared.ReachUnreadable:
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // covers reports whether a deny's protocol reaches everything an allow's does.
@@ -324,6 +459,13 @@ func readRule(address, path string, rule terraformplan.Value) inbound {
 		return read
 	}
 	read.anySource = source
+
+	// An unreadable destination is not read as unread: it narrows nothing about
+	// an allow, and a deny that cannot be shown to cover is simply not applied.
+	// Making the whole set unknown on it would turn every rule with a
+	// destination this build cannot name into an undetermined one.
+	destination, _ := destinationReach(rule)
+	read.anyDestination = destination
 	if source {
 		read.cited = append(read.cited, cite("source_address_prefix"), cite("source_address_prefixes"))
 	}
@@ -366,6 +508,12 @@ func sourceReach(rule terraformplan.Value) (any, unread bool) {
 			return true, false
 		case singular.Text() == "":
 			// The plural field is in use. Not a value, and not unreadable.
+		case privateServiceTag(singular.Text()):
+			// Documented, and not the internet. Reading these as tags this
+			// build does not know turned Azure's most common benign rule --
+			// "allow inbound from the virtual network" -- into an undetermined
+			// set.
+			return false, false
 		default:
 			switch declared.AddressReach(singular.Text()) {
 			case declared.ReachAnyAddress:

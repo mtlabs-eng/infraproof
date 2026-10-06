@@ -311,3 +311,189 @@ func TestASourceSplitIntoHalvesIsEveryAddress(t *testing.T) {
 		t.Fatalf("opens %q, want tcp/22", got)
 	}
 }
+
+// TestADenyNarrowedToOneDestinationCannotProvePrevention covers the half of an
+// Azure rule this mapper never read.
+//
+// A rule has a destination as well as a source. For an allow, a narrow
+// destination narrows what is reachable rather than whether ingress is permitted,
+// which the milestone says and which is sound. For a deny it inverts: ignoring
+// the destination makes a deny scoped to one host look like a deny covering the
+// whole subnet, and the grant it cancels is one that reaches every other address
+// in it.
+//
+// Measured before the fix: allow Tcp/22 from any address at priority 200, deny
+// everything from any address to 10.0.0.5 at priority 100, reported Known(false)
+// -- a deterministic proof that nothing is open, on a port reachable from the
+// internet at every address but one.
+func TestADenyNarrowedToOneDestinationCannotProvePrevention(t *testing.T) {
+	for _, fixture := range []string{"nsg-deny-one-host", "nsg-deny-destination-list"} {
+		t.Run(fixture, func(t *testing.T) {
+			capabilities := securityGroup(t, fixture).Network
+
+			if !capabilities.PublicIngress.IsKnown() || !capabilities.PublicIngress.Get() {
+				t.Fatalf("a deny reaching one host cancelled a grant reaching the subnet: %v",
+					capabilities.PublicIngress.State)
+			}
+			if got := rendered(capabilities.OpenToAnyAddress); got != "tcp/22" {
+				t.Fatalf("opens %q, want tcp/22", got)
+			}
+			var said bool
+			for _, control := range capabilities.Unresolved {
+				if strings.Contains(control.Reason, "destination") {
+					said = true
+				}
+			}
+			if !said {
+				t.Error("the narrowing is not reported, so a reader cannot tell why the grant stands")
+			}
+		})
+	}
+
+	// The other direction, or the fix is just "no deny ever covers anything": a
+	// deny whose destination is every address does cover, whichever of the two
+	// legal spellings it uses.
+	for _, fixture := range []string{"nsg-denied-below", "nsg-deny-destination-any"} {
+		t.Run(fixture, func(t *testing.T) {
+			capabilities := securityGroup(t, fixture).Network
+
+			if !capabilities.PublicIngress.IsKnown() {
+				t.Fatalf("a deny reaching every address was not read: %v", capabilities.PublicIngress.State)
+			}
+			if capabilities.PublicIngress.Get() {
+				t.Fatal("a deny reaching every destination did not cover the allow")
+			}
+		})
+	}
+}
+
+// TestTheTwoTagsThatAreNotTheInternetAreRead covers Azure's most common benign
+// rule.
+//
+// The provider documents three service tags for this field, and only Internet
+// means every public address. VirtualNetwork is the address space of the virtual
+// network and AzureLoadBalancer is the platform's probe; neither is reachable
+// from the internet. Reading them as tags this build does not know turned an
+// otherwise provable set into UNKNOWN -- safe, and a false unknown on the rule
+// most Azure deployments carry.
+//
+// A tag nobody here has heard of stays unreadable, because Azure adds them and
+// one of them could be every address.
+func TestTheTwoTagsThatAreNotTheInternetAreRead(t *testing.T) {
+	for _, fixture := range []string{"nsg-virtual-network-tag", "nsg-load-balancer-tag"} {
+		t.Run(fixture, func(t *testing.T) {
+			capabilities := securityGroup(t, fixture).Network
+
+			if !capabilities.PublicIngress.IsKnown() {
+				t.Fatalf("a documented tag that is not the internet was read as unreadable: %v",
+					capabilities.PublicIngress.State)
+			}
+			if capabilities.PublicIngress.Get() {
+				t.Fatal("a tag that is not the internet was read as every address")
+			}
+		})
+	}
+
+	// And the two that must not move: Internet is every public address, and a
+	// tag this build cannot name could be.
+	if internet := securityGroup(t, "nsg-internet-tag").Network; !internet.PublicIngress.Get() {
+		t.Error("the Internet tag stopped meaning every public address")
+	}
+	if unknown := securityGroup(t, "nsg-unknown-service-tag").Network; unknown.PublicIngress.IsKnown() {
+		t.Error("a service tag this build does not know was settled")
+	}
+}
+
+// TestAnInlineSetTheAuthorNeverWroteIsNotAnUnreadableSet covers the fixture shape
+// this mapper had never seen.
+//
+// `security_rule` is Optional and Computed, so a group writing no inline rules has
+// the attribute emitted as unknown rather than empty. Every hand-written fixture
+// here spelled it `[]`. Reading the unknown as an unreadable rule set threw away
+// a grant provable from a separate rule resource -- and the most common Azure
+// pattern is exactly that: one NSG plus separate azurerm_network_security_rule
+// resources.
+func TestAnInlineSetTheAuthorNeverWroteIsNotAnUnreadableSet(t *testing.T) {
+	open := securityGroup(t, "nsg-inline-unwritten").Network
+	if !open.PublicIngress.IsKnown() || !open.PublicIngress.Get() {
+		t.Fatalf("a grant stated by a separate rule was discarded as unreadable: %v",
+			open.PublicIngress.State)
+	}
+	if got := rendered(open.OpenToAnyAddress); got != "tcp/22" {
+		t.Fatalf("opens %q, want tcp/22", got)
+	}
+
+	// Closure is still not provable: the separate rules are only part of the set.
+	closed := securityGroup(t, "nsg-inline-unwritten-closed").Network
+	if closed.PublicIngress.IsKnown() {
+		t.Fatalf("a set the plan holds only part of was settled as %v", closed.PublicIngress.Get())
+	}
+	var said bool
+	for _, control := range closed.Unresolved {
+		if control.CheckID == "AZURE_NSG_RULES_INCOMPLETE" {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("the incomplete set is not named, so the unknown has no explanation")
+	}
+}
+
+// TestAGrantFromPartOfTheSetSaysWhatCouldStillOverrideIt covers the bound on the
+// other branch.
+//
+// GCP attaches a deny-may-exist-elsewhere unknown to every firewall for exactly
+// this risk. Azure said nothing on the grant branch: a group whose rules are
+// separate resources and whose plan holds only an allow reported Known(true) with
+// no mention that a deny at a lower priority could be declared elsewhere.
+func TestAGrantFromPartOfTheSetSaysWhatCouldStillOverrideIt(t *testing.T) {
+	capabilities := securityGroup(t, "nsg-separate-open").Network
+
+	if !capabilities.PublicIngress.Get() {
+		t.Fatal("the grant is gone, so this test is about something else now")
+	}
+	var said bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AZURE_NSG_RULES_INCOMPLETE" {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("a grant proven from part of a set does not say the rest of the set is not here")
+	}
+}
+
+// TestADenyThatRemovesNothingIsNotAnApproximation covers the flag's absence,
+// which nothing asserted.
+//
+// The approximation is real when a deny on one protocol sits below an allow on
+// every protocol and their ports meet: the remainder is not expressible, so the
+// range says the wider thing and the reason records it. When the ports are
+// disjoint the deny removes nothing, the range is exact, and warning that it may
+// be wider than reality is a warning about nothing -- which teaches a reader to
+// ignore the one that matters.
+func TestADenyThatRemovesNothingIsNotAnApproximation(t *testing.T) {
+	capabilities := securityGroup(t, "nsg-deny-disjoint-protocol").Network
+
+	if got := rendered(capabilities.OpenToAnyAddress); got != "every/443" {
+		t.Fatalf("opens %q, want every/443", got)
+	}
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AZURE_NSG_DENY_NARROWER_THAN_ALLOW" {
+			t.Fatalf("an exact range is reported as an approximation: %q", control.Reason)
+		}
+	}
+
+	// And the real approximation still reports, or this is just the flag
+	// removed.
+	real := securityGroup(t, "nsg-deny-partial-protocol").Network
+	var said bool
+	for _, control := range real.Unresolved {
+		if control.CheckID == "AZURE_NSG_DENY_NARROWER_THAN_ALLOW" {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("the approximation that is real stopped being reported")
+	}
+}

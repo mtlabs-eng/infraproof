@@ -4,7 +4,15 @@
    "resources": [
     {
      "address": "azurerm_network_security_group.web",
-     "expressions": {},
+     "expressions": {
+      "security_rule": [
+       {
+        "name": {
+         "constant_value": "open"
+        }
+       }
+      ]
+     },
      "mode": "managed",
      "name": "web",
      "type": "azurerm_network_security_group"
