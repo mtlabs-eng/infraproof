@@ -186,3 +186,102 @@ func TestTheUndeterminedFixtureWritesTheAttributesItInterpolates(t *testing.T) {
 		}
 	}
 }
+
+// TestTheMapperAgreesWithARealPlanAboutInterpolatedAttributes covers the half of
+// the configuration mechanism that was never exercised, and the schema fact the
+// code's comments got wrong.
+//
+// `direction` is Optional and Computed, so an unknown one is the provider's
+// default unless the author wrote it. `priority` and `disabled` are Optional and
+// **not** Computed -- the authoritative schema says so, and a real plan confirms
+// it: an omitted `priority` is emitted as 1000 and an omitted `disabled` as null,
+// both determined. So an unknown value in either is always something the author
+// wrote and nothing can resolve, and the only correct answer is UNKNOWN.
+//
+// The code applied the configuration guard to all three and its comments claimed
+// all three were Computed. The guard happened to produce the right answer for two
+// of them, which is a premise that holds by accident.
+//
+// real-interpolated.json is genuine `terraform show -json` output carrying all
+// three interpolations side by side, on one network so the denies really do bear
+// on the allows.
+func TestTheMapperAgreesWithARealPlanAboutInterpolatedAttributes(t *testing.T) {
+	cases := map[string]struct {
+		state  model.FactState
+		grants bool
+		opens  string
+		why    string
+	}{
+		// Each deny is unreadable in its own right, so none of them can cancel
+		// anything -- and the allows stand.
+		"deny_interp_direction": {model.FactUnknown, false, "",
+			"a direction the author wrote and the plan cannot resolve is a gap"},
+		"deny_interp_priority": {model.FactUnknown, false, "",
+			"priority is not Computed, so an unknown one is always author-written"},
+		"deny_interp_disabled": {model.FactUnknown, false, "",
+			"disabled is not Computed, so an unknown one is always author-written"},
+		// The grants no readable deny reaches.
+		"allow_high": {model.FactKnown, true, "every/0-65535",
+			"no readable deny takes precedence, so the grant stands"},
+		"omitted": {model.FactKnown, true, "tcp/22",
+			"direction unwritten is INGRESS by the provider's default"},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			found, ok := graphOf(t, "real-interpolated").At("google_compute_firewall." + name)
+			if !ok {
+				t.Fatalf("the real plan holds no firewall at google_compute_firewall.%s", name)
+			}
+			if found.Network == nil {
+				t.Fatal("the mapper produced no network capabilities")
+			}
+			if got := found.Network.PublicIngress.State; got != want.state {
+				t.Fatalf("state = %q, want %q: %s", got, want.state, want.why)
+			}
+			if want.state == model.FactKnown && found.Network.PublicIngress.Get() != want.grants {
+				t.Fatalf("grants = %v, want %v: %s",
+					found.Network.PublicIngress.Get(), want.grants, want.why)
+			}
+			if got := rendered(found.Network.OpenToAnyAddress); got != want.opens {
+				t.Fatalf("opens %q, want %q: %s", got, want.opens, want.why)
+			}
+		})
+	}
+}
+
+// TestTheInterpolatedFixtureCarriesAllThreeShapes guards that fixture's premise:
+// each attribute must be unknown and written, or the test above passes while
+// proving nothing.
+func TestTheInterpolatedFixtureCarriesAllThreeShapes(t *testing.T) {
+	plan := planOf(t, "real-interpolated")
+
+	for name, attribute := range map[string]string{
+		"deny_interp_direction": "direction",
+		"deny_interp_priority":  "priority",
+		"deny_interp_disabled":  "disabled",
+	} {
+		address := "google_compute_firewall." + name
+		var found bool
+		for _, change := range plan.ResourceChanges {
+			if change.Address != address {
+				continue
+			}
+			found = true
+			if !change.Configured {
+				t.Errorf("%s records no arguments, so its unknown is not the author's", address)
+			}
+			if !change.States(attribute) {
+				t.Errorf("%s does not write %s, so its unknown is a default and not a gap",
+					address, attribute)
+			}
+			if change.After.Field(attribute).State() != terraformplan.StateUnknown {
+				t.Errorf("%s has a determined %s, so the fixture no longer carries its shape",
+					address, attribute)
+			}
+		}
+		if !found {
+			t.Errorf("the fixture holds no resource at %s", address)
+		}
+	}
+}

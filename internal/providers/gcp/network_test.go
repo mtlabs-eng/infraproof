@@ -388,3 +388,114 @@ func TestADirectionThisBuildCannotNameIsUndetermined(t *testing.T) {
 		t.Error("an EGRESS firewall was read as permitting ingress")
 	}
 }
+
+// TestTheDefaultPriorityIsPinnedAtExactlyTheProvidersNumber closes the gap the
+// pair above leaves. A deny at 999 and a deny at 1001 bracket the default, but
+// any value in between satisfies both -- changing the constant to 999 passed the
+// whole suite.
+//
+// A deny at exactly 1000 ties with an unstated priority, and a tie goes to the
+// deny on this cloud. That holds only if the default is 1000 and not 999, so the
+// three fixtures together admit one number.
+func TestTheDefaultPriorityIsPinnedAtExactlyTheProvidersNumber(t *testing.T) {
+	tied := firewall(t, "fw-default-priority-tied").Network
+
+	if !tied.PublicIngress.IsKnown() {
+		t.Fatalf("an unstated priority left the set undetermined: %v", tied.PublicIngress.State)
+	}
+	if tied.PublicIngress.Get() {
+		t.Error("a deny at 1000 did not tie with an unstated priority, so the default is not 1000")
+	}
+}
+
+// TestADenyOnAnotherInstanceOfANetworkReachesNothing covers the correlation this
+// mapper got wrong, in the three shapes a real plan produces it.
+//
+// A firewall's rule set is scoped to one network, and the network is named by a
+// reference because the attribute itself is unknown until apply. A reference
+// carries the target's address with its count and for_each keys stripped, and
+// this mapper compared the stripped addresses -- so a deny on
+// google_compute_network.vpc["b"] was read as applying to a firewall on vpc["a"]
+// and used to prove a grant of SSH from 0.0.0.0/0 closed.
+//
+// All three fixtures are real `terraform show -json` output. The grant stands in
+// every one, which is the discipline the rest of this mapper already follows: a
+// deny it cannot place is skipped rather than allowed to settle anything, and the
+// two that cannot be placed say so. Only the first is decidable, and there the
+// two firewalls are provably on different networks.
+func TestADenyOnAnotherInstanceOfANetworkReachesNothing(t *testing.T) {
+	cases := map[string]struct {
+		undecided bool
+		why       string
+	}{
+		// for_each: the keys say which instance, and they disagree.
+		"fw-deny-other-network-key": {false,
+			`the plan names vpc["a"] and vpc["b"], and this code threw the keys away`},
+		// count: count.index produces no key, so the reference reaches no one
+		// instance of a repeated network.
+		"fw-deny-other-network-count": {true,
+			"a reference naming no instance of a repeated network cannot be attributed"},
+		// A conditional names both networks and the plan does not resolve it.
+		"fw-deny-network-conditional": {true,
+			"two references on one attribute, and picking the first decides a conditional"},
+	}
+
+	for fixture, want := range cases {
+		t.Run(fixture, func(t *testing.T) {
+			graph := graphOf(t, fixture)
+			found, ok := graph.At("google_compute_firewall.open")
+			if !ok {
+				found, ok = graph.At("google_compute_firewall.open[0]")
+			}
+			if !ok {
+				t.Fatalf("fixture %s has no granting firewall", fixture)
+			}
+			if found.Network == nil {
+				t.Fatal("the mapper produced no network capabilities")
+			}
+			if !found.Network.PublicIngress.IsKnown() || !found.Network.PublicIngress.Get() {
+				t.Fatalf("the grant was lost (%v): %s", found.Network.PublicIngress.State, want.why)
+			}
+			if got := rendered(found.Network.OpenToAnyAddress); got != "tcp/22" {
+				t.Fatalf("opens %q, want tcp/22: %s", got, want.why)
+			}
+
+			var said bool
+			for _, control := range found.Network.Unresolved {
+				if control.CheckID == "GCP_FIREWALL_NETWORK_UNDETERMINED" {
+					said = true
+				}
+			}
+			if said != want.undecided {
+				t.Errorf("the undecidable network is reported = %v, want %v: %s",
+					said, want.undecided, want.why)
+			}
+		})
+	}
+
+	// And the deny that does reach has to keep reaching, or this is just every
+	// deny disabled.
+	if closed := firewall(t, "fw-denied-lower").Network; closed.PublicIngress.Get() {
+		t.Error("a deny on the same network stopped being applied")
+	}
+	if unknown := firewall(t, "fw-denied-unknown-network").Network; unknown.PublicIngress.Get() {
+		t.Error("a deny correlated by reference stopped being applied")
+	}
+}
+
+// TestADenyLimitedToOnePortCannotCoverAProtocolWithNoPorts is the same
+// correction in this cloud: a deny was applied all-or-nothing against an allow
+// whose protocol has no ports, without its own ports being read.
+func TestADenyLimitedToOnePortCannotCoverAProtocolWithNoPorts(t *testing.T) {
+	capabilities := firewall(t, "fw-icmp-deny-one-port").Network
+
+	if !capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("the set was not settled: %v", capabilities.PublicIngress.State)
+	}
+	if !capabilities.PublicIngress.Get() {
+		t.Fatal("a deny limited to port 80 cancelled a grant on a protocol that has no ports")
+	}
+	if got := rendered(capabilities.OpenToAnyAddress); got != "icmp" {
+		t.Fatalf("opens %q, want icmp", got)
+	}
+}

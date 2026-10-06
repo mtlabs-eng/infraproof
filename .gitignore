@@ -1,2 +1,6 @@
 # Build output
 /infraproof
+
+# Agent worktrees. They are git repositories in their own right: a review ran in
+# one, and `git add -A` swept it into a commit as an embedded repository.
+.claude/worktrees/

@@ -1,0 +1,983 @@
+{
+ "applyable": true,
+ "complete": true,
+ "configuration": {
+  "provider_config": {
+   "aws": {
+    "expressions": {
+     "region": {
+      "constant_value": "us-east-1"
+     },
+     "skip_credentials_validation": {
+      "constant_value": true
+     },
+     "skip_metadata_api_check": {
+      "constant_value": true
+     },
+     "skip_region_validation": {
+      "constant_value": true
+     },
+     "skip_requesting_account_id": {
+      "constant_value": true
+     }
+    },
+    "full_name": "registry.terraform.io/hashicorp/aws",
+    "name": "aws",
+    "version_constraint": "~> 6.0"
+   },
+   "aws.west": {
+    "alias": "west",
+    "expressions": {
+     "region": {
+      "constant_value": "us-west-2"
+     },
+     "skip_credentials_validation": {
+      "constant_value": true
+     },
+     "skip_metadata_api_check": {
+      "constant_value": true
+     },
+     "skip_region_validation": {
+      "constant_value": true
+     },
+     "skip_requesting_account_id": {
+      "constant_value": true
+     }
+    },
+    "full_name": "registry.terraform.io/hashicorp/aws",
+    "name": "aws",
+    "version_constraint": "~> 6.0"
+   }
+  },
+  "root_module": {
+   "module_calls": {
+    "collide": {
+     "expressions": {
+      "vpc_id": {
+       "references": [
+        "aws_vpc.main.id",
+        "aws_vpc.main"
+       ]
+      }
+     },
+     "module": {
+      "resources": [
+       {
+        "address": "aws_security_group.dyn_open",
+        "expressions": {
+         "name": {
+          "constant_value": "collide_dyn_open"
+         },
+         "vpc_id": {
+          "references": [
+           "var.vpc_id"
+          ]
+         }
+        },
+        "mode": "managed",
+        "name": "dyn_open",
+        "provider_config_key": "aws",
+        "schema_version": 1,
+        "type": "aws_security_group"
+       }
+      ],
+      "variables": {
+       "vpc_id": {}
+      }
+     },
+     "source": "./collide"
+    },
+    "outer": {
+     "expressions": {
+      "vpc_id": {
+       "references": [
+        "aws_vpc.main.id",
+        "aws_vpc.main"
+       ]
+      }
+     },
+     "module": {
+      "module_calls": {
+       "inner": {
+        "expressions": {
+         "vpc_id": {
+          "references": [
+           "var.vpc_id"
+          ]
+         }
+        },
+        "module": {
+         "resources": [
+          {
+           "address": "aws_security_group.inner_norules",
+           "expressions": {
+            "name": {
+             "constant_value": "inner_norules"
+            },
+            "vpc_id": {
+             "references": [
+              "var.vpc_id"
+             ]
+            }
+           },
+           "mode": "managed",
+           "name": "inner_norules",
+           "provider_config_key": "aws",
+           "schema_version": 1,
+           "type": "aws_security_group"
+          },
+          {
+           "address": "aws_security_group.inner_sg",
+           "expressions": {
+            "ingress": {
+             "constant_value": [
+              {
+               "cidr_blocks": [
+                "0.0.0.0/0"
+               ],
+               "description": null,
+               "from_port": 80,
+               "ipv6_cidr_blocks": null,
+               "prefix_list_ids": null,
+               "protocol": "tcp",
+               "security_groups": null,
+               "self": null,
+               "to_port": 80
+              }
+             ]
+            },
+            "name": {
+             "references": [
+              "each.key"
+             ]
+            },
+            "vpc_id": {
+             "references": [
+              "var.vpc_id"
+             ]
+            }
+           },
+           "mode": "managed",
+           "name": "inner_sg",
+           "provider_config_key": "aws",
+           "schema_version": 1,
+           "type": "aws_security_group"
+          }
+         ],
+         "variables": {
+          "vpc_id": {}
+         }
+        },
+        "source": "./inner"
+       }
+      },
+      "resources": [
+       {
+        "address": "aws_security_group.outer_sg",
+        "expressions": {
+         "name": {
+          "constant_value": "outer_sg"
+         },
+         "vpc_id": {
+          "references": [
+           "var.vpc_id"
+          ]
+         }
+        },
+        "mode": "managed",
+        "name": "outer_sg",
+        "provider_config_key": "aws",
+        "schema_version": 1,
+        "type": "aws_security_group"
+       }
+      ],
+      "variables": {
+       "vpc_id": {}
+      }
+     },
+     "source": "./outer"
+    }
+   },
+   "resources": [
+    {
+     "address": "aws_security_group.web",
+     "expressions": {
+      "name": {
+       "constant_value": "dyn_empty"
+      },
+      "vpc_id": {
+       "references": [
+        "aws_vpc.main.id",
+        "aws_vpc.main"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "web",
+     "provider_config_key": "aws",
+     "schema_version": 1,
+     "type": "aws_security_group"
+    }
+   ],
+   "variables": {
+    "openports": {
+     "default": [
+      22,
+      3389
+     ]
+    }
+   }
+  }
+ },
+ "errored": false,
+ "format_version": "1.2",
+ "planned_values": {
+  "root_module": {
+   "child_modules": [
+    {
+     "address": "module.collide",
+     "resources": [
+      {
+       "address": "module.collide.aws_security_group.dyn_open",
+       "identity": {
+        "account_id": null,
+        "id": null,
+        "region": null
+       },
+       "identity_schema_version": 0,
+       "mode": "managed",
+       "name": "dyn_open",
+       "provider_name": "registry.terraform.io/hashicorp/aws",
+       "schema_version": 1,
+       "sensitive_values": {
+        "egress": [],
+        "ingress": [],
+        "tags_all": {}
+       },
+       "type": "aws_security_group",
+       "values": {
+        "description": "Managed by Terraform",
+        "name": "collide_dyn_open",
+        "region": "us-east-1",
+        "revoke_rules_on_delete": false,
+        "tags": null,
+        "timeouts": null
+       }
+      }
+     ]
+    },
+    {
+     "address": "module.outer[\"a\"]",
+     "child_modules": [
+      {
+       "address": "module.outer[\"a\"].module.inner",
+       "resources": [
+        {
+         "address": "module.outer[\"a\"].module.inner.aws_security_group.inner_norules",
+         "identity": {
+          "account_id": null,
+          "id": null,
+          "region": null
+         },
+         "identity_schema_version": 0,
+         "mode": "managed",
+         "name": "inner_norules",
+         "provider_name": "registry.terraform.io/hashicorp/aws",
+         "schema_version": 1,
+         "sensitive_values": {
+          "egress": [],
+          "ingress": [],
+          "tags_all": {}
+         },
+         "type": "aws_security_group",
+         "values": {
+          "description": "Managed by Terraform",
+          "name": "inner_norules",
+          "region": "us-east-1",
+          "revoke_rules_on_delete": false,
+          "tags": null,
+          "timeouts": null
+         }
+        },
+        {
+         "address": "module.outer[\"a\"].module.inner.aws_security_group.inner_sg[\"x\"]",
+         "identity": {
+          "account_id": null,
+          "id": null,
+          "region": null
+         },
+         "identity_schema_version": 0,
+         "index": "x",
+         "mode": "managed",
+         "name": "inner_sg",
+         "provider_name": "registry.terraform.io/hashicorp/aws",
+         "schema_version": 1,
+         "sensitive_values": {
+          "egress": [],
+          "ingress": [
+           {
+            "cidr_blocks": [
+             false
+            ],
+            "ipv6_cidr_blocks": [],
+            "prefix_list_ids": [],
+            "security_groups": []
+           }
+          ],
+          "tags_all": {}
+         },
+         "type": "aws_security_group",
+         "values": {
+          "description": "Managed by Terraform",
+          "ingress": [
+           {
+            "cidr_blocks": [
+             "0.0.0.0/0"
+            ],
+            "description": "",
+            "from_port": 80,
+            "ipv6_cidr_blocks": [],
+            "prefix_list_ids": [],
+            "protocol": "tcp",
+            "security_groups": [],
+            "self": false,
+            "to_port": 80
+           }
+          ],
+          "name": "inner_sg-x",
+          "region": "us-east-1",
+          "revoke_rules_on_delete": false,
+          "tags": null,
+          "timeouts": null
+         }
+        },
+        {
+         "address": "module.outer[\"a\"].module.inner.aws_security_group.inner_sg[\"y\"]",
+         "identity": {
+          "account_id": null,
+          "id": null,
+          "region": null
+         },
+         "identity_schema_version": 0,
+         "index": "y",
+         "mode": "managed",
+         "name": "inner_sg",
+         "provider_name": "registry.terraform.io/hashicorp/aws",
+         "schema_version": 1,
+         "sensitive_values": {
+          "egress": [],
+          "ingress": [
+           {
+            "cidr_blocks": [
+             false
+            ],
+            "ipv6_cidr_blocks": [],
+            "prefix_list_ids": [],
+            "security_groups": []
+           }
+          ],
+          "tags_all": {}
+         },
+         "type": "aws_security_group",
+         "values": {
+          "description": "Managed by Terraform",
+          "ingress": [
+           {
+            "cidr_blocks": [
+             "0.0.0.0/0"
+            ],
+            "description": "",
+            "from_port": 80,
+            "ipv6_cidr_blocks": [],
+            "prefix_list_ids": [],
+            "protocol": "tcp",
+            "security_groups": [],
+            "self": false,
+            "to_port": 80
+           }
+          ],
+          "name": "inner_sg-y",
+          "region": "us-east-1",
+          "revoke_rules_on_delete": false,
+          "tags": null,
+          "timeouts": null
+         }
+        }
+       ]
+      }
+     ],
+     "resources": [
+      {
+       "address": "module.outer[\"a\"].aws_security_group.outer_sg",
+       "identity": {
+        "account_id": null,
+        "id": null,
+        "region": null
+       },
+       "identity_schema_version": 0,
+       "mode": "managed",
+       "name": "outer_sg",
+       "provider_name": "registry.terraform.io/hashicorp/aws",
+       "schema_version": 1,
+       "sensitive_values": {
+        "egress": [],
+        "ingress": [
+         {
+          "cidr_blocks": [
+           false
+          ],
+          "ipv6_cidr_blocks": [],
+          "prefix_list_ids": [],
+          "security_groups": []
+         }
+        ],
+        "tags_all": {}
+       },
+       "type": "aws_security_group",
+       "values": {
+        "description": "Managed by Terraform",
+        "ingress": [
+         {
+          "cidr_blocks": [
+           "0.0.0.0/0"
+          ],
+          "description": "",
+          "from_port": 22,
+          "ipv6_cidr_blocks": [],
+          "prefix_list_ids": [],
+          "protocol": "tcp",
+          "security_groups": [],
+          "self": false,
+          "to_port": 22
+         }
+        ],
+        "name": "outer_sg",
+        "region": "us-east-1",
+        "revoke_rules_on_delete": false,
+        "tags": null,
+        "timeouts": null
+       }
+      }
+     ]
+    },
+    {
+     "address": "module.outer[\"b\"]",
+     "child_modules": [
+      {
+       "address": "module.outer[\"b\"].module.inner",
+       "resources": [
+        {
+         "address": "module.outer[\"b\"].module.inner.aws_security_group.inner_norules",
+         "identity": {
+          "account_id": null,
+          "id": null,
+          "region": null
+         },
+         "identity_schema_version": 0,
+         "mode": "managed",
+         "name": "inner_norules",
+         "provider_name": "registry.terraform.io/hashicorp/aws",
+         "schema_version": 1,
+         "sensitive_values": {
+          "egress": [],
+          "ingress": [],
+          "tags_all": {}
+         },
+         "type": "aws_security_group",
+         "values": {
+          "description": "Managed by Terraform",
+          "name": "inner_norules",
+          "region": "us-east-1",
+          "revoke_rules_on_delete": false,
+          "tags": null,
+          "timeouts": null
+         }
+        },
+        {
+         "address": "module.outer[\"b\"].module.inner.aws_security_group.inner_sg[\"x\"]",
+         "identity": {
+          "account_id": null,
+          "id": null,
+          "region": null
+         },
+         "identity_schema_version": 0,
+         "index": "x",
+         "mode": "managed",
+         "name": "inner_sg",
+         "provider_name": "registry.terraform.io/hashicorp/aws",
+         "schema_version": 1,
+         "sensitive_values": {
+          "egress": [],
+          "ingress": [
+           {
+            "cidr_blocks": [
+             false
+            ],
+            "ipv6_cidr_blocks": [],
+            "prefix_list_ids": [],
+            "security_groups": []
+           }
+          ],
+          "tags_all": {}
+         },
+         "type": "aws_security_group",
+         "values": {
+          "description": "Managed by Terraform",
+          "ingress": [
+           {
+            "cidr_blocks": [
+             "0.0.0.0/0"
+            ],
+            "description": "",
+            "from_port": 80,
+            "ipv6_cidr_blocks": [],
+            "prefix_list_ids": [],
+            "protocol": "tcp",
+            "security_groups": [],
+            "self": false,
+            "to_port": 80
+           }
+          ],
+          "name": "inner_sg-x",
+          "region": "us-east-1",
+          "revoke_rules_on_delete": false,
+          "tags": null,
+          "timeouts": null
+         }
+        },
+        {
+         "address": "module.outer[\"b\"].module.inner.aws_security_group.inner_sg[\"y\"]",
+         "identity": {
+          "account_id": null,
+          "id": null,
+          "region": null
+         },
+         "identity_schema_version": 0,
+         "index": "y",
+         "mode": "managed",
+         "name": "inner_sg",
+         "provider_name": "registry.terraform.io/hashicorp/aws",
+         "schema_version": 1,
+         "sensitive_values": {
+          "egress": [],
+          "ingress": [
+           {
+            "cidr_blocks": [
+             false
+            ],
+            "ipv6_cidr_blocks": [],
+            "prefix_list_ids": [],
+            "security_groups": []
+           }
+          ],
+          "tags_all": {}
+         },
+         "type": "aws_security_group",
+         "values": {
+          "description": "Managed by Terraform",
+          "ingress": [
+           {
+            "cidr_blocks": [
+             "0.0.0.0/0"
+            ],
+            "description": "",
+            "from_port": 80,
+            "ipv6_cidr_blocks": [],
+            "prefix_list_ids": [],
+            "protocol": "tcp",
+            "security_groups": [],
+            "self": false,
+            "to_port": 80
+           }
+          ],
+          "name": "inner_sg-y",
+          "region": "us-east-1",
+          "revoke_rules_on_delete": false,
+          "tags": null,
+          "timeouts": null
+         }
+        }
+       ]
+      }
+     ],
+     "resources": [
+      {
+       "address": "module.outer[\"b\"].aws_security_group.outer_sg",
+       "identity": {
+        "account_id": null,
+        "id": null,
+        "region": null
+       },
+       "identity_schema_version": 0,
+       "mode": "managed",
+       "name": "outer_sg",
+       "provider_name": "registry.terraform.io/hashicorp/aws",
+       "schema_version": 1,
+       "sensitive_values": {
+        "egress": [],
+        "ingress": [
+         {
+          "cidr_blocks": [
+           false
+          ],
+          "ipv6_cidr_blocks": [],
+          "prefix_list_ids": [],
+          "security_groups": []
+         }
+        ],
+        "tags_all": {}
+       },
+       "type": "aws_security_group",
+       "values": {
+        "description": "Managed by Terraform",
+        "ingress": [
+         {
+          "cidr_blocks": [
+           "0.0.0.0/0"
+          ],
+          "description": "",
+          "from_port": 22,
+          "ipv6_cidr_blocks": [],
+          "prefix_list_ids": [],
+          "protocol": "tcp",
+          "security_groups": [],
+          "self": false,
+          "to_port": 22
+         }
+        ],
+        "name": "outer_sg",
+        "region": "us-east-1",
+        "revoke_rules_on_delete": false,
+        "tags": null,
+        "timeouts": null
+       }
+      }
+     ]
+    }
+   ],
+   "resources": [
+    {
+     "address": "aws_security_group.attr_empty",
+     "identity": {
+      "account_id": null,
+      "id": null,
+      "region": null
+     },
+     "identity_schema_version": 0,
+     "mode": "managed",
+     "name": "attr_empty",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 1,
+     "sensitive_values": {
+      "egress": [],
+      "ingress": [],
+      "tags_all": {}
+     },
+     "type": "aws_security_group",
+     "values": {
+      "description": "Managed by Terraform",
+      "ingress": [],
+      "name": "attr_empty",
+      "region": "us-east-1",
+      "revoke_rules_on_delete": false,
+      "tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "aws_security_group.web",
+     "identity": {
+      "account_id": null,
+      "id": null,
+      "region": null
+     },
+     "identity_schema_version": 0,
+     "mode": "managed",
+     "name": "dyn_empty",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 1,
+     "sensitive_values": {
+      "egress": [],
+      "ingress": [],
+      "tags_all": {}
+     },
+     "type": "aws_security_group",
+     "values": {
+      "description": "Managed by Terraform",
+      "name": "dyn_empty",
+      "region": "us-east-1",
+      "revoke_rules_on_delete": false,
+      "tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "aws_security_group.dyn_open",
+     "identity": {
+      "account_id": null,
+      "id": null,
+      "region": null
+     },
+     "identity_schema_version": 0,
+     "mode": "managed",
+     "name": "dyn_open",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 1,
+     "sensitive_values": {
+      "egress": [],
+      "ingress": [
+       {
+        "cidr_blocks": [
+         false
+        ],
+        "ipv6_cidr_blocks": [],
+        "prefix_list_ids": [],
+        "security_groups": []
+       },
+       {
+        "cidr_blocks": [
+         false
+        ],
+        "ipv6_cidr_blocks": [],
+        "prefix_list_ids": [],
+        "security_groups": []
+       }
+      ],
+      "tags_all": {}
+     },
+     "type": "aws_security_group",
+     "values": {
+      "description": "Managed by Terraform",
+      "ingress": [
+       {
+        "cidr_blocks": [
+         "0.0.0.0/0"
+        ],
+        "description": "",
+        "from_port": 22,
+        "ipv6_cidr_blocks": [],
+        "prefix_list_ids": [],
+        "protocol": "tcp",
+        "security_groups": [],
+        "self": false,
+        "to_port": 22
+       },
+       {
+        "cidr_blocks": [
+         "0.0.0.0/0"
+        ],
+        "description": "",
+        "from_port": 3389,
+        "ipv6_cidr_blocks": [],
+        "prefix_list_ids": [],
+        "protocol": "tcp",
+        "security_groups": [],
+        "self": false,
+        "to_port": 3389
+       }
+      ],
+      "name": "dyn_open",
+      "region": "us-east-1",
+      "revoke_rules_on_delete": false,
+      "tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "aws_security_group.dyn_unknown",
+     "identity": {
+      "account_id": null,
+      "id": null,
+      "region": null
+     },
+     "identity_schema_version": 0,
+     "mode": "managed",
+     "name": "dyn_unknown",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 1,
+     "sensitive_values": {
+      "egress": [],
+      "ingress": [
+       {
+        "cidr_blocks": [
+         false
+        ],
+        "ipv6_cidr_blocks": [],
+        "prefix_list_ids": [],
+        "security_groups": []
+       }
+      ],
+      "tags_all": {}
+     },
+     "type": "aws_security_group",
+     "values": {
+      "description": "Managed by Terraform",
+      "ingress": [
+       {
+        "cidr_blocks": [
+         "0.0.0.0/0"
+        ],
+        "description": "",
+        "from_port": 22,
+        "ipv6_cidr_blocks": [],
+        "prefix_list_ids": [],
+        "protocol": "tcp",
+        "security_groups": [],
+        "self": false,
+        "to_port": 22
+       }
+      ],
+      "name": "dyn_unknown",
+      "region": "us-east-1",
+      "revoke_rules_on_delete": false,
+      "tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "aws_security_group.metas[0]",
+     "identity": {
+      "account_id": null,
+      "id": null,
+      "region": null
+     },
+     "identity_schema_version": 0,
+     "index": 0,
+     "mode": "managed",
+     "name": "metas",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 1,
+     "sensitive_values": {
+      "egress": [],
+      "ingress": [
+       {
+        "cidr_blocks": [
+         false
+        ],
+        "ipv6_cidr_blocks": [],
+        "prefix_list_ids": [],
+        "security_groups": []
+       }
+      ],
+      "tags_all": {}
+     },
+     "type": "aws_security_group",
+     "values": {
+      "description": "Managed by Terraform",
+      "ingress": [
+       {
+        "cidr_blocks": [
+         "0.0.0.0/0"
+        ],
+        "description": "",
+        "from_port": 443,
+        "ipv6_cidr_blocks": [],
+        "prefix_list_ids": [],
+        "protocol": "tcp",
+        "security_groups": [],
+        "self": false,
+        "to_port": 443
+       }
+      ],
+      "name": "metas",
+      "region": "us-west-2",
+      "revoke_rules_on_delete": false,
+      "tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "aws_vpc.main",
+     "identity": {
+      "account_id": null,
+      "id": null,
+      "region": null
+     },
+     "identity_schema_version": 0,
+     "mode": "managed",
+     "name": "main",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 1,
+     "sensitive_values": {
+      "tags_all": {}
+     },
+     "type": "aws_vpc",
+     "values": {
+      "assign_generated_ipv6_cidr_block": null,
+      "cidr_block": "10.0.0.0/16",
+      "enable_dns_support": true,
+      "instance_tenancy": "default",
+      "ipv4_ipam_pool_id": null,
+      "ipv4_netmask_length": null,
+      "ipv6_ipam_pool_id": null,
+      "ipv6_netmask_length": null,
+      "region": "us-east-1",
+      "tags": null
+     }
+    }
+   ]
+  }
+ },
+ "relevant_attributes": [
+  {
+   "attribute": [
+    "id"
+   ],
+   "resource": "aws_vpc.main"
+  }
+ ],
+ "resource_changes": [
+  {
+   "address": "aws_security_group.web",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "description": "Managed by Terraform",
+     "name": "dyn_empty",
+     "region": "us-east-1",
+     "revoke_rules_on_delete": false,
+     "tags": null,
+     "timeouts": null
+    },
+    "after_identity": {
+     "account_id": null,
+     "id": null,
+     "region": null
+    },
+    "after_sensitive": {
+     "egress": [],
+     "ingress": [],
+     "tags_all": {}
+    },
+    "after_unknown": {
+     "arn": true,
+     "egress": true,
+     "id": true,
+     "ingress": true,
+     "name_prefix": true,
+     "owner_id": true,
+     "tags_all": true,
+     "vpc_id": true
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "web",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "type": "aws_security_group"
+  }
+ ],
+ "terraform_version": "1.14.0",
+ "timestamp": "2026-10-06T13:03:49Z",
+ "variables": {
+  "openports": {
+   "value": [
+    22,
+    3389
+   ]
+  }
+ }
+}

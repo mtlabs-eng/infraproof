@@ -1,9 +1,15 @@
 package providers_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -108,39 +114,119 @@ func TestEveryMissingControlAnUnsettledSetReportsIsAsserted(t *testing.T) {
 }
 
 // TestEveryNetworkCheckIdentifierIsAssertedSomewhere is the backstop for the
-// table above: adding a tenth identifier without a case for it fails here rather
-// than shipping an explanation nothing proves is ever produced.
+// table above: adding an identifier without a case for it fails here rather than
+// shipping an explanation nothing proves is ever produced.
+//
+// Three things it got wrong at first, each found by a review writing an
+// identifier the obvious way. It only considered lines containing the lowercase
+// word "check", so an identifier written inline at the use site -- `CheckID:
+// "GCP_..."` -- was invisible. It only read network.go, so moving one to another
+// file in the same package hid it. And it searched this file as one blob, so a
+// mention in a comment satisfied the assertion.
 func TestEveryNetworkCheckIdentifierIsAssertedSomewhere(t *testing.T) {
-	declared := map[string]bool{}
+	declared := map[string]string{}
 	for _, cloud := range []string{"aws", "azure", "gcp"} {
-		raw, err := os.ReadFile(filepath.Join("..", "providers", cloud, "network.go"))
+		paths, err := filepath.Glob(filepath.Join("..", "providers", cloud, "*.go"))
 		if err != nil {
-			t.Fatalf("reading the %s mapper: %v", cloud, err)
+			t.Fatalf("listing the %s mapper: %v", cloud, err)
 		}
-		for _, line := range strings.Split(string(raw), "\n") {
-			_, after, found := strings.Cut(line, `= "`)
-			if !found || !strings.Contains(line, "check") {
+		var read int
+		for _, path := range paths {
+			if strings.HasSuffix(path, "_test.go") {
 				continue
 			}
-			identifier, _, found := strings.Cut(after, `"`)
-			if found && identifier == strings.ToUpper(identifier) && identifier != "" {
-				declared[identifier] = true
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("reading %s: %v", path, err)
+			}
+			read++
+			for _, identifier := range checkIdentifiers(string(raw)) {
+				declared[identifier] = filepath.Base(path)
 			}
 		}
-	}
-	if len(declared) == 0 {
-		t.Fatal("no check identifiers found, so this test asserts nothing")
-	}
-
-	raw, err := os.ReadFile("controls_test.go")
-	if err != nil {
-		t.Fatalf("reading this test: %v", err)
-	}
-	for identifier := range declared {
-		if !strings.Contains(string(raw), identifier) {
-			t.Errorf("%s is declared by a mapper and asserted by no case in the table above", identifier)
+		if read == 0 {
+			t.Fatalf("no %s mapper source was read, so nothing is asserted", cloud)
 		}
 	}
+	if len(declared) < 10 {
+		t.Fatalf("found %d check identifiers, which is too few to be the set: %v",
+			len(declared), declared)
+	}
+
+	asserted := assertedIdentifiers(t)
+	for identifier, file := range declared {
+		if !asserted[identifier] {
+			t.Errorf("%s declares %s and no test anywhere names it, so the explanation a reader "+
+				"gets for an unknown can be deleted with a green suite", file, identifier)
+		}
+	}
+}
+
+// checkIdentifiers finds the check identifiers a mapper declares, by their shape
+// rather than by the name of the constant holding them.
+//
+// A check identifier is an upper-case, underscore-separated string literal
+// naming a cloud. Matching on the surrounding code is what let one written at
+// the use site go unseen.
+func checkIdentifiers(source string) []string {
+	var found []string
+	for _, match := range identifierPattern.FindAllStringSubmatch(source, -1) {
+		found = append(found, match[1])
+	}
+	return found
+}
+
+var identifierPattern = regexp.MustCompile(`"((?:AWS|AZURE|GCP)_[A-Z0-9_]+)"`)
+
+// assertedIdentifiers reads every check identifier any test in this repository
+// names, from the parsed source rather than from the text.
+//
+// Parsed, because a mention in a comment is not an assertion and a review
+// silenced an earlier version of this backstop with one comment line. Every test
+// rather than this file, because the question is whether anything defends the
+// identifier -- the storage family's are asserted where the storage family is
+// tested, and a network one moved into another test must keep counting.
+func assertedIdentifiers(t *testing.T) map[string]bool {
+	t.Helper()
+
+	asserted := map[string]bool{}
+	root := filepath.Join("..", "..", "internal")
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			// A test that does not parse is the build's problem, not this
+			// walk's, and go test would have said so first.
+			return nil
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			text, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				return true
+			}
+			if identifierPattern.MatchString(`"` + text + `"`) {
+				asserted[text] = true
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the tests: %v", err)
+	}
+	if len(asserted) == 0 {
+		t.Fatal("no check identifier is named by any test, so this backstop asserts nothing")
+	}
+	return asserted
 }
 
 // normalizeFrom builds the graph of a fixture belonging to one cloud's package.

@@ -71,9 +71,7 @@
      "target_service_accounts": null,
      "target_tags": null
     },
-    "after_unknown": {
-     "priority": true
-    },
+    "after_unknown": {},
     "before": null
    },
    "mode": "managed",

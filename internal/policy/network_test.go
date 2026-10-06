@@ -773,3 +773,112 @@ func TestARenderedDeclarationIsBounded(t *testing.T) {
 		t.Fatalf("a short declaration renders as %q, want it in full", got)
 	}
 }
+
+// TestTheClaimAccountsForEveryFactWhateverTheContractDeclared covers the half of
+// the combined-claim fix that was left gated.
+//
+// The combined arm was written as `stated && exceeding && undescribable`, so it
+// only applied when the contract declared ports. A contract with no network entry
+// is the documented, supported case -- silence is not permission -- and there an
+// undeclared port beside a port-less protocol produced a claim about the protocol
+// alone. SSH open to the whole internet sat in the Observed value and in neither
+// the claim nor the remediation, and the review format renders the claim and not
+// the observation.
+//
+// A disposition may depend on what was declared. What a claim accounts for may
+// not.
+//
+// The assertions name whole phrases rather than words. The first version looked
+// for "port", which the protocol claim satisfies from inside the sentence "a port
+// declaration can neither permit nor forbid it" -- a test passing for the wrong
+// reason, in the test written to stop exactly that.
+func TestTheClaimAccountsForEveryFactWhateverTheContractDeclared(t *testing.T) {
+	const (
+		aboutAPort      = "on a port"
+		aboutAProtocol  = "on a protocol the intent contract cannot describe"
+		fixThePort      = "declare the port in the intent contract"
+		fixTheProtocol  = "Confirm that this protocol is intended"
+		noDeclaration   = "does not declare which ports may be reachable"
+		declareThePorts = "Declare the ports in the intent contract"
+	)
+
+	undeclared := tcp(22, 22)
+	portless := model.OpenRange{Protocol: model.ProtocolICMP, Sources: tcp(0, 0).Sources}
+
+	cases := map[string]struct {
+		contract    intent.Contract
+		opened      []model.OpenRange
+		disposition evidence.Disposition
+		claim       []string
+		remediation []string
+		why         string
+	}{
+		"a declaration, a port and a protocol": {
+			declaring([]model.PortRange{port(443)}), []model.OpenRange{undeclared, portless},
+			evidence.DispositionBlock,
+			[]string{aboutAPort, aboutAProtocol}, []string{fixThePort, "protocol"},
+			"an undeclared port is a violation whether or not something else needs a human"},
+		"no declaration, a port and a protocol": {
+			declaring(nil), []model.OpenRange{undeclared, portless},
+			evidence.DispositionWarn,
+			[]string{aboutAPort, aboutAProtocol}, []string{declareThePorts, "protocol"},
+			"the contract declaring nothing does not make the open port stop being a fact"},
+		"no declaration, a port alone": {
+			declaring(nil), []model.OpenRange{undeclared},
+			evidence.DispositionWarn,
+			[]string{noDeclaration}, []string{declareThePorts},
+			"silence is not permission, and the claim says what is open"},
+		"no declaration, a protocol alone": {
+			declaring(nil), []model.OpenRange{portless},
+			evidence.DispositionWarn,
+			[]string{aboutAProtocol}, []string{fixTheProtocol},
+			"a port list cannot describe it, declared or not"},
+		"an empty declaration, a port and a protocol": {
+			declaring([]model.PortRange{}), []model.OpenRange{undeclared, portless},
+			evidence.DispositionBlock,
+			[]string{aboutAPort, aboutAProtocol}, []string{fixThePort, "protocol"},
+			"an empty list is the most restrictive thing the field can say"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			result := policy.NetworkExposure(c.contract, open(c.opened...))
+
+			if len(result.Findings) != 1 {
+				t.Fatalf("%d findings, want one: %s", len(result.Findings), c.why)
+			}
+			finding := result.Findings[0]
+			if finding.Disposition != c.disposition {
+				t.Errorf("disposition = %q, want %q: %s",
+					finding.Disposition, c.disposition, c.why)
+			}
+			for _, phrase := range c.claim {
+				if !strings.Contains(finding.Claim, phrase) {
+					t.Errorf("the claim does not say %q: %q\n  %s", phrase, finding.Claim, c.why)
+				}
+			}
+			for _, phrase := range c.remediation {
+				if !strings.Contains(finding.Remediation, phrase) {
+					t.Errorf("the remediation does not say %q: %q", phrase, finding.Remediation)
+				}
+			}
+
+			// And nothing in the Observed value may go unaccounted for by the
+			// claim, which is the property the whole test defends.
+			if finding.Observed == nil {
+				t.Fatal("the finding observes nothing")
+			}
+			observed := finding.Observed.Value.Display()
+			if strings.Contains(observed, "tcp/") &&
+				!strings.Contains(finding.Claim, aboutAPort) &&
+				!strings.Contains(finding.Claim, noDeclaration) {
+				t.Errorf("observed %q carries a port the claim never mentions: %q",
+					observed, finding.Claim)
+			}
+			if strings.Contains(observed, "icmp") && !strings.Contains(finding.Claim, aboutAProtocol) {
+				t.Errorf("observed %q carries a protocol the claim never mentions: %q",
+					observed, finding.Claim)
+			}
+		})
+	}
+}

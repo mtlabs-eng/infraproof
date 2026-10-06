@@ -229,3 +229,136 @@ func TestStatedAttributesAreFoundForAModuleResource(t *testing.T) {
 		t.Errorf("the root resource reports stated = %v; it took the module's arguments", root.Stated)
 	}
 }
+
+// A configuration entry that records no arguments answers nothing about what the
+// author wrote, and must not be read as an author who wrote nothing.
+//
+// Terraform emits such an entry: a resource whose body is only a `dynamic` block
+// has no `expressions` key at all, and a sanitizer that strips `expressions` --
+// the one place literal values live -- leaves every entry in this shape. This
+// repository's own plan fixtures contain it.
+//
+// Read as an author's silence, it hands every Optional and Computed attribute its
+// provider default. An independent review turned that into PASS, exit 0, with no
+// findings, on a GCP firewall opening SSH to 0.0.0.0/0: the deny's unknown
+// direction was defaulted to INGRESS, it cancelled the grant, and the result was
+// a deterministic proof that nothing was open.
+func TestAConfigurationThatRecordsNoArgumentsAnswersNothing(t *testing.T) {
+	cases := map[string]string{
+		"no expressions key": `{
+		  "address": "google_compute_firewall.web", "mode": "managed",
+		  "type": "google_compute_firewall", "name": "web", "provider_config_key": "google"
+		}`,
+		"expressions null": `{
+		  "address": "google_compute_firewall.web", "mode": "managed",
+		  "type": "google_compute_firewall", "name": "web", "provider_config_key": "google",
+		  "expressions": null
+		}`,
+		// A body that is only a dynamic block: Terraform records the
+		// provisioner and no expressions at all.
+		"only a dynamic block": `{
+		  "address": "google_compute_firewall.web", "mode": "managed",
+		  "type": "google_compute_firewall", "name": "web", "provider_config_key": "google",
+		  "provisioners": [{"type": "local-exec"}]
+		}`,
+	}
+
+	for name, entry := range cases {
+		t.Run(name, func(t *testing.T) {
+			plan, err := Parse([]byte(`{
+			  "format_version": "1.2",
+			  "resource_changes": [
+			    {
+			      "address": "google_compute_firewall.web", "mode": "managed",
+			      "type": "google_compute_firewall", "name": "web",
+			      "provider_name": "registry.terraform.io/hashicorp/google",
+			      "change": {"actions": ["create"], "before": null,
+			                 "after": {"name": "web"}, "after_unknown": {"direction": true}}
+			    }
+			  ],
+			  "configuration": {"root_module": {"resources": [` + entry + `]}}
+			}`))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			change := changeAt(t, plan, "google_compute_firewall.web")
+
+			if change.Configured {
+				t.Error("a resource whose arguments were not recorded is reported as configured, " +
+					"so every unwritten attribute takes a provider default")
+			}
+			if change.Stated != nil {
+				t.Errorf("Stated = %v, want nil", change.Stated)
+			}
+			if change.States("direction") {
+				t.Error("an argument nobody recorded is reported as written")
+			}
+		})
+	}
+}
+
+// An entry that records arguments is still reported as configured, or the fix
+// above has turned every plan into one that says nothing.
+func TestAConfigurationThatRecordsArgumentsIsStillAnswerable(t *testing.T) {
+	plan, err := Parse([]byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "google_compute_firewall.web", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "web",
+	      "provider_name": "registry.terraform.io/hashicorp/google",
+	      "change": {"actions": ["create"], "before": null, "after": {"name": "web"}}
+	    }
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {
+	      "address": "google_compute_firewall.web", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "web", "provider_config_key": "google",
+	      "expressions": {"name": {"constant_value": "web"}}
+	    }
+	  ]}}
+	}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	change := changeAt(t, plan, "google_compute_firewall.web")
+
+	if !change.Configured || !change.States("name") || change.States("direction") {
+		t.Fatalf("configured = %v, stated = %v", change.Configured, change.Stated)
+	}
+}
+
+// An entry recording an empty argument set is a real answer: the author wrote a
+// resource with no arguments, which is different from a plan that did not record
+// them. It is reported as configured and states nothing.
+func TestAnEmptyArgumentSetIsAnAnswerAndNotASilence(t *testing.T) {
+	plan, err := Parse([]byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "google_compute_firewall.web", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "web",
+	      "provider_name": "registry.terraform.io/hashicorp/google",
+	      "change": {"actions": ["create"], "before": null, "after": {"name": "web"}}
+	    }
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {
+	      "address": "google_compute_firewall.web", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "web", "provider_config_key": "google",
+	      "expressions": {}
+	    }
+	  ]}}
+	}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	change := changeAt(t, plan, "google_compute_firewall.web")
+
+	if !change.Configured {
+		t.Error("an explicitly empty argument set is not an unrecorded one")
+	}
+	if change.States("direction") {
+		t.Error("an argument the author did not write is reported as written")
+	}
+}

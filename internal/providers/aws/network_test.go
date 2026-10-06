@@ -285,3 +285,67 @@ func TestASourceSplitIntoHalvesIsEveryAddress(t *testing.T) {
 		t.Fatalf("opens %q, want tcp/22", got)
 	}
 }
+
+// TestAnInlineSetWrittenAsEmptyIsAProvenClosure covers a group whose complete
+// rule set is stated and is empty.
+//
+// `ingress = []` is as much a statement as `ingress { ... }`: the configuration
+// writes the attribute and the plan carries the value, so there is nothing the
+// plan does not hold. It was reported UNKNOWN with the reason "this security
+// group's ingress rules are not written in the group itself" -- which is untrue.
+// They are written in the group; there are none.
+//
+// Closure here is bounded the same way any inline closure is: the provider does
+// not refuse a separate rule resource elsewhere.
+func TestAnInlineSetWrittenAsEmptyIsAProvenClosure(t *testing.T) {
+	capabilities := securityGroup(t, "sg-explicitly-empty").Network
+
+	if !capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("a rule set stated in full was not settled: %v", capabilities.PublicIngress.State)
+	}
+	if capabilities.PublicIngress.Get() {
+		t.Fatal("an empty rule set was read as permitting ingress")
+	}
+	var bounded bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_SECURITY_GROUP_RULES_MAY_EXIST_ELSEWHERE" {
+			bounded = true
+		}
+		if control.CheckID == "AWS_SECURITY_GROUP_RULES_INCOMPLETE" {
+			t.Errorf("a set stated in full is reported incomplete: %q", control.Reason)
+		}
+	}
+	if !bounded {
+		t.Error("the closure is not bounded by the rule resource the provider does not refuse")
+	}
+}
+
+// TestAnInlineSetWrittenOnlyAsADynamicBlockIsNotAStatedAbsence covers the shape
+// that makes the configuration question answerable only in one direction.
+//
+// Terraform's configuration block does not represent a `dynamic` block in a
+// resource's arguments at all. A body that is only `dynamic "ingress"` records no
+// arguments, so nothing can be concluded from the silence -- and a body mixing
+// one with static arguments records an object that does not mention `ingress`.
+// Reading either as "the author wrote no inline rules" is reading a grammar the
+// plan does not have.
+//
+// The answer must be UNKNOWN, and its reason must not send a reader to look for
+// rules in another file.
+func TestAnInlineSetWrittenOnlyAsADynamicBlockIsNotAStatedAbsence(t *testing.T) {
+	capabilities := securityGroup(t, "sg-dynamic-block").Network
+
+	if capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("a rule set written as a dynamic block was settled as %v",
+			capabilities.PublicIngress.Get())
+	}
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID != "AWS_SECURITY_GROUP_RULES_INCOMPLETE" {
+			continue
+		}
+		if strings.Contains(control.Reason, "not written in the group") {
+			t.Errorf("the reason asserts where the rules are, and they may be in the group: %q",
+				control.Reason)
+		}
+	}
+}

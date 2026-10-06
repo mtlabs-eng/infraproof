@@ -415,8 +415,16 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 	// today, and a counter that silently undercounts if one ever does would
 	// weaken the only assertion holding this test up.
 	var compared atomic.Int64
+	// Every golden has to be consumed by a comparison, which is the assertion a
+	// floor cannot make. planFixtures discards a plan terraformplan refuses --
+	// before any subtest exists -- so a stricter parse removed the fixture from
+	// the loop and the count simply dropped. That is the exact verdict change
+	// the Fatalf below says this test catches, and it slipped past a floor three
+	// below the real count.
+	consumed := map[string]bool{}
 	for _, fixture := range planFixtures(t) {
-		golden := filepath.Join("testdata", "baseline", baselineKey(fixture))
+		key := baselineKey(fixture)
+		golden := filepath.Join("testdata", "baseline", key)
 		want, err := os.ReadFile(golden)
 		if err != nil {
 			// A fixture with no baseline was added after the baseline was
@@ -447,15 +455,40 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 			}
 			compared.Add(1)
 		})
+		consumed[key] = true
 	}
 
-	// A comparison that compared nothing passes. The count is what keeps this
-	// from going quiet if the keys, the paths or the fixtures move.
+	// Every recorded golden, compared. Not a floor: a floor three below the real
+	// count let three goldens go missing in silence, and the fixture a stricter
+	// parse would drop is exactly the one this test exists for.
 	//
-	// It is incremented inside the subtest, after the comparison. Counting
-	// fixtures that had a baseline instead counted intent rather than work: the
-	// number reached 63 whether or not a single bundle was ever rendered.
-	if total := compared.Load(); total < 60 {
-		t.Fatalf("compared %d fixtures against their baselines, which is too few to be the set", total)
+	// The count is incremented inside the subtest, after the comparison.
+	// Counting fixtures that had a baseline counted intent rather than work.
+	entries, err := filepath.Glob(filepath.Join("testdata", "baseline", "internal_*.json"))
+	if err != nil {
+		t.Fatalf("listing the baselines: %v", err)
+	}
+	// intent.json lives here too and is the contract, not a golden; the prefix
+	// is what baselineKey produces from a fixture path.
+	goldens := entries
+	// The recorded set, as a number, because comparing the count against itself
+	// cannot see a baseline going missing: delete a golden and both sides of the
+	// equality fall together. Raise it when a baseline is deliberately added;
+	// never lower it. This is the guard the version constant has, for the same
+	// reason.
+	const recorded = 63
+	if len(goldens) < recorded {
+		t.Fatalf("found %d baselines and %d are recorded; a verdict nobody compares is a "+
+			"verdict that can change in silence", len(goldens), recorded)
+	}
+	for _, golden := range goldens {
+		if !consumed[filepath.Base(golden)] {
+			t.Errorf("%s is recorded and no fixture reached it; a plan this build stopped being "+
+				"able to read is removed from the loop rather than failing in it",
+				filepath.Base(golden))
+		}
+	}
+	if total := int(compared.Load()); total != len(goldens) {
+		t.Fatalf("compared %d fixtures against %d recorded baselines", total, len(goldens))
 	}
 }

@@ -13,6 +13,8 @@ import (
 const (
 	typeFirewall = "google_compute_firewall"
 	typeNetwork  = "google_compute_network"
+	// attrNetwork is the argument naming the network a firewall applies to.
+	attrNetwork = "network"
 
 	// defaultPriority is what the provider documents for an unstated priority.
 	defaultPriority = 1000
@@ -103,7 +105,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 				continue
 			}
 
-			together, unread := sameNetwork(subject, candidate)
+			together, unread := sameNetwork(subject, candidate, scope)
 			if unread {
 				networkUnread = true
 				continue
@@ -256,12 +258,16 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		}
 		read.priority = int(value)
 	default:
-		if !declared.Unwritten(change, "priority") {
-			read.unread = true
-			read.cited = append(read.cited, cite("priority"))
-			return read
-		}
-		// Unknown because nobody wrote it, which is the default.
+		// `priority` is Optional and not Computed: the authoritative schema says
+		// so, and a real plan confirms it by emitting 1000 for an omitted one.
+		// So an unknown value here is always something the author wrote and
+		// nothing can resolve, and there is no default to apply.
+		//
+		// Without the ordering there is no telling a deny from an allow in
+		// effect.
+		read.unread = true
+		read.cited = append(read.cited, cite("priority"))
+		return read
 	}
 
 	direction := change.After.Field("direction")
@@ -305,12 +311,13 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	case terraformplan.StateKnown:
 		read.disabled = disabled.Kind() == terraformplan.KindBool && disabled.Bool()
 	default:
-		if !declared.Unwritten(change, "disabled") {
-			read.unread = true
-			read.cited = append(read.cited, cite("disabled"))
-			return read
-		}
-		// Unwritten, so enforced: the provider's default is false.
+		// `disabled` is Optional and not Computed, and a real plan emits null for
+		// an omitted one -- which is absent, handled above. An unknown value is
+		// therefore always author-written, with no default to apply, and a rule
+		// that may or may not be enforced cannot settle anything.
+		read.unread = true
+		read.cited = append(read.cited, cite("disabled"))
+		return read
 	}
 
 	source, unread := sourceReach(change)
@@ -523,29 +530,38 @@ func port(text string) (int, bool) {
 // neither states a reference. Anything else is undetermined, and an undetermined
 // deny is not applied -- a deny that cannot be shown to reach this firewall must
 // not be used to show it is closed.
-func sameNetwork(subject, candidate terraformplan.ResourceChange) (together, unread bool) {
-	mine, hasMine := networkReference(subject)
-	theirs, hasTheirs := networkReference(candidate)
-	if hasMine && hasTheirs {
+func sameNetwork(subject, candidate terraformplan.ResourceChange,
+	scope []terraformplan.ResourceChange) (together, unread bool) {
+
+	mine, hasMine := declared.Target(subject, attrNetwork, typeNetwork, scope)
+	theirs, hasTheirs := declared.Target(candidate, attrNetwork, typeNetwork, scope)
+
+	// Undecidable on either side is undecidable, and that is the whole point of
+	// the third state. This used to compare the reference targets with their
+	// count and for_each keys stripped, so a deny on vpc["b"] was read as
+	// applying to a firewall on vpc["a"] and proved a grant of SSH from
+	// 0.0.0.0/0 closed. Three real plans reproduced it.
+	if hasMine == declared.CorrelationUndecidable || hasTheirs == declared.CorrelationUndecidable {
+		return false, true
+	}
+	if hasMine == declared.CorrelationNamed && hasTheirs == declared.CorrelationNamed {
 		return mine == theirs, false
 	}
+	// One side names a network resource and the other writes a name. The two
+	// cannot be compared -- the resource's own name is unknown until apply --
+	// so nothing here can show they are together.
+	if hasMine != hasTheirs {
+		return false, true
+	}
 
-	myName := subject.After.Field("network")
-	theirName := candidate.After.Field("network")
+	// Neither refers to a resource, so both wrote a literal and the literals are
+	// comparable.
+	myName := subject.After.Field(attrNetwork)
+	theirName := candidate.After.Field(attrNetwork)
 	if myName.Kind() != terraformplan.KindString || theirName.Kind() != terraformplan.KindString {
 		return false, true
 	}
 	return myName.Text() == theirName.Text(), false
-}
-
-// networkReference returns the network resource a firewall's configuration names.
-func networkReference(change terraformplan.ResourceChange) (string, bool) {
-	for _, reference := range change.References {
-		if reference.Attribute == "network" && strings.HasPrefix(reference.Target, typeNetwork+".") {
-			return reference.Target, true
-		}
-	}
-	return "", false
 }
 
 // coversTargets reports whether a deny reaches every instance an allow reaches.
@@ -595,10 +611,15 @@ func subtract(allows, denies []protocolPorts, approximated bool) ([]protocolPort
 				continue
 			}
 			if !allow.protocol.HasPorts() {
-				blocked = true
-				break
+				// Nothing to subtract, so the deny either reaches all of this
+				// protocol or cannot be shown to reach any of it.
+				if reachesEveryPort(deny.ports) {
+					blocked = true
+					break
+				}
+				continue
 			}
-			remaining = without(remaining, deny.ports)
+			remaining = model.Without(remaining, deny.ports)
 		}
 		if blocked {
 			continue
@@ -612,27 +633,6 @@ func subtract(allows, denies []protocolPorts, approximated bool) ([]protocolPort
 		}
 	}
 	return out, approximated
-}
-
-// without removes every port a deny covers from what an allow permits, exactly.
-func without(ranges, cuts []model.PortRange) []model.PortRange {
-	for _, cut := range cuts {
-		var next []model.PortRange
-		for _, span := range ranges {
-			if cut.To < span.From || span.To < cut.From {
-				next = append(next, span)
-				continue
-			}
-			if span.From < cut.From {
-				next = append(next, model.PortRange{From: span.From, To: cut.From - 1})
-			}
-			if cut.To < span.To {
-				next = append(next, model.PortRange{From: cut.To + 1, To: span.To})
-			}
-		}
-		ranges = next
-	}
-	return ranges
 }
 
 // openRanges turns what survives into what the rules read.
@@ -656,4 +656,19 @@ func openRanges(allows []protocolPorts, rule firewallRule) []model.OpenRange {
 		}
 	}
 	return out
+}
+
+// reachesEveryPort reports that a deny is not limited to a subset of ports.
+//
+// A protocol with no ports has nothing to subtract, so a deny reaching it was
+// applied all-or-nothing -- without its own ports being read. A deny written on
+// every protocol but limited to port 80 therefore cancelled an ICMP grant whole,
+// and the set came out as a proven closure. Both clouds document a port range as
+// applying only to the protocols that have ports, so a port-limited rule cannot
+// reach one that does not.
+//
+// No ports at all means the rule is not about ports, which is the shape a deny on
+// a port-less protocol has.
+func reachesEveryPort(ports []model.PortRange) bool {
+	return len(ports) == 0 || model.Covers(ports, model.EveryPort())
 }

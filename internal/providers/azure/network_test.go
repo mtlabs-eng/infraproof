@@ -583,3 +583,54 @@ func TestTheAsymmetryBetweenTheTwoSourceFieldsIsRead(t *testing.T) {
 		t.Error("the Internet tag stopped being read in the field that accepts it")
 	}
 }
+
+// TestAnInlineSetWrittenAsEmptyIsAProvenClosure is the same statement in this
+// cloud: `security_rule = []` writes the attribute and the plan carries the
+// value, so the set is stated in full and it is empty.
+func TestAnInlineSetWrittenAsEmptyIsAProvenClosure(t *testing.T) {
+	capabilities := securityGroup(t, "nsg-explicitly-empty").Network
+
+	if !capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("a rule set stated in full was not settled: %v", capabilities.PublicIngress.State)
+	}
+	if capabilities.PublicIngress.Get() {
+		t.Fatal("an empty rule set was read as permitting ingress")
+	}
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AZURE_NSG_RULES_INCOMPLETE" {
+			t.Errorf("a set stated in full is reported incomplete: %q", control.Reason)
+		}
+	}
+}
+
+// TestADenyLimitedToOnePortCannotCoverAProtocolWithNoPorts covers the one place
+// a deny was applied without its ports being looked at.
+//
+// A protocol with no ports has nothing to subtract, so the code took "the deny
+// reaches this protocol" to mean "the deny reaches all of it" and dropped the
+// grant whole. A deny written `protocol = "*"` with `destination_port_range =
+// "80"` -- an ordinary rule -- therefore cancelled an ICMP-from-anywhere allow,
+// and the set came out as a proven closure with no approximation reported.
+//
+// Azure requires a port range of `*` for ICMP, so a port-limited rule is not
+// about ICMP at all. The grant stands and the answer is exact: there is nothing
+// approximate about a deny that cannot reach the traffic.
+func TestADenyLimitedToOnePortCannotCoverAProtocolWithNoPorts(t *testing.T) {
+	capabilities := securityGroup(t, "nsg-icmp-deny-one-port").Network
+
+	if !capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("the set was not settled: %v", capabilities.PublicIngress.State)
+	}
+	if !capabilities.PublicIngress.Get() {
+		t.Fatal("a deny limited to port 80 cancelled a grant on a protocol that has no ports")
+	}
+	if got := rendered(capabilities.OpenToAnyAddress); got != "icmp" {
+		t.Fatalf("opens %q, want icmp", got)
+	}
+
+	// The deny that does reach every port still covers it, or this is just every
+	// deny disabled for port-less protocols.
+	if covered := securityGroup(t, "nsg-icmp-denied").Network; covered.PublicIngress.Get() {
+		t.Error("a deny reaching every port stopped covering a protocol with no ports")
+	}
+}

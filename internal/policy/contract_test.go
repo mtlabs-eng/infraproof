@@ -574,12 +574,28 @@ func TestAddingAMapperDoesNotTouchTheRule(t *testing.T) {
 				// The evidence is the one thing that must differ: it names this
 				// cloud's own attributes, which is how the rule stays ignorant
 				// of them.
+				//
+				// Named, not merely non-empty. The first version checked that
+				// the fields were set, and a mapper citing `ingress[0].access`
+				// on an Azure network security group -- an attribute that does
+				// not exist on that type -- shipped a BLOCK whose evidence led a
+				// reader into the plan to find nothing, with the whole suite
+				// green.
 				if len(finding.Evidence) == 0 {
 					t.Errorf("%s/%s: the finding cites nothing", cloud, fixture)
 				}
 				for _, ref := range finding.Evidence {
 					if ref.ResourceAddress == "" || ref.Path == "" {
 						t.Errorf("%s/%s: a citation names no attribute: %+v", cloud, fixture, ref)
+						continue
+					}
+					root := strings.FieldsFunc(ref.Path, func(r rune) bool {
+						return r == '.' || r == '['
+					})
+					if len(root) == 0 || !citable[cloud][root[0]] {
+						t.Errorf("%s/%s: the evidence cites %q, which is not an attribute this "+
+							"cloud's resources have; a reader following it finds nothing",
+							cloud, fixture, ref.Path)
 					}
 				}
 			}
@@ -598,4 +614,33 @@ func TestAddingAMapperDoesNotTouchTheRule(t *testing.T) {
 			t.Errorf("%s/%s: a closed set was not judged", cloud, fixture)
 		}
 	}
+}
+
+// citable is the attributes each cloud's mappers may name in evidence, by their
+// root. It is written out rather than derived, because deriving it from the
+// mappers would make the assertion agree with whatever they do.
+//
+// A reader follows a citation into the plan, so a path whose root is not an
+// attribute of that cloud's resources is a dead end -- and `ingress[0].access`
+// on an Azure network security group is exactly that.
+var citable = map[string]map[string]bool{
+	"aws": {
+		"ingress": true, "protocol": true, "from_port": true, "to_port": true,
+		"cidr_blocks": true, "ipv6_cidr_blocks": true, "prefix_list_ids": true,
+		"ip_protocol": true, "cidr_ipv4": true, "cidr_ipv6": true, "prefix_list_id": true,
+		"tags": true,
+	},
+	"azure": {
+		"security_rule": true, "priority": true, "access": true, "direction": true,
+		"protocol": true, "source_address_prefix": true, "source_address_prefixes": true,
+		"destination_port_range": true, "destination_port_ranges": true,
+		"destination_address_prefix": true, "destination_address_prefixes": true,
+		"tags": true,
+	},
+	"gcp": {
+		"allow": true, "deny": true, "priority": true, "direction": true, "disabled": true,
+		"source_ranges": true, "source_tags": true, "source_service_accounts": true,
+		"target_tags": true, "target_service_accounts": true, "network": true,
+		"labels": true,
+	},
 }

@@ -175,14 +175,19 @@ type ResourceChange struct {
 	References []ExpressionReference
 	// ImportID is the import ID when this change imports an existing object.
 	ImportID string
-	// Configured reports that the plan's configuration block declares this
-	// resource, which is what makes Stated answerable at all.
+	// Configured reports that the plan's configuration block recorded this
+	// resource's arguments, which is what makes Stated answerable at all.
 	//
-	// It is false for a sanitized plan and for a resource the configuration
-	// omits. The distinction matters: an attribute missing from Stated means
-	// the author did not write it only when the configuration was there to be
-	// read, and a provider default applied on the strength of a silence nobody
-	// recorded is an invented fact.
+	// It is false for a sanitized plan, for a resource the configuration omits,
+	// and for an entry that declares the resource without an expressions object
+	// -- which Terraform emits for a body that is only a dynamic block. The
+	// distinction matters: an attribute missing from Stated means the author did
+	// not write it only when the arguments were recorded, and a provider default
+	// applied on the strength of a silence nobody recorded is an invented fact.
+	//
+	// It was first written as "the configuration declares this resource", which
+	// is a different question. A review stripped the expressions objects from a
+	// plan and got PASS, exit 0, on a firewall opening SSH to 0.0.0.0/0.
 	Configured bool
 	// Stated are the configuration arguments this resource's configuration
 	// writes, sorted, nil when Configured is false.

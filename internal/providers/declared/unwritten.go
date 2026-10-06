@@ -25,3 +25,20 @@ import "github.com/mtlabs-eng/infraproof/internal/terraformplan"
 func Unwritten(change terraformplan.ResourceChange, attribute string) bool {
 	return change.Configured && !change.States(attribute)
 }
+
+// Written reports that the configuration states the argument.
+//
+// The positive form of the question, and the only direction that is reliable for
+// an attribute a provider models as a block. Terraform's configuration block does
+// not represent a `dynamic` block in a resource's arguments, so an argument's
+// absence from Stated does not prove nothing writes it -- but its presence does
+// prove the author wrote it, because block syntax and attribute syntax cannot
+// both name one attribute.
+//
+// That asymmetry is why closure is decided with this and the default-applying
+// guard is decided with Unwritten. Reading an absence as "the author wrote no
+// inline rules" would let a rule set written as a dynamic block be reported as a
+// stated absence.
+func Written(change terraformplan.ResourceChange, attribute string) bool {
+	return change.Configured && change.States(attribute)
+}

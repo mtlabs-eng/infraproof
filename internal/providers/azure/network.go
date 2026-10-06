@@ -129,7 +129,10 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	// inline set is the whole set as this plan writes it and a rule resource
 	// elsewhere could still add to it. That bound is reported rather than
 	// assumed away.
-	stated := inline.Len() > 0 && len(separate) == 0
+	// An inline set the author wrote as explicitly empty is stated in full and is
+	// empty. Only the positive question is asked, because a `dynamic` block is
+	// absent from the configuration's arguments and an absence proves nothing.
+	stated := (inline.Len() > 0 || declared.Written(subject, attrSecurityRule)) && len(separate) == 0
 
 	switch {
 	case unread:
@@ -161,9 +164,10 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 func incompleteSet() model.MissingControl {
 	return model.MissingControl{
 		CheckID: checkRuleSetIncomplete,
-		Reason: "This network security group's rules are not written in the group itself, so the " +
-			"plan does not state the whole set: a rule declared elsewhere could permit more, and a " +
-			"deny at a lower priority could permit less.",
+		Reason: "The plan does not state this network security group's rules in full: a rule " +
+			"declared elsewhere could permit more, and a deny at a lower priority could permit " +
+			"less. They may be separate rule resources, or written in the group in a form the " +
+			"plan could not resolve.",
 		Cloud: model.CloudAzure,
 	}
 }
@@ -269,12 +273,17 @@ func resolve(rules []inbound) (opened []model.OpenRange, approximated, narrowedB
 			}
 
 			if !allow.protocol.HasPorts() {
-				// Nothing to subtract: the protocol carries no ports, so a deny
-				// that reaches it reaches all of it.
-				blocked = true
-				break
+				// Nothing to subtract, so the deny either reaches all of this
+				// protocol or cannot be shown to reach any of it. Reading the
+				// first as unconditional let a deny limited to port 80 cancel an
+				// ICMP grant whole.
+				if reachesEveryPort(deny.ports) {
+					blocked = true
+					break
+				}
+				continue
 			}
-			remaining = without(remaining, deny.ports)
+			remaining = model.Without(remaining, deny.ports)
 		}
 		if blocked {
 			continue
@@ -385,32 +394,6 @@ func destinationReach(rule terraformplan.Value) (any, unread bool) {
 // though it did would report a set as closed while UDP was open.
 func covers(deny, allow model.Protocol) bool {
 	return deny == model.ProtocolEvery || deny == allow
-}
-
-// without removes every port a deny covers from what an allow permits.
-//
-// Exact, rather than all-or-nothing. A deny on 22 against an allow on 20-30
-// leaves 20-21 and 23-30, and reporting the whole range as open would claim that
-// 22 is reachable when the set says it is not -- a true-sounding statement about
-// a port nobody can reach, which is the same failure as a wrong line in a file.
-func without(ranges, cuts []model.PortRange) []model.PortRange {
-	for _, cut := range cuts {
-		var next []model.PortRange
-		for _, span := range ranges {
-			if cut.To < span.From || span.To < cut.From {
-				next = append(next, span)
-				continue
-			}
-			if span.From < cut.From {
-				next = append(next, model.PortRange{From: span.From, To: cut.From - 1})
-			}
-			if cut.To < span.To {
-				next = append(next, model.PortRange{From: cut.To + 1, To: span.To})
-			}
-		}
-		ranges = next
-	}
-	return ranges
 }
 
 // readRule reads one rule, in either of the two forms it can be written in. The
@@ -666,4 +649,19 @@ func port(text string) (int, bool) {
 		return 0, false
 	}
 	return value, true
+}
+
+// reachesEveryPort reports that a deny is not limited to a subset of ports.
+//
+// A protocol with no ports has nothing to subtract, so a deny reaching it was
+// applied all-or-nothing -- without its own ports being read. A deny written on
+// every protocol but limited to port 80 therefore cancelled an ICMP grant whole,
+// and the set came out as a proven closure. Both clouds document a port range as
+// applying only to the protocols that have ports, so a port-limited rule cannot
+// reach one that does not.
+//
+// No ports at all means the rule is not about ports, which is the shape a deny on
+// a port-less protocol has.
+func reachesEveryPort(ports []model.PortRange) bool {
+	return len(ports) == 0 || model.Covers(ports, model.EveryPort())
 }

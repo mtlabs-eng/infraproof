@@ -69,10 +69,14 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	}
 	// `ingress` is Optional and Computed, so a group that writes no inline rules
 	// has the attribute emitted as unknown rather than empty -- which is what a
-	// real create plan does and what no hand-written fixture here did. An
-	// unknown nobody wrote is not an unreadable rule set; it is the absence of
-	// one, and reading it as unreadable threw away a grant provable from a
-	// separate rule resource.
+	// real create plan does and what no hand-written fixture here did.
+	//
+	// What this changes on this cloud is the explanation, not the verdict: the
+	// switch below tests for a grant before it tests unread, and AWS has no
+	// denies, so a grant from a separate rule resource was reported either way.
+	// Without it the unknown arrived with no reason attached. An earlier version
+	// of this comment claimed it recovered a discarded grant; a review showed
+	// that was false here and true only in Azure, where unread is tested first.
 	noInlineRules := declared.Unwritten(subject, "ingress")
 	if !noInlineRules &&
 		inline.State() != terraformplan.StateKnown && inline.State() != terraformplan.StateAbsent {
@@ -107,7 +111,11 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	//
 	// A plan that does mix them cannot be settled either way: the two forms
 	// overwrite each other, so neither states the result.
-	stated := inline.Len() > 0 && len(separate) == 0
+	// An inline set the author wrote as explicitly empty is stated in full and is
+	// empty, which is as much a statement as a set of blocks. Only the positive
+	// question is asked, because a `dynamic` block is absent from the
+	// configuration's arguments and an absence proves nothing.
+	stated := (inline.Len() > 0 || declared.Written(subject, "ingress")) && len(separate) == 0
 
 	switch {
 	case len(found.ranges) > 0:
@@ -130,9 +138,9 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		capabilities.PublicIngress = model.Unknown[bool](found.cited...)
 		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
 			CheckID: checkRuleSetIncomplete,
-			Reason: "This security group's ingress rules are not written in the group itself, so the " +
-				"plan does not state the whole set and nothing here can show that no rule permits " +
-				"ingress from any address.",
+			Reason: "The plan does not state this security group's ingress rules in full, so nothing " +
+				"here can show that no rule permits ingress from any address. They may be separate " +
+				"rule resources, or written in the group in a form the plan could not resolve.",
 			Cloud: model.CloudAWS,
 		})
 	}

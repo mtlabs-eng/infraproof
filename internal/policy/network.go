@@ -96,33 +96,18 @@ func ingressFinding(resource model.NormalizedResource, capabilities model.Networ
 		return evidence.Finding{}, false
 	}
 
+	// Disposition follows what was declared; what the claim accounts for does
+	// not. The combined case was first written as `stated && ...`, so a contract
+	// with no network entry -- the supported case, since silence is not
+	// permission -- produced a claim about the port-less protocol alone, with an
+	// undeclared port open to the internet sitting in the Observed value and in
+	// neither the claim nor the remediation. The review format renders the claim
+	// and not the observation, so a reader was told only about the protocol.
 	disposition := evidence.DispositionWarn
-	claim := "The change permits ingress from any address, and the intent contract does not declare " +
-		"which ports may be reachable from any address."
-	remediation := "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
-	// A violation outranks a question: an undeclared port open to the internet is
-	// a statement the contract contradicts, a protocol a port list cannot
-	// describe is a question it cannot answer, and a disposition must never be
-	// lowered by an additional fact. The claim has to account for both when both
-	// are present, or part of a BLOCK's evidence supports a conclusion the claim
-	// never states.
-	switch {
-	case stated && len(exceeding) > 0 && len(undescribable) > 0:
+	if stated && len(exceeding) > 0 {
 		disposition = evidence.DispositionBlock
-		claim = "The change permits ingress from any address on a port the intent contract does not " +
-			"declare as reachable from any address, and on a protocol the contract cannot describe."
-		remediation = "Remove the rule that permits ingress from any address, declare the port in the " +
-			"intent contract, and confirm that the protocol is intended to be reachable from any address."
-	case stated && len(exceeding) > 0:
-		disposition = evidence.DispositionBlock
-		claim = "The change permits ingress from any address on a port the intent contract does not " +
-			"declare as reachable from any address."
-		remediation = "Remove the rule that permits ingress from any address, or declare the port in the intent contract."
-	case len(undescribable) > 0:
-		claim = "The change permits ingress from any address on a protocol the intent contract cannot " +
-			"describe, because a port declaration can neither permit nor forbid it."
-		remediation = "Confirm that this protocol is intended to be reachable from any address, or remove the rule."
 	}
+	claim, remediation := ingressClaim(stated, len(exceeding) > 0, len(undescribable) > 0)
 
 	finding := evidence.Finding{
 		RuleID: RuleNetworkPublicIngress,
@@ -140,6 +125,50 @@ func ingressFinding(resource model.NormalizedResource, capabilities model.Networ
 		Remediation: remediation,
 	}
 	return finding, true
+}
+
+// ingressClaim composes the claim and the remediation from the facts present.
+//
+// Every fact in the Observed value has to be accounted for, because a claim that
+// states part of what it observed leaves the rest supporting a conclusion nobody
+// wrote down -- and for a BLOCK, part of the deterministic evidence then argues
+// for something else.
+//
+// A port the contract did not declare and a protocol a port list cannot describe
+// are different statements, so three of the six combinations need a sentence of
+// their own rather than whichever one a switch happened to reach first.
+func ingressClaim(stated, ports, protocols bool) (claim, remediation string) {
+	const (
+		opens         = "The change permits ingress from any address"
+		undeclared    = "on a port the intent contract does not declare as reachable from any address"
+		undescribable = "on a protocol the intent contract cannot describe"
+		silent        = "the intent contract does not declare which ports may be reachable from any address"
+		removeRule    = "remove the rule that permits ingress from any address"
+		declarePort   = "declare the port in the intent contract"
+		declarePorts  = "Declare the ports in the intent contract"
+		confirmProto  = "confirm that the protocol is intended to be reachable from any address"
+	)
+
+	switch {
+	case ports && protocols && stated:
+		return opens + " " + undeclared + ", and " + undescribable + ".",
+			"Remove the rule that permits ingress from any address, " + declarePort +
+				", and " + confirmProto + "."
+	case ports && protocols:
+		return opens + " on a port, and " + undescribable + "; " + silent + ".",
+			declarePorts + ", " + confirmProto + ", or " + removeRule + "."
+	case ports && stated:
+		return opens + " " + undeclared + ".",
+			"Remove the rule that permits ingress from any address, or " + declarePort + "."
+	case ports:
+		return opens + ", and " + silent + ".",
+			declarePorts + ", or " + removeRule + "."
+	default:
+		return opens + " " + undescribable +
+				", because a port declaration can neither permit nor forbid it.",
+			"Confirm that this protocol is intended to be reachable from any address, " +
+				"or remove the rule."
+	}
 }
 
 // beyondDeclaration splits what the change opens into the ranges the contract did
