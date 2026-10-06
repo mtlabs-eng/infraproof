@@ -175,6 +175,33 @@ type ResourceChange struct {
 	References []ExpressionReference
 	// ImportID is the import ID when this change imports an existing object.
 	ImportID string
+	// Configured reports that the plan's configuration block declares this
+	// resource, which is what makes Stated answerable at all.
+	//
+	// It is false for a sanitized plan and for a resource the configuration
+	// omits. The distinction matters: an attribute missing from Stated means
+	// the author did not write it only when the configuration was there to be
+	// read, and a provider default applied on the strength of a silence nobody
+	// recorded is an invented fact.
+	Configured bool
+	// Stated are the configuration arguments this resource's configuration
+	// writes, sorted, nil when Configured is false.
+	//
+	// An Optional and Computed attribute is emitted as unknown both when the
+	// author left it out, where the provider's documented default applies, and
+	// when it is set from something undetermined, where nothing does. The plan
+	// gives the two the same shape; this is the only thing that separates them.
+	Stated []string
+}
+
+// States reports whether the configuration writes an argument.
+//
+// False when the plan carries no configuration for the resource, because an
+// argument nobody recorded is not an argument known to be absent. A caller
+// deciding anything from a silence has to consult Configured first.
+func (c ResourceChange) States(attribute string) bool {
+	_, found := slices.BinarySearch(c.Stated, attribute)
+	return found
 }
 
 // ExpressionReference is one resource named by another resource's

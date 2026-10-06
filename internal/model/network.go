@@ -63,6 +63,54 @@ func (r PortRange) Contains(other PortRange) bool {
 	return r.From <= other.From && other.To <= r.To
 }
 
+// Overlaps reports whether two ranges share a port.
+//
+// It is what tells an approximation from an exact answer: a deny whose ports do
+// not meet an allow's removed nothing from it, and warning that the answer may be
+// wider than reality would be a warning about nothing.
+func (r PortRange) Overlaps(other PortRange) bool {
+	return r.From <= other.To && other.From <= r.To
+}
+
+// Covers reports whether a set of ranges, taken together, covers all of another.
+//
+// The union, not any single member. A contract declaring 80 and 81 has declared
+// 80-81, and asking whether one declared range contains the whole opened range
+// reported a violation whose claim was untrue of every port involved -- a BLOCK
+// the Evidence Bundle requires to rest on deterministic evidence, resting on
+// arithmetic instead.
+func Covers(set []PortRange, one PortRange) bool {
+	return len(Without([]PortRange{one}, set)) == 0
+}
+
+// Without removes every port the cuts cover from the ranges, exactly.
+//
+// It lives here because both ordered-set mappers need it and a port range is
+// arithmetic rather than a cloud fact. It lived in two provider files, byte for
+// byte, which is two chances to disagree about what 20-30 minus 22 leaves.
+//
+// The result is ascending and never touching when the input is, carries no
+// reversed range, and is nil rather than empty when everything is cut.
+func Without(ranges, cuts []PortRange) []PortRange {
+	for _, cut := range cuts {
+		var next []PortRange
+		for _, span := range ranges {
+			if !span.Overlaps(cut) {
+				next = append(next, span)
+				continue
+			}
+			if span.From < cut.From {
+				next = append(next, PortRange{From: span.From, To: cut.From - 1})
+			}
+			if cut.To < span.To {
+				next = append(next, PortRange{From: cut.To + 1, To: span.To})
+			}
+		}
+		ranges = next
+	}
+	return ranges
+}
+
 // OpenRange is one protocol and port range a change makes reachable from any
 // address, with the provider attributes it was read from.
 type OpenRange struct {

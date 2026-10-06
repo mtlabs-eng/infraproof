@@ -1,0 +1,231 @@
+package terraformplan
+
+import (
+	"reflect"
+	"testing"
+)
+
+// A provider attribute that is Optional and Computed is emitted as unknown when
+// the configuration does not set it, and unknown is also what an attribute set
+// from something undetermined emits. The two are the same shape in the plan and
+// opposite in meaning: the first has a documented default a mapper may apply,
+// the second is a value nobody can know yet.
+//
+// The configuration block separates them, because it records what the author
+// wrote. This is the question a mapper has to be able to ask instead of guessing
+// -- an unknown GCP firewall direction read as unreadable makes every idiomatic
+// firewall undeterminable, and read as INGRESS invents a fact about one that was
+// genuinely interpolated.
+func TestTheConfigurationSaysWhichAttributesTheAuthorWrote(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "google_compute_firewall.implicit", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "implicit",
+	      "provider_name": "registry.terraform.io/hashicorp/google",
+	      "change": {"actions": ["create"], "before": null,
+	                 "after": {"name": "implicit"}, "after_unknown": {"direction": true}}
+	    },
+	    {
+	      "address": "google_compute_firewall.explicit", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "explicit",
+	      "provider_name": "registry.terraform.io/hashicorp/google",
+	      "change": {"actions": ["create"], "before": null,
+	                 "after": {"name": "explicit", "direction": "INGRESS"}}
+	    }
+	  ],
+	  "configuration": {
+	    "root_module": {
+	      "resources": [
+	        {
+	          "address": "google_compute_firewall.implicit", "mode": "managed",
+	          "type": "google_compute_firewall", "name": "implicit",
+	          "provider_config_key": "google",
+	          "expressions": {
+	            "name": {"constant_value": "implicit"},
+	            "allow": [{"protocol": {"constant_value": "tcp"}}]
+	          }
+	        },
+	        {
+	          "address": "google_compute_firewall.explicit", "mode": "managed",
+	          "type": "google_compute_firewall", "name": "explicit",
+	          "provider_config_key": "google",
+	          "expressions": {
+	            "name": {"constant_value": "explicit"},
+	            "direction": {"constant_value": "INGRESS"}
+	          }
+	        }
+	      ]
+	    }
+	  }
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	implicit := changeAt(t, plan, "google_compute_firewall.implicit")
+	if !implicit.Configured {
+		t.Fatal("a resource the configuration block declares is not reported as configured")
+	}
+	if implicit.States("direction") {
+		t.Error("an attribute the configuration does not mention is reported as written")
+	}
+	// A nested block is an argument the author wrote, and a mapper asking
+	// whether a rule set was stated inline is asking exactly this.
+	if !implicit.States("allow") {
+		t.Error("a nested block the configuration states is not reported as written")
+	}
+	if !implicit.States("name") {
+		t.Error("a constant argument is not reported as written")
+	}
+	if got := implicit.Stated; !reflect.DeepEqual(got, []string{"allow", "name"}) {
+		t.Errorf("Stated = %v, want the written arguments in sorted order", got)
+	}
+
+	explicit := changeAt(t, plan, "google_compute_firewall.explicit")
+	if !explicit.States("direction") {
+		t.Error("an attribute the configuration sets is not reported as written")
+	}
+}
+
+// Absence of the configuration block is not absence of the argument. A sanitized
+// plan does not say what the author wrote, so nothing may be concluded from the
+// silence -- applying a documented default there would be inventing the one fact
+// the plan withheld.
+func TestWithoutAConfigurationBlockNothingIsKnownAboutWhatWasWritten(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "google_compute_firewall.web", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "web",
+	      "provider_name": "registry.terraform.io/hashicorp/google",
+	      "change": {"actions": ["create"], "before": null, "after": {"name": "web"}}
+	    }
+	  ]
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	change := changeAt(t, plan, "google_compute_firewall.web")
+
+	if change.Configured {
+		t.Fatal("a plan with no configuration block reports its resources as configured")
+	}
+	if change.States("name") {
+		t.Error("an attribute present in after is reported as written, which the plan never said")
+	}
+	if change.Stated != nil {
+		t.Errorf("Stated = %v, want nil: the plan states nothing about what was written", change.Stated)
+	}
+}
+
+// A resource the plan changes but the configuration does not declare is the same
+// silence one resource at a time. It happens: a plan sanitized per resource, or a
+// configuration block that lost a module.
+func TestAResourceMissingFromTheConfigurationIsNotReportedAsConfigured(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "google_compute_firewall.web", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "web",
+	      "provider_name": "registry.terraform.io/hashicorp/google",
+	      "change": {"actions": ["create"], "before": null, "after": {"name": "web"}}
+	    }
+	  ],
+	  "configuration": {
+	    "root_module": {
+	      "resources": [
+	        {
+	          "address": "google_compute_network.vpc", "mode": "managed",
+	          "type": "google_compute_network", "name": "vpc",
+	          "provider_config_key": "google",
+	          "expressions": {"name": {"constant_value": "vpc"}}
+	        }
+	      ]
+	    }
+	  }
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	change := changeAt(t, plan, "google_compute_firewall.web")
+
+	if change.Configured || change.States("name") || change.Stated != nil {
+		t.Fatalf("configured = %v, stated = %v for a resource the configuration omits",
+			change.Configured, change.Stated)
+	}
+}
+
+// A resource inside a module is reached by its qualified address, the same way
+// its references are. An unqualified lookup would hand a module's resource the
+// arguments of a root resource with the same local name.
+func TestStatedAttributesAreFoundForAModuleResource(t *testing.T) {
+	raw := []byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "module.net.google_compute_firewall.web", "module_address": "module.net",
+	      "mode": "managed", "type": "google_compute_firewall", "name": "web",
+	      "provider_name": "registry.terraform.io/hashicorp/google",
+	      "change": {"actions": ["create"], "before": null, "after": {"name": "web"}}
+	    },
+	    {
+	      "address": "google_compute_firewall.web", "mode": "managed",
+	      "type": "google_compute_firewall", "name": "web",
+	      "provider_name": "registry.terraform.io/hashicorp/google",
+	      "change": {"actions": ["create"], "before": null, "after": {"name": "root"}}
+	    }
+	  ],
+	  "configuration": {
+	    "root_module": {
+	      "resources": [
+	        {
+	          "address": "google_compute_firewall.web", "mode": "managed",
+	          "type": "google_compute_firewall", "name": "web",
+	          "provider_config_key": "google",
+	          "expressions": {"direction": {"constant_value": "INGRESS"}}
+	        }
+	      ],
+	      "module_calls": {
+	        "net": {
+	          "source": "./net",
+	          "module": {
+	            "resources": [
+	              {
+	                "address": "google_compute_firewall.web", "mode": "managed",
+	                "type": "google_compute_firewall", "name": "web",
+	                "provider_config_key": "google",
+	                "expressions": {"allow": [{"protocol": {"constant_value": "tcp"}}]}
+	              }
+	            ]
+	          }
+	        }
+	      }
+	    }
+	  }
+	}`)
+
+	plan, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	inner := changeAt(t, plan, "module.net.google_compute_firewall.web")
+	if !inner.Configured || inner.States("direction") || !inner.States("allow") {
+		t.Errorf("the module resource reports configured = %v, stated = %v; it took the root's arguments",
+			inner.Configured, inner.Stated)
+	}
+	root := changeAt(t, plan, "google_compute_firewall.web")
+	if !root.States("direction") || root.States("allow") {
+		t.Errorf("the root resource reports stated = %v; it took the module's arguments", root.Stated)
+	}
+}

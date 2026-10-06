@@ -58,6 +58,7 @@ type configResource struct {
 	providerConfigKey string
 	repeated          bool
 	references        []ExpressionReference
+	stated            []string
 }
 
 func resolveReferences(refs []ExpressionReference, byAddress map[string]configResource) []ExpressionReference {
@@ -167,6 +168,7 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 					providerConfigKey: optionalString(fields, "provider_config_key", entryPath+".provider_config_key", errs),
 					repeated:          byForEach || byCount,
 					references:        parseExpressions(entryPath, fields, addressPrefix, errs),
+					stated:            statedArguments(fields),
 				}
 			}
 		}
@@ -208,6 +210,36 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 		}
 		walkModule(callPath+".module", address, inner, byAddress, calls, errs)
 	}
+}
+
+// statedArguments names every argument a resource's configuration writes.
+//
+// The keys of the expressions object are exactly the arguments the author wrote,
+// whether they hold a constant, a reference, or a nested block. Meta-arguments
+// live outside it and are not arguments of the resource.
+//
+// Sorted, for a binary search and so that two plans differing only in key order
+// -- which JSON object order is -- produce the same answer.
+func statedArguments(fields map[string]any) []string {
+	raw, present := fields["expressions"]
+	if !present || raw == nil {
+		return nil
+	}
+	body, ok := raw.(map[string]any)
+	if !ok {
+		// parseExpressions reports the malformed shape; naming the arguments of
+		// something that is not an object is not this function's to invent.
+		return nil
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(body))
+	for name := range body {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // parseExpressions reads every reference a resource's configuration makes:
@@ -401,6 +433,8 @@ func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
 		change.ProviderAlias = plan.ProviderConfigs[configured.providerConfigKey].Alias
 		change.DeclaredRepeated = configured.repeated
 		change.References = configured.references
+		change.Configured = true
+		change.Stated = configured.stated
 	}
 }
 

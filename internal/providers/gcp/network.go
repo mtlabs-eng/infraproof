@@ -84,6 +84,14 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			switch {
 			case deny.unread || deny.disabled || !deny.inbound || len(deny.denies) == 0:
 				continue
+			case !deny.anySource:
+				// A deny reaches only the addresses it names. One scoped to a
+				// private range, or to a tag, says nothing about traffic from
+				// the internet -- and using it to cancel a grant open to the
+				// world reported PASS, with no finding and no unknown, for a
+				// port open to everyone. Azure's resolve has always required
+				// this; nothing proved either of them did.
+				continue
 			case deny.priority > rule.priority:
 				// Above this rule in the ordering, so it never reaches traffic
 				// this rule has already permitted. Equal is not above: a deny
@@ -189,8 +197,11 @@ type firewallRule struct {
 	// both.
 	allows, denies []protocolPorts
 	targets        []string
-	unread         bool
-	cited          []model.Provenance
+	// targetsUnread records that which instances this rule reaches could not be
+	// read, which bounds comparison with a deny without unsettling the rule.
+	targetsUnread bool
+	unread        bool
+	cited         []model.Provenance
 }
 
 // protocolPorts is one allow or deny block.
@@ -220,8 +231,12 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		}
 		read.priority = int(value)
 	default:
-		read.unread = true
-		return read
+		if !declared.Unwritten(change, "priority") {
+			read.unread = true
+			read.cited = append(read.cited, cite("priority"))
+			return read
+		}
+		// Unknown because nobody wrote it, which is the default.
 	}
 
 	direction := change.After.Field("direction")
@@ -231,12 +246,20 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	case terraformplan.StateKnown:
 		read.inbound = strings.EqualFold(direction.Text(), "INGRESS")
 	default:
-		// The field is computed, so a plan may not state it -- and in or out is
-		// the difference between a rule about who can reach in and one about
-		// nothing of the sort.
-		read.unread = true
-		read.cited = append(read.cited, cite("direction"))
-		return read
+		// The field is Optional and Computed, so a real create plan emits it as
+		// unknown for every firewall that does not spell it out -- which is
+		// nearly all of them. Reading that as unreadable made the common case
+		// undeterminable; the configuration is what says whether the unknown is
+		// the provider's default or a value somebody interpolated.
+		//
+		// In or out is the difference between a rule about who can reach in and
+		// one about nothing of the sort, so an interpolated direction is still
+		// a gap.
+		if !declared.Unwritten(change, "direction") {
+			read.unread = true
+			read.cited = append(read.cited, cite("direction"))
+			return read
+		}
 	}
 
 	disabled := change.After.Field("disabled")
@@ -245,9 +268,12 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	case terraformplan.StateKnown:
 		read.disabled = disabled.Kind() == terraformplan.KindBool && disabled.Bool()
 	default:
-		read.unread = true
-		read.cited = append(read.cited, cite("disabled"))
-		return read
+		if !declared.Unwritten(change, "disabled") {
+			read.unread = true
+			read.cited = append(read.cited, cite("disabled"))
+			return read
+		}
+		// Unwritten, so enforced: the provider's default is false.
 	}
 
 	source, unread := sourceReach(change)
@@ -257,7 +283,16 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	}
 	read.anySource = source
 
-	read.targets = append(targetsOf(change, "target_tags"), targetsOf(change, "target_service_accounts")...)
+	tags, tagsUnread := targetsOf(change, "target_tags")
+	accounts, accountsUnread := targetsOf(change, "target_service_accounts")
+	// Separate from unread, because a target says which instances a rule reaches
+	// and not whether it permits ingress. A grant can still be settled with an
+	// undetermined target; what cannot be settled is whether a deny covers it.
+	read.targetsUnread = tagsUnread || accountsUnread
+	read.targets = append(tags, accounts...)
+	if read.targetsUnread {
+		read.cited = append(read.cited, cite("target_tags"))
+	}
 
 	allows, ok := blocksOf(change, "allow")
 	if !ok {
@@ -314,19 +349,27 @@ func sourceReach(change terraformplan.ResourceChange) (any, unread bool) {
 }
 
 // targetsOf reads one of the two fields that narrow a firewall to some instances.
-func targetsOf(change terraformplan.ResourceChange, field string) []string {
+func targetsOf(change terraformplan.ResourceChange, field string) (targets []string, unread bool) {
 	value := change.After.Field(field)
-	if value.State() != terraformplan.StateKnown {
-		return nil
+	switch value.State() {
+	case terraformplan.StateAbsent:
+		return nil, false
+	case terraformplan.StateKnown:
+	default:
+		return nil, true
 	}
-	var out []string
+
 	for i := range value.Len() {
 		element := value.At(i)
-		if element.Kind() == terraformplan.KindString {
-			out = append(out, field+":"+element.Text())
+		if element.Kind() != terraformplan.KindString {
+			// Dropping it made a deny targeting {"web"} appear to cover an allow
+			// targeting {"web", <unknown>}: the instances carrying the tag
+			// nobody can read are reached by the allow and not by the deny.
+			return nil, true
 		}
+		targets = append(targets, field+":"+element.Text())
 	}
-	return out
+	return targets, false
 }
 
 // blocksOf reads the allow or deny blocks of a firewall.
@@ -375,7 +418,17 @@ func protocolOf(value terraformplan.Value) (model.Protocol, bool) {
 	case "icmp":
 		return model.ProtocolICMP, true
 	default:
-		return model.ProtocolUnrecognized, true
+		// The provider documents the IANA number as an accepted spelling and
+		// passes it through verbatim, so a real `protocol = "6"` reaches here.
+		if protocol, ok := declared.ProtocolNumber(value.Text()); ok {
+			return protocol, true
+		}
+		// Not readable rather than "some protocol". Every spelling this build
+		// cannot name used to collapse onto one value, and coverage is then
+		// decided by equality -- so a deny on protocol 47 cancelled an allow on
+		// protocol 6. AWS already refuses one, and the three clouds have to
+		// agree about equivalent situations.
+		return model.ProtocolUnrecognized, false
 	}
 }
 
@@ -477,6 +530,12 @@ func networkReference(change terraformplan.ResourceChange) (string, bool) {
 // to a subset of them -- and an allow with no targets applies to every instance,
 // which a targeted deny cannot cover.
 func coversTargets(deny, allow firewallRule) bool {
+	if deny.targetsUnread || allow.targetsUnread {
+		// One side's instances are not stated, so no subset relation can be
+		// established either way. A deny that cannot be shown to cover must not
+		// be used to show this rule is closed.
+		return false
+	}
 	if len(deny.targets) == 0 {
 		return true
 	}

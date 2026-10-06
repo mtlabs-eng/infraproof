@@ -113,3 +113,119 @@ func TestANetworkResourceCarriesItsCapabilities(t *testing.T) {
 		t.Fatal("an uninterpreted resource carries a capability")
 	}
 }
+
+// TestASetOfRangesCoversAnother is the comparison a declaration is made with.
+// The contract declares a list, and a change opening 80-81 against a declaration
+// of 80 and 81 is permitted: the union covers it, and asking whether any single
+// declared range contains the whole thing reported a violation whose claim was
+// untrue of every port involved.
+func TestASetOfRangesCoversAnother(t *testing.T) {
+	cases := map[string]struct {
+		set  []model.PortRange
+		one  model.PortRange
+		want bool
+	}{
+		"one range covering it": {
+			[]model.PortRange{{From: 8000, To: 8100}}, model.PortRange{From: 8080, To: 8090}, true},
+		"two adjacent ranges": {
+			[]model.PortRange{{From: 80, To: 80}, {From: 81, To: 81}},
+			model.PortRange{From: 80, To: 81}, true},
+		"two overlapping ranges": {
+			[]model.PortRange{{From: 8000, To: 8050}, {From: 8040, To: 8100}},
+			model.PortRange{From: 8000, To: 8100}, true},
+		"out of order": {
+			[]model.PortRange{{From: 81, To: 81}, {From: 80, To: 80}},
+			model.PortRange{From: 80, To: 81}, true},
+		"a gap in the middle": {
+			[]model.PortRange{{From: 80, To: 80}, {From: 82, To: 82}},
+			model.PortRange{From: 80, To: 82}, false},
+		"one port short at the bottom": {
+			[]model.PortRange{{From: 8000, To: 8100}}, model.PortRange{From: 7999, To: 8100}, false},
+		"one port short at the top": {
+			[]model.PortRange{{From: 8000, To: 8100}}, model.PortRange{From: 8000, To: 8101}, false},
+		"nothing declared": {nil, model.PortRange{From: 443, To: 443}, false},
+		"every port declared": {
+			[]model.PortRange{model.EveryPort()}, model.PortRange{From: 0, To: 65535}, true},
+		"duplicated declarations": {
+			[]model.PortRange{{From: 443, To: 443}, {From: 443, To: 443}},
+			model.PortRange{From: 443, To: 443}, true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := model.Covers(c.set, c.one); got != c.want {
+				t.Fatalf("Covers(%v, %v) = %v, want %v", c.set, c.one, got, c.want)
+			}
+		})
+	}
+}
+
+// TestWithoutRemovesExactlyWhatIsCut is the arithmetic both ordered-set mappers
+// resolve a deny with. It lived in two files, byte for byte, which is two chances
+// to disagree about what 20-30 minus 22 leaves.
+func TestWithoutRemovesExactlyWhatIsCut(t *testing.T) {
+	cases := map[string]struct {
+		ranges, cuts, want []model.PortRange
+	}{
+		"a hole in the middle": {
+			[]model.PortRange{{From: 20, To: 30}}, []model.PortRange{{From: 22, To: 22}},
+			[]model.PortRange{{From: 20, To: 21}, {From: 23, To: 30}}},
+		"the low endpoint": {
+			[]model.PortRange{{From: 21, To: 22}}, []model.PortRange{{From: 20, To: 22}}, nil},
+		"the high endpoint": {
+			[]model.PortRange{{From: 22, To: 23}}, []model.PortRange{{From: 20, To: 22}},
+			[]model.PortRange{{From: 23, To: 23}}},
+		"disjoint below": {
+			[]model.PortRange{{From: 20, To: 30}}, []model.PortRange{{From: 10, To: 19}},
+			[]model.PortRange{{From: 20, To: 30}}},
+		"everything": {
+			[]model.PortRange{model.EveryPort()}, []model.PortRange{model.EveryPort()}, nil},
+		"port zero": {
+			[]model.PortRange{model.EveryPort()}, []model.PortRange{{From: 0, To: 0}},
+			[]model.PortRange{{From: 1, To: 65535}}},
+		"the last port": {
+			[]model.PortRange{model.EveryPort()}, []model.PortRange{{From: 65535, To: 65535}},
+			[]model.PortRange{{From: 0, To: 65534}}},
+		"two cuts in sequence": {
+			[]model.PortRange{{From: 20, To: 30}},
+			[]model.PortRange{{From: 22, To: 25}, {From: 24, To: 27}},
+			[]model.PortRange{{From: 20, To: 21}, {From: 28, To: 30}}},
+		"nothing to cut": {
+			[]model.PortRange{{From: 443, To: 443}}, nil, []model.PortRange{{From: 443, To: 443}}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := model.Without(c.ranges, c.cuts)
+			if len(got) != len(c.want) {
+				t.Fatalf("Without(%v, %v) = %v, want %v", c.ranges, c.cuts, got, c.want)
+			}
+			for i := range c.want {
+				if got[i] != c.want[i] {
+					t.Fatalf("Without(%v, %v) = %v, want %v", c.ranges, c.cuts, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// TestRangesOverlap is what tells an approximation from an exact answer: a deny
+// whose ports do not meet the allow's removed nothing, and reporting that the
+// answer may be wider than reality would be a warning about nothing.
+func TestRangesOverlap(t *testing.T) {
+	cases := map[string]struct {
+		a, b model.PortRange
+		want bool
+	}{
+		"identical":           {model.PortRange{From: 22, To: 22}, model.PortRange{From: 22, To: 22}, true},
+		"touching at a point": {model.PortRange{From: 20, To: 22}, model.PortRange{From: 22, To: 30}, true},
+		"adjacent":            {model.PortRange{From: 20, To: 21}, model.PortRange{From: 22, To: 30}, false},
+		"disjoint":            {model.PortRange{From: 443, To: 443}, model.PortRange{From: 22, To: 22}, false},
+		"one inside other":    {model.PortRange{From: 0, To: 65535}, model.PortRange{From: 22, To: 22}, true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := c.a.Overlaps(c.b); got != c.want {
+				t.Fatalf("%v.Overlaps(%v) = %v, want %v", c.a, c.b, got, c.want)
+			}
+		})
+	}
+}

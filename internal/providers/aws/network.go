@@ -315,6 +315,13 @@ func protocolOf(value terraformplan.Value) (model.Protocol, bool) {
 	case "icmp", "icmpv6":
 		return model.ProtocolICMP, true
 	default:
+		// `protocol` on an inline block is normalized by the provider, but
+		// `ip_protocol` on a standalone rule is not: a real plan carries "6"
+		// through verbatim, and refusing it loses the verdict on an ordinary
+		// rule.
+		if protocol, ok := declared.ProtocolNumber(value.Text()); ok {
+			return protocol, true
+		}
 		return model.ProtocolUnrecognized, false
 	}
 }

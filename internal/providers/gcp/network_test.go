@@ -15,6 +15,13 @@ import (
 // never does.
 func graphOf(t *testing.T, fixture string) model.Graph {
 	t.Helper()
+	return providers.Normalize(planOf(t, fixture), providers.Default())
+}
+
+// planOf parses a fixture, for the tests that ask what the plan itself says
+// rather than what the mapper made of it.
+func planOf(t *testing.T, fixture string) terraformplan.Plan {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", fixture+".json"))
 	if err != nil {
 		t.Fatalf("reading fixture: %v", err)
@@ -23,7 +30,7 @@ func graphOf(t *testing.T, fixture string) model.Graph {
 	if err != nil {
 		t.Fatalf("parsing fixture: %v", err)
 	}
-	return providers.Normalize(plan, providers.Default())
+	return plan
 }
 
 // firewall returns the normalized firewall every fixture is about.
@@ -100,9 +107,26 @@ func TestIngressDetermination(t *testing.T) {
 		// says which network either of them is on. This is the ordinary shape,
 		// not an edge one.
 		"fw-denied-unknown-network": {model.FactKnown, false, ""},
-		"fw-denied-equal":           {model.FactKnown, false, ""},
-		"fw-deny-above":             {model.FactKnown, true, "tcp/22"},
-		"fw-deny-other-network":     {model.FactKnown, true, "tcp/22"},
+		// A deny that reaches only private addresses cannot cancel a grant open
+		// to the world. Independent review found this reported PASS with no
+		// finding at all, which is the under-reporting failure this project
+		// ranks worst.
+		"fw-deny-private-source": {model.FactKnown, true, "tcp/22"},
+		"fw-deny-tag-source":     {model.FactKnown, true, "tcp/22"},
+		// A target tag the plan has not determined: the deny's coverage cannot
+		// be computed, so it cannot be used to show this is closed.
+		"fw-unknown-target": {model.FactKnown, true, "tcp/22"},
+		// The provider documents the IANA number as an accepted spelling and
+		// passes it through verbatim, so 6 is TCP and refusing it would lose
+		// the verdict on an ordinary rule.
+		"fw-protocol-number": {model.FactKnown, true, "tcp/22"},
+		// A number IANA assigns to a protocol this build cannot name is not a
+		// protocol it may compare. AWS already refuses one; the three clouds
+		// have to agree.
+		"fw-protocol-unnameable": {model.FactUnknown, false, ""},
+		"fw-denied-equal":        {model.FactKnown, false, ""},
+		"fw-deny-above":          {model.FactKnown, true, "tcp/22"},
+		"fw-deny-other-network":  {model.FactKnown, true, "tcp/22"},
 		// The same pair with no references anywhere, where only the literal
 		// network names separate them.
 		"fw-deny-other-network-literal": {model.FactKnown, true, "tcp/22"},
@@ -115,7 +139,11 @@ func TestIngressDetermination(t *testing.T) {
 		// whether the rule could be read: the provider refuses the pairing and
 		// this build ignores the field rather than failing on it.
 		"fw-icmp-with-ports": {model.FactKnown, true, "icmp"},
-		// What the plan has not determined.
+		// What the plan has not determined, in the only shape where that is a
+		// gap rather than a default: the configuration writes the attribute and
+		// the value it writes cannot be resolved yet. An unknown nobody wrote is
+		// the provider's documented default, which is what a real create plan
+		// emits for every firewall that leaves direction out.
 		"fw-unknown-direction": {model.FactUnknown, false, ""},
 		"fw-unknown-source":    {model.FactUnknown, false, ""},
 		// A priority the plan has not determined, so nothing can be ordered
