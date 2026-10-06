@@ -49,6 +49,19 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports that only the bucket is normalized in its own right.
 func (Mapper) IsSubject(resourceType string) bool { return resourceType == typeBucket }
 
+// FamilyOf names the family a resource type belongs to. Every type this mapper
+// interprets today is object storage; the normalizer asks because a control
+// resource cannot be placed by what it returned, and assuming one family was
+// invisible until a second one existed.
+func (Mapper) FamilyOf(resourceType string) model.Family {
+	switch resourceType {
+	case typeBucket, typeIAMMember, typeIAMBinding, typeIAMPolicy:
+		return model.FamilyObjectStorage
+	default:
+		return model.FamilyUnknown
+	}
+}
+
 // The questions this mapper answers about a bucket. Prevention is read from the
 // bucket itself, so the subject answers for it and nothing else can.
 const (

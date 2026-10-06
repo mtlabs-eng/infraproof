@@ -24,6 +24,14 @@ type Mapper interface {
 	// IsSubject reports whether a resource type is one this mapper normalizes
 	// in its own right, as opposed to a control over another resource.
 	IsSubject(resourceType string) bool
+	// FamilyOf names the family a resource type belongs to.
+	//
+	// It is asked rather than assumed because a control resource carries no
+	// capabilities of its own, so nothing it returns can place it. Until a
+	// mapper interpreted a second family, the answer was object storage
+	// everywhere and the assumption was invisible; an ingress rule labelled
+	// object storage is reported as a different kind of thing entirely.
+	FamilyOf(resourceType string) model.Family
 	// Map normalizes a subject.
 	//
 	// related holds the changes joined to the subject by a configuration
@@ -509,7 +517,7 @@ func normalizeOne(change terraformplan.ResourceChange,
 				Address:            change.Address,
 				Provider:           change.ProviderName,
 				Cloud:              mapper.Cloud(),
-				Family:             model.FamilyObjectStorage,
+				Family:             mapper.FamilyOf(change.Type),
 				Destructive:        change.IsDestructive(),
 				Interpreted:        true,
 				UnrecognizedAction: change.HasUnrecognizedAction(),
@@ -521,10 +529,15 @@ func normalizeOne(change terraformplan.ResourceChange,
 		resource := mapper.Map(change, edges[change.Address], scope)
 		resource.Interpreted = true
 		resource.UnrecognizedAction = change.HasUnrecognizedAction()
-		if resource.ObjectStorage == nil {
+		if resource.ObjectStorage == nil && resource.Network == nil {
 			// A subject that reached no verdict of its own has deferred to
 			// something. An Azure account with a container in the plan is the
 			// case: the container carries the verdict and the account defers.
+			//
+			// Every family is asked, not only the first one this build had: a
+			// security group carrying its own ingress verdict would otherwise
+			// look like a subject that deferred, and coverage would go looking
+			// for whatever it was supposed to have deferred to.
 			resource.DefersTo = defersTo(change, edges[change.Address], scope, mapper)
 		}
 		return resource

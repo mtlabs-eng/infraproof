@@ -1538,9 +1538,10 @@ func TestCountCarriesTheBindingLikeForEach(t *testing.T) {
 // given produces a different answer.
 type stubMapper struct{}
 
-func (stubMapper) Cloud() model.Cloud       { return model.Cloud("stub") }
-func (stubMapper) Interprets(t string) bool { return t == "stub_thing" || t == "aws_s3_bucket_acl" }
-func (stubMapper) IsSubject(t string) bool  { return t == "stub_thing" }
+func (stubMapper) Cloud() model.Cloud           { return model.Cloud("stub") }
+func (stubMapper) Interprets(t string) bool     { return t == "stub_thing" || t == "aws_s3_bucket_acl" }
+func (stubMapper) FamilyOf(string) model.Family { return model.FamilyObjectStorage }
+func (stubMapper) IsSubject(t string) bool      { return t == "stub_thing" }
 func (stubMapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	return model.NormalizedResource{Address: subject.Address, Cloud: model.Cloud("stub"),
 		Family: model.FamilyObjectStorage, ObjectStorage: &model.ObjectStorageCapabilities{}}
@@ -1659,9 +1660,10 @@ func TestAnOrderingEdgeIsRefusedForATypeNoMapperDescribes(t *testing.T) {
 // case that admits every argument.
 type openMapper struct{}
 
-func (openMapper) Cloud() model.Cloud       { return model.Cloud("stub") }
-func (openMapper) Interprets(t string) bool { return t == "stub_thing" || t == "stub_control" }
-func (openMapper) IsSubject(t string) bool  { return t == "stub_thing" }
+func (openMapper) Cloud() model.Cloud           { return model.Cloud("stub") }
+func (openMapper) Interprets(t string) bool     { return t == "stub_thing" || t == "stub_control" }
+func (openMapper) FamilyOf(string) model.Family { return model.FamilyObjectStorage }
+func (openMapper) IsSubject(t string) bool      { return t == "stub_thing" }
 func (openMapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	return model.NormalizedResource{Address: subject.Address, Cloud: model.Cloud("stub"),
 		Family: model.FamilyObjectStorage, ObjectStorage: &model.ObjectStorageCapabilities{}}

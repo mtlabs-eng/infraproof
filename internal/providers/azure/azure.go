@@ -40,6 +40,19 @@ func (Mapper) IsSubject(resourceType string) bool {
 	return resourceType == typeContainer || resourceType == typeAccount
 }
 
+// FamilyOf names the family a resource type belongs to. Every type this mapper
+// interprets today is object storage; the normalizer asks because a control
+// resource cannot be placed by what it returned, and assuming one family was
+// invisible until a second one existed.
+func (Mapper) FamilyOf(resourceType string) model.Family {
+	switch resourceType {
+	case typeAccount, typeContainer:
+		return model.FamilyObjectStorage
+	default:
+		return model.FamilyUnknown
+	}
+}
+
 // The questions this mapper answers. A container asks which account gates it
 // and what it is itself set to; an account with no container in the plan asks
 // whether one is here at all.

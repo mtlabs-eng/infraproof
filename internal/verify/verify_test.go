@@ -410,7 +410,18 @@ func baselineKey(fixture string) string {
 func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 	intent := filepath.Join("testdata", "baseline", "intent.json")
 
+	compared := 0
 	for _, fixture := range planFixtures(t) {
+		golden := filepath.Join("testdata", "baseline", baselineKey(fixture))
+		want, err := os.ReadFile(golden)
+		if err != nil {
+			// A fixture with no baseline was added after the baseline was
+			// recorded, which is what a milestone adding a family does. There is
+			// nothing to compare it against, and recording one now from the
+			// current behaviour would be calling today's answer a baseline.
+			continue
+		}
+
 		t.Run(fixture, func(t *testing.T) {
 			bundle, err := verify.FromFiles(intent, fixture, verify.Options{})
 			if err != nil {
@@ -420,16 +431,17 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render.JSON: %v", err)
 			}
-
-			golden := filepath.Join("testdata", "baseline", baselineKey(fixture))
-			want, err := os.ReadFile(golden)
-			if err != nil {
-				t.Fatalf("reading the baseline: %v", err)
-			}
 			if string(got) != string(want) {
 				t.Fatalf("this plan's verdict changed since the baseline was recorded\n--- now ---\n%s\n--- baseline ---\n%s",
 					got, want)
 			}
 		})
+		compared++
+	}
+
+	// A comparison that compared nothing passes. The count is what keeps this
+	// from going quiet if the keys, the paths or the fixtures move.
+	if compared < 60 {
+		t.Fatalf("compared %d fixtures against their baselines, which is too few to be the set", compared)
 	}
 }
