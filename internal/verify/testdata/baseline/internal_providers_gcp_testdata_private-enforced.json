@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.2",
+  "decision": "PASS",
+  "summary": "The change is consistent with the intent contract in every supported check.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:0e6f28fe1b8509edc2f8af21dc74235d1c0c865f8d3ca1082ed97f3767534467"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_storage_bucket.assets",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_storage_bucket.assets",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

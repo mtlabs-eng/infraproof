@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.2",
+  "decision": "PASS",
+  "summary": "The change is consistent with the intent contract in every supported check.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:37b4c4a9c8e8e0a680bfecf4d391c245ef752c8c494e718df11f675dc96eef8f"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_storage_account.example",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_storage_account.example",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_storage_container.assets",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_storage_container.assets",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

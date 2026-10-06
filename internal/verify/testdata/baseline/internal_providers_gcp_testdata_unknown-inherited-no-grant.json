@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:4ff7572c36d103943b41736a59735568a7ce487d9369e1e665c756356fd34de6"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_storage_bucket.assets",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_storage_bucket.assets",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_ORGANIZATION_PUBLIC_ACCESS_POLICY",
+      "required": false,
+      "reason": "Public access prevention is inherited, and the organization policy it inherits from is not part of this plan.",
+      "resource_address": "google_storage_bucket.assets",
+      "evidence": []
+    },
+    {
+      "check_id": "STORAGE_PUBLIC_DETERMINABLE",
+      "required": true,
+      "reason": "Public exposure could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "google_storage_bucket.assets",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_storage_bucket.assets",
+          "path": "public_access_prevention",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

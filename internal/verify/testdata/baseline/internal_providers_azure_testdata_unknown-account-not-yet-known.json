@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:06baf470b3354e57c1576b4947f50a9d45c928e1ab12575e406a7138ec4f4f23"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_storage_account.example",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_storage_account.example",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_storage_container.assets",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_storage_container.assets",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "STORAGE_PUBLIC_DETERMINABLE",
+      "required": true,
+      "reason": "Public exposure could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "azurerm_storage_container.assets",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_storage_account.example",
+          "path": "allow_nested_items_to_be_public",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_storage_container.assets",
+          "path": "container_access_type",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

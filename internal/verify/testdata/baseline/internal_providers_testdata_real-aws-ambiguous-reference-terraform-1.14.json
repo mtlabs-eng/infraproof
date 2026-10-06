@@ -1,0 +1,166 @@
+{
+  "schema_version": "1.2",
+  "decision": "BLOCK",
+  "summary": "The change violates the intent contract in 1 way.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:9c721b4640e2eeac50c36a71d0fed9b2946d3026fecfb379e37cd157171a2779"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "STORAGE_PUBLIC",
+      "severity": "CRITICAL",
+      "disposition": "BLOCK",
+      "claim": "The change grants public access to object storage the intent contract requires to be private.",
+      "resource": {
+        "address": "aws_s3_bucket.b[\"z\"]",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "expected": {
+        "path": "object_storage.public_access",
+        "value": false
+      },
+      "observed": {
+        "path": "object_storage.public_access",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket_acl.open",
+          "path": "acl",
+          "redacted": false
+        }
+      ],
+      "remediation": "Remove the grant that exposes this storage publicly, or record the exposure as intended in the intent contract."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK",
+      "required": false,
+      "reason": "This change does not set the account-level S3 public access block, which overrides bucket-level settings.",
+      "resource_address": "aws_s3_bucket.b[\"a\"]",
+      "evidence": []
+    },
+    {
+      "check_id": "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK",
+      "required": false,
+      "reason": "This change does not set the account-level S3 public access block, which overrides bucket-level settings.",
+      "resource_address": "aws_s3_bucket.b[\"z\"]",
+      "evidence": []
+    },
+    {
+      "check_id": "CORRELATION_UNRESOLVED",
+      "required": false,
+      "reason": "A resource repeated alongside this one refers to it without naming an instance, so the plan does not record which of them applies here.",
+      "resource_address": "aws_s3_bucket.b[\"a\"]",
+      "evidence": []
+    },
+    {
+      "check_id": "CORRELATION_UNRESOLVED",
+      "required": false,
+      "reason": "A resource repeated alongside this one refers to it without naming an instance, so the plan does not record which of them applies here.",
+      "resource_address": "aws_s3_bucket.b[\"z\"]",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_s3_bucket.b[\"a\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket.b[\"a\"]",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_s3_bucket.b[\"z\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket.b[\"z\"]",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_s3_bucket_acl.open",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket_acl.open",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_s3_bucket_public_access_block.locked",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket_public_access_block.locked",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "RESOURCE_EVALUATED",
+      "required": true,
+      "reason": "This resource was normalized as object_storage, and nothing judged it against the contract: either no rule in this build covers that family, or it controls a resource that is not part of this plan.",
+      "resource_address": "aws_s3_bucket_public_access_block.locked",
+      "evidence": []
+    },
+    {
+      "check_id": "STORAGE_PUBLIC_DETERMINABLE",
+      "required": true,
+      "reason": "Public exposure could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "aws_s3_bucket.b[\"a\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket.b[\"a\"]",
+          "path": "bucket",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,213 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 13 facts required for a safe conclusion were unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:d8fb661de3aaee5bb86bc274a3aa00df10afbc3d17201eca96b8ed059ddc2dca"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "module.storage.module.inner.terraform_data.deep",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "module.storage.random_pet.inner",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "null_resource.counted[0]",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "null_resource.counted[1]",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "null_resource.keyed[\"eu\"]",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "null_resource.keyed[\"us\"]",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "random_password.secret",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "random_pet.aliased",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "random_pet.default_instance",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "terraform_data.known_secret",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "terraform_data.nested_values",
+      "evidence": []
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "terraform_data.sensitive_holder",
+      "evidence": []
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "module.storage.module.inner.terraform_data.deep",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "module.storage.random_pet.inner",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "null_resource.counted[0]",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "null_resource.counted[1]",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "null_resource.keyed[\"eu\"]",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "null_resource.keyed[\"us\"]",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "random_password.secret",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "random_pet.aliased",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "random_pet.default_instance",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "terraform_data.known_secret",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "terraform_data.nested_values",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "terraform_data.sensitive_holder",
+      "evidence": []
+    }
+  ]
+}

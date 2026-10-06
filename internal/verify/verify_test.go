@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mtlabs-eng/infraproof/internal/render"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 
 	"github.com/mtlabs-eng/infraproof/internal/evidence"
@@ -372,6 +373,62 @@ func TestEveryFixtureIsUnchangedWhenNothingMatches(t *testing.T) {
 			}
 			if strings.Contains(string(want), "location") {
 				t.Fatalf("a verification with no configuration directory carried a location: %s", want)
+			}
+		})
+	}
+}
+
+// baselineKey names a fixture's golden by its path, flattened. Two fixtures in
+// different directories share a file name, and the key has to tell them apart.
+func baselineKey(fixture string) string {
+	cleaned := filepath.ToSlash(filepath.Clean(fixture))
+	cleaned = strings.TrimPrefix(cleaned, "../../")
+	cleaned = strings.TrimSuffix(cleaned, ".json")
+	return strings.ReplaceAll(cleaned, "/", "_") + ".json"
+}
+
+// TestEveryFixtureProducesItsBaselineBundle is the mechanical form of the
+// milestone 08 criterion that object-storage verdicts do not change.
+//
+// The goldens were generated from the commit before any of that milestone's
+// behaviour landed, against a contract this repository ships, so each one records
+// what this build said about that plan before the network family existed. A
+// normalizer change that moved a storage verdict by one field would otherwise be
+// argued about; here it is a diff.
+//
+// The contract is a committed file rather than a temporary one so that the bundle
+// records a stable intent source and digest. A path under t.TempDir() would make
+// every golden depend on where the test ran.
+//
+// What it covers, measured rather than claimed: making the AWS mapper stop
+// claiming buckets fails 36 of these subtests. What it does not cover is a branch
+// this one contract never reaches -- it declares object storage private, so the
+// disposition for an undeclared exposure is never taken here. That branch is held
+// by internal/policy's own tests, and mutating it fails two of them. Recording a
+// second contract to reach it would double 63 goldens to catch what is already
+// caught where it belongs.
+func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
+	intent := filepath.Join("testdata", "baseline", "intent.json")
+
+	for _, fixture := range planFixtures(t) {
+		t.Run(fixture, func(t *testing.T) {
+			bundle, err := verify.FromFiles(intent, fixture, verify.Options{})
+			if err != nil {
+				t.Skipf("this fixture is not verifiable: %v", err)
+			}
+			got, err := render.JSON(bundle)
+			if err != nil {
+				t.Fatalf("render.JSON: %v", err)
+			}
+
+			golden := filepath.Join("testdata", "baseline", baselineKey(fixture))
+			want, err := os.ReadFile(golden)
+			if err != nil {
+				t.Fatalf("reading the baseline: %v", err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("this plan's verdict changed since the baseline was recorded\n--- now ---\n%s\n--- baseline ---\n%s",
+					got, want)
 			}
 		})
 	}

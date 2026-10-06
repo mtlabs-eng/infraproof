@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:072071211d6df5347692f3dbf8e1cd3e12db6da81f1caff1ca69f9ac239b65bf"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "AWS_ACCOUNT_PUBLIC_ACCESS_BLOCK",
+      "required": false,
+      "reason": "This change does not set the account-level S3 public access block, which overrides bucket-level settings.",
+      "resource_address": "aws_s3_bucket.adopted",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_s3_bucket.adopted",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket.adopted",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "STORAGE_PUBLIC_DETERMINABLE",
+      "required": true,
+      "reason": "Public exposure could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "aws_s3_bucket.adopted",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_s3_bucket.adopted",
+          "path": "bucket",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}
