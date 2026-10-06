@@ -109,6 +109,42 @@
      "type": "aws_security_group"
     },
     {
+     "address": "aws_security_group.icmpv6",
+     "expressions": {
+      "ingress": {
+       "constant_value": [
+        {
+         "cidr_blocks": null,
+         "description": null,
+         "from_port": -1,
+         "ipv6_cidr_blocks": [
+          "::/0"
+         ],
+         "prefix_list_ids": null,
+         "protocol": "58",
+         "security_groups": null,
+         "self": null,
+         "to_port": -1
+        }
+       ]
+      },
+      "name": {
+       "constant_value": "icmpv6"
+      },
+      "vpc_id": {
+       "references": [
+        "aws_vpc.main.id",
+        "aws_vpc.main"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "icmpv6",
+     "provider_config_key": "aws",
+     "schema_version": 1,
+     "type": "aws_security_group"
+    },
+    {
      "address": "aws_security_group.ipv6",
      "expressions": {
       "name": {
@@ -233,6 +269,25 @@
      },
      "mode": "managed",
      "name": "prefixlistrule",
+     "provider_config_key": "aws",
+     "schema_version": 1,
+     "type": "aws_security_group"
+    },
+    {
+     "address": "aws_security_group.protoall",
+     "expressions": {
+      "name": {
+       "constant_value": "protoall"
+      },
+      "vpc_id": {
+       "references": [
+        "aws_vpc.main.id",
+        "aws_vpc.main"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "protoall",
      "provider_config_key": "aws",
      "schema_version": 1,
      "type": "aws_security_group"
@@ -413,6 +468,28 @@
      "type": "aws_vpc_security_group_ingress_rule"
     },
     {
+     "address": "aws_vpc_security_group_ingress_rule.protoall",
+     "expressions": {
+      "cidr_ipv4": {
+       "constant_value": "0.0.0.0/0"
+      },
+      "ip_protocol": {
+       "constant_value": "all"
+      },
+      "security_group_id": {
+       "references": [
+        "aws_security_group.protoall.id",
+        "aws_security_group.protoall"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "protoall",
+     "provider_config_key": "aws",
+     "schema_version": 0,
+     "type": "aws_vpc_security_group_ingress_rule"
+    },
+    {
      "address": "aws_vpc_security_group_ingress_rule.protonum",
      "expressions": {
       "cidr_ipv4": {
@@ -583,6 +660,57 @@
        }
       ],
       "name": "groupsourced",
+      "region": "us-east-1",
+      "revoke_rules_on_delete": false,
+      "tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "aws_security_group.icmpv6",
+     "identity": {
+      "account_id": null,
+      "id": null,
+      "region": null
+     },
+     "identity_schema_version": 0,
+     "mode": "managed",
+     "name": "icmpv6",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 1,
+     "sensitive_values": {
+      "egress": [],
+      "ingress": [
+       {
+        "cidr_blocks": [],
+        "ipv6_cidr_blocks": [
+         false
+        ],
+        "prefix_list_ids": [],
+        "security_groups": []
+       }
+      ],
+      "tags_all": {}
+     },
+     "type": "aws_security_group",
+     "values": {
+      "description": "Managed by Terraform",
+      "ingress": [
+       {
+        "cidr_blocks": [],
+        "description": "",
+        "from_port": -1,
+        "ipv6_cidr_blocks": [
+         "::/0"
+        ],
+        "prefix_list_ids": [],
+        "protocol": "icmpv6",
+        "security_groups": [],
+        "self": false,
+        "to_port": -1
+       }
+      ],
+      "name": "icmpv6",
       "region": "us-east-1",
       "revoke_rules_on_delete": false,
       "tags": null,
@@ -766,6 +894,33 @@
      "values": {
       "description": "Managed by Terraform",
       "name": "prefixlistrule",
+      "region": "us-east-1",
+      "revoke_rules_on_delete": false,
+      "tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "aws_security_group.protoall",
+     "identity": {
+      "account_id": null,
+      "id": null,
+      "region": null
+     },
+     "identity_schema_version": 0,
+     "mode": "managed",
+     "name": "protoall",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 1,
+     "sensitive_values": {
+      "egress": [],
+      "ingress": [],
+      "tags_all": {}
+     },
+     "type": "aws_security_group",
+     "values": {
+      "description": "Managed by Terraform",
+      "name": "protoall",
       "region": "us-east-1",
       "revoke_rules_on_delete": false,
       "tags": null,
@@ -978,6 +1133,30 @@
      }
     },
     {
+     "address": "aws_vpc_security_group_ingress_rule.protoall",
+     "mode": "managed",
+     "name": "protoall",
+     "provider_name": "registry.terraform.io/hashicorp/aws",
+     "schema_version": 0,
+     "sensitive_values": {
+      "tags_all": {}
+     },
+     "type": "aws_vpc_security_group_ingress_rule",
+     "values": {
+      "cidr_ipv4": "0.0.0.0/0",
+      "cidr_ipv6": null,
+      "description": null,
+      "from_port": null,
+      "ip_protocol": "all",
+      "prefix_list_id": null,
+      "referenced_security_group_id": null,
+      "region": "us-east-1",
+      "tags": null,
+      "tags_all": {},
+      "to_port": null
+     }
+    },
+    {
      "address": "aws_vpc_security_group_ingress_rule.protonum",
      "mode": "managed",
      "name": "protonum",
@@ -1009,25 +1188,13 @@
    "attribute": [
     "id"
    ],
-   "resource": "aws_security_group.closed"
-  },
-  {
-   "attribute": [
-    "id"
-   ],
-   "resource": "aws_security_group.everyproto"
-  },
-  {
-   "attribute": [
-    "id"
-   ],
    "resource": "aws_security_group.mixed"
   },
   {
    "attribute": [
     "id"
    ],
-   "resource": "aws_security_group.ipv6"
+   "resource": "aws_security_group.protoall"
   },
   {
    "attribute": [
@@ -1039,13 +1206,31 @@
    "attribute": [
     "id"
    ],
-   "resource": "aws_security_group.protonum"
+   "resource": "aws_security_group.closed"
   },
   {
    "attribute": [
     "id"
    ],
    "resource": "aws_vpc.main"
+  },
+  {
+   "attribute": [
+    "id"
+   ],
+   "resource": "aws_security_group.everyproto"
+  },
+  {
+   "attribute": [
+    "id"
+   ],
+   "resource": "aws_security_group.protonum"
+  },
+  {
+   "attribute": [
+    "id"
+   ],
+   "resource": "aws_security_group.ipv6"
   }
  ],
  "resource_changes": [
@@ -1254,6 +1439,81 @@
    },
    "mode": "managed",
    "name": "groupsourced",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "type": "aws_security_group"
+  },
+  {
+   "address": "aws_security_group.icmpv6",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "description": "Managed by Terraform",
+     "ingress": [
+      {
+       "cidr_blocks": [],
+       "description": "",
+       "from_port": -1,
+       "ipv6_cidr_blocks": [
+        "::/0"
+       ],
+       "prefix_list_ids": [],
+       "protocol": "icmpv6",
+       "security_groups": [],
+       "self": false,
+       "to_port": -1
+      }
+     ],
+     "name": "icmpv6",
+     "region": "us-east-1",
+     "revoke_rules_on_delete": false,
+     "tags": null,
+     "timeouts": null
+    },
+    "after_identity": {
+     "account_id": null,
+     "id": null,
+     "region": null
+    },
+    "after_sensitive": {
+     "egress": [],
+     "ingress": [
+      {
+       "cidr_blocks": [],
+       "ipv6_cidr_blocks": [
+        false
+       ],
+       "prefix_list_ids": [],
+       "security_groups": []
+      }
+     ],
+     "tags_all": {}
+    },
+    "after_unknown": {
+     "arn": true,
+     "egress": true,
+     "id": true,
+     "ingress": [
+      {
+       "cidr_blocks": [],
+       "ipv6_cidr_blocks": [
+        false
+       ],
+       "prefix_list_ids": [],
+       "security_groups": []
+      }
+     ],
+     "name_prefix": true,
+     "owner_id": true,
+     "tags_all": true,
+     "vpc_id": true
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "icmpv6",
    "provider_name": "registry.terraform.io/hashicorp/aws",
    "type": "aws_security_group"
   },
@@ -1530,6 +1790,48 @@
    },
    "mode": "managed",
    "name": "prefixlistrule",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "type": "aws_security_group"
+  },
+  {
+   "address": "aws_security_group.protoall",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "description": "Managed by Terraform",
+     "name": "protoall",
+     "region": "us-east-1",
+     "revoke_rules_on_delete": false,
+     "tags": null,
+     "timeouts": null
+    },
+    "after_identity": {
+     "account_id": null,
+     "id": null,
+     "region": null
+    },
+    "after_sensitive": {
+     "egress": [],
+     "ingress": [],
+     "tags_all": {}
+    },
+    "after_unknown": {
+     "arn": true,
+     "egress": true,
+     "id": true,
+     "ingress": true,
+     "name_prefix": true,
+     "owner_id": true,
+     "tags_all": true,
+     "vpc_id": true
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "protoall",
    "provider_name": "registry.terraform.io/hashicorp/aws",
    "type": "aws_security_group"
   },
@@ -1852,6 +2154,43 @@
    "type": "aws_vpc_security_group_ingress_rule"
   },
   {
+   "address": "aws_vpc_security_group_ingress_rule.protoall",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "cidr_ipv4": "0.0.0.0/0",
+     "cidr_ipv6": null,
+     "description": null,
+     "from_port": null,
+     "ip_protocol": "all",
+     "prefix_list_id": null,
+     "referenced_security_group_id": null,
+     "region": "us-east-1",
+     "tags": null,
+     "tags_all": {},
+     "to_port": null
+    },
+    "after_sensitive": {
+     "tags_all": {}
+    },
+    "after_unknown": {
+     "arn": true,
+     "id": true,
+     "security_group_id": true,
+     "security_group_rule_id": true,
+     "tags_all": {}
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "protoall",
+   "provider_name": "registry.terraform.io/hashicorp/aws",
+   "type": "aws_vpc_security_group_ingress_rule"
+  },
+  {
    "address": "aws_vpc_security_group_ingress_rule.protonum",
    "change": {
     "actions": [
@@ -1890,5 +2229,5 @@
   }
  ],
  "terraform_version": "1.14.0",
- "timestamp": "2026-10-06T12:00:08Z"
+ "timestamp": "2026-10-06T12:40:34Z"
 }

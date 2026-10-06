@@ -67,3 +67,16 @@ Each fixture is one question:
 | `sg-partial-rule` | a separate rule resource that does not grant, where the rest of the set is elsewhere |
 | `sg-no-rules` | a group with no rules in the plan at all |
 | `sg-rule-every-protocol` | `-1` on a separate rule, with the ports absent by the provider's own rule |
+| `sg-prefix-list-inline` | a rule whose only source is a managed prefix list, which may contain `0.0.0.0/0` |
+| `sg-prefix-list-rule` | the same question on a separate rule resource, where the field is singular |
+| `sg-group-sourced` | sources naming no address at all: another group, and the group itself |
+| `sg-split-source` | a source written as two halves of IPv4, which together are every address |
+| `sg-backwards-ports` | a range whose ends are the wrong way round, which the provider would refuse |
+| `sg-unreadable-protocol` | a protocol spelling this build does not know, which could be any protocol |
+| `real-groups` | real `terraform plan` output: nine groups, the authority the rest are checked against |
+
+`sg-malformed-port` holds `"from_port": "twenty-two"`, a JSON string where the
+schema says a number, and `sg-unreadable-element` holds a per-element unknown the
+format collapses. Neither is producible by Terraform. Both are kept because the
+guards they exercise are the right ones to have, and both are labelled here so
+nobody reads them as evidence about real output.

@@ -269,7 +269,19 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	case terraformplan.StateAbsent:
 		// INGRESS by the provider's own default.
 	case terraformplan.StateKnown:
-		read.inbound = strings.EqualFold(direction.Text(), "INGRESS")
+		// A spelling this build cannot name is undetermined, not EGRESS. An
+		// egress firewall says nothing about who can reach in, so reading an
+		// unrecognized value as one hides a grant.
+		switch {
+		case strings.EqualFold(direction.Text(), "INGRESS"):
+			read.inbound = true
+		case strings.EqualFold(direction.Text(), "EGRESS"):
+			read.inbound = false
+		default:
+			read.unread = true
+			read.cited = append(read.cited, cite("direction"))
+			return read
+		}
 	default:
 		// The field is Optional and Computed, so a real create plan emits it as
 		// unknown for every firewall that does not spell it out -- which is

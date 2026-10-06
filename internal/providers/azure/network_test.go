@@ -515,3 +515,71 @@ func TestARuleBeingReplacedIsTheRuleThatWillExist(t *testing.T) {
 		t.Fatalf("opens %q, want tcp/22", got)
 	}
 }
+
+// TestASpellingThisBuildDoesNotRecognizeIsNotTheOpposite covers two fields where
+// a reading failure fell to the quiet answer.
+//
+// `direction` was read as `read.inbound = EqualFold(text, "Inbound")`, so any
+// other text -- a spelling the provider does not produce today, a value from a
+// future API version -- was read as outbound, and an outbound rule says nothing
+// about who can reach in. `access` had the same shape: anything that is not
+// "Allow" was a deny, and a deny opens nothing. Both hide a grant.
+//
+// Neither mutation was caught, because every fixture uses the exact spelling the
+// provider writes. A value this build cannot name is undetermined now, which is
+// what it does for a protocol and an address.
+func TestASpellingThisBuildDoesNotRecognizeIsNotTheOpposite(t *testing.T) {
+	for _, fixture := range []string{"nsg-unreadable-direction", "nsg-unreadable-access"} {
+		t.Run(fixture, func(t *testing.T) {
+			capabilities := securityGroup(t, fixture).Network
+
+			if capabilities.PublicIngress.IsKnown() {
+				t.Fatalf("a value this build cannot name was settled as %v",
+					capabilities.PublicIngress.Get())
+			}
+		})
+	}
+
+	// And the spellings that are real still read, in either case, because the
+	// cure must not be refusing everything.
+	if open := securityGroup(t, "nsg-public-inline").Network; !open.PublicIngress.Get() {
+		t.Error("an Inbound Allow rule stopped being read")
+	}
+	if closed := securityGroup(t, "nsg-outbound-only").Network; closed.PublicIngress.Get() {
+		t.Error("an Outbound rule was read as permitting ingress")
+	}
+}
+
+// TestARuleStatingNoDestinationPortIsUnreadable covers the field the provider
+// requires and this build must not read as a rule opening nothing. Reading it
+// that way is the quiet answer again: a grant disappears rather than being
+// reported as undetermined.
+func TestARuleStatingNoDestinationPortIsUnreadable(t *testing.T) {
+	capabilities := securityGroup(t, "nsg-no-destination-port").Network
+
+	if capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("a rule with no destination port was settled as %v", capabilities.PublicIngress.Get())
+	}
+	if len(capabilities.OpenToAnyAddress) != 0 {
+		t.Fatalf("it opens %v", capabilities.OpenToAnyAddress)
+	}
+}
+
+// TestTheAsymmetryBetweenTheTwoSourceFieldsIsRead covers what the provider
+// documents and this build has to respect: the singular prefix field accepts a
+// service tag and the plural one does not.
+//
+// "Internet" in the plural field is not the tag; it is a string where an address
+// belongs, so the rule is undetermined rather than open to the world. Accepting
+// it there would be reading a grammar the provider does not have.
+func TestTheAsymmetryBetweenTheTwoSourceFieldsIsRead(t *testing.T) {
+	plural := securityGroup(t, "nsg-tag-in-plural").Network
+	if plural.PublicIngress.IsKnown() {
+		t.Fatalf("a service tag in the plural field was settled as %v", plural.PublicIngress.Get())
+	}
+
+	// The singular field does carry it, which is the half that must not move.
+	if singular := securityGroup(t, "nsg-internet-tag").Network; !singular.PublicIngress.Get() {
+		t.Error("the Internet tag stopped being read in the field that accepts it")
+	}
+}

@@ -75,3 +75,22 @@ Each fixture is one question:
 | `nsg-separate-closed` | a separate rule resource that does not, where the rest is elsewhere |
 | `nsg-no-rules` | a group with no rules in the plan at all |
 | `nsg-unreadable-priority` | a priority the plan has not determined, so nothing can be ordered |
+| `nsg-deny-one-host` | a deny limited to one destination, which cannot be shown to cover the allow |
+| `nsg-deny-destination-list` | the same question through the plural destination field |
+| `nsg-deny-destination-any` | a deny whose destination is a zero-bit prefix, which does cover |
+| `nsg-deny-disjoint-protocol` | a deny narrower by protocol whose ports do not meet the allow's, so nothing is approximated |
+| `nsg-virtual-network-tag` | the documented tag for the virtual network, which is not the internet |
+| `nsg-load-balancer-tag` | the documented tag for the platform probe, which is not the internet |
+| `nsg-tag-in-plural` | a service tag in the field that may not carry one |
+| `nsg-inline-unwritten` | no inline rules written, so the attribute is unknown, with a separate rule that grants |
+| `nsg-inline-unwritten-closed` | the same shape with no grant, which cannot be shown closed |
+| `nsg-no-destination-port` | a rule stating no destination port, which the provider requires |
+| `nsg-unreadable-direction` | a direction this build cannot name, which is not the opposite of the one it can |
+| `nsg-unreadable-access` | an access this build cannot name, for the same reason |
+| `nsg-split-source` | a source written as two halves of IPv4, which together are every address |
+| `nsg-rule-replaced` | a separate rule being replaced, which is a rule that will exist |
+| `nsg-deny-private-source` | a deny reaching only private addresses, which cannot cancel a world-open grant |
+| `nsg-unreadable-source` | an address the plan has not determined, which could be every address |
+| `nsg-unreadable-port` | a port the plan has not determined |
+| `nsg-unreadable-protocol` | a protocol spelling this build does not know |
+| `nsg-unknown-service-tag` | a service tag this build has not heard of, which could be every address |

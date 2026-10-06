@@ -448,8 +448,31 @@ func readRule(address, path string, rule terraformplan.Value) inbound {
 		read.unread = true
 		return read
 	}
-	read.inbound = strings.EqualFold(direction.Text(), "Inbound")
-	read.allow = strings.EqualFold(access.Text(), "Allow")
+	// A value this build cannot name is undetermined, not the opposite of the one
+	// it can. Reading `read.inbound` as "the text is not Inbound" made any other
+	// spelling an outbound rule, which says nothing about who can reach in, and
+	// any access that is not Allow a deny, which opens nothing. Both fall to the
+	// quiet answer and hide a grant.
+	switch {
+	case strings.EqualFold(direction.Text(), "Inbound"):
+		read.inbound = true
+	case strings.EqualFold(direction.Text(), "Outbound"):
+		read.inbound = false
+	default:
+		read.unread = true
+		read.cited = append(read.cited, cite("direction"))
+		return read
+	}
+	switch {
+	case strings.EqualFold(access.Text(), "Allow"):
+		read.allow = true
+	case strings.EqualFold(access.Text(), "Deny"):
+		read.allow = false
+	default:
+		read.unread = true
+		read.cited = append(read.cited, cite("access"))
+		return read
+	}
 	if !read.inbound {
 		// An outbound rule says nothing about who can reach in, and reading no
 		// further is not the same as failing to read it.

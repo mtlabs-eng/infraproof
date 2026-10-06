@@ -55,6 +55,14 @@ func TestTheMapperAgreesWithARealPlan(t *testing.T) {
 			"protocol 6 is TCP by IANA assignment"},
 		"everyproto": {model.FactKnown, true, "every/0-65535",
 			"ip_protocol -1 is every protocol and every port"},
+		// Two spellings the mapper read and no fixture carried, which left the
+		// branches for both deletable.
+		"protoall": {model.FactKnown, true, "every/0-65535",
+			`ip_protocol "all" is not normalized by the provider and means every protocol`},
+		"icmpv6": {model.FactKnown, true, "icmp",
+			"the provider normalizes protocol 58 to icmpv6, which carries no ports"},
+		"splitsource": {model.FactKnown, true, "tcp/22",
+			"a source written as two halves of IPv4 is every address"},
 		// Inline rules written, none of them reaching any address. This is the
 		// only shape that can be shown closed, and even here the proof is
 		// bounded: the provider does not refuse a standalone rule elsewhere.

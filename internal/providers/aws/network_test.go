@@ -76,7 +76,12 @@ func TestIngressDetermination(t *testing.T) {
 		// not know. Either could mean more is open than it can see, and
 		// guessing between "one protocol" and "every protocol" is guessing
 		// between nothing and a grant.
-		"sg-malformed-port":      {model.FactUnknown, false, ""},
+		"sg-malformed-port": {model.FactUnknown, false, ""},
+		// A range whose ends are the wrong way round. The provider would
+		// refuse it, so a plan carrying one is not producible -- but this
+		// build does not know which end was meant, and guessing here is
+		// guessing about how much is open.
+		"sg-backwards-ports":     {model.FactUnknown, false, ""},
 		"sg-unreadable-protocol": {model.FactUnknown, false, ""},
 		// An address the plan has not determined could be 0.0.0.0/0, and
 		// reading it as narrower would be reading an unknown as a reassurance.

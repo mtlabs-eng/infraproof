@@ -73,3 +73,20 @@ Each fixture is one question:
 | `fw-deny-disjoint` | a deny that does not overlap at all |
 | `fw-unknown-direction` | a direction the plan has not determined |
 | `fw-unknown-source` | a source the plan has not determined |
+| `real-firewalls` | real `terraform plan` output: eleven firewalls, the authority the rest are checked against |
+| `real-undetermined` | real output where direction and priority are written and unresolvable, the only shape in which they are gaps |
+| `fw-split-source` | a source written as two halves of IPv4, which together are every address |
+| `fw-protocol-number` | a protocol written as its IANA number, which the provider passes through |
+| `fw-protocol-unnameable` | a number IANA assigns to a protocol this build cannot name |
+| `fw-unnameable-direction` | a direction this build cannot name, which is not EGRESS |
+| `fw-default-priority-denied` | an unstated priority with a deny at 999, which takes precedence |
+| `fw-default-priority-open` | the same with a deny at 1001, which does not |
+| `fw-deny-replaced` | a deny being replaced, which is a deny that will exist |
+| `fw-deny-destroyed` | a deny being destroyed, which will not |
+| `fw-deny-partial-protocol` | a deny narrower by protocol, where the remainder is not expressible |
+| `fw-unknown-network` | a network neither firewall states clearly enough for one to be ordered against the other |
+| `fw-unknown-target` | a target the plan has not determined, so a deny's coverage cannot be computed |
+| `fw-deny-private-source` | a deny reaching only private addresses, which cannot cancel a world-open grant |
+| `fw-deny-tag-source` | the same narrowing by source tag |
+| `fw-unreadable-port` | a port that is not a port |
+| `fw-unknown-priority` | a priority the plan has not determined, so nothing can be ordered against it |

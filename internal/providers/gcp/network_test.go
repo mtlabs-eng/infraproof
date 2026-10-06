@@ -344,3 +344,47 @@ func TestARuleBeingReplacedIsTheRuleThatWillExist(t *testing.T) {
 		t.Fatal("a deny being destroyed was applied, so a grant was hidden by a rule that will not exist")
 	}
 }
+
+// TestTheDefaultPriorityIsTheProvidersAndNotAGuess covers the number a firewall
+// that states no priority gets.
+//
+// The provider documents 1000, and nothing here proved the build used it:
+// changing the constant to 500 survived every test. Both directions are needed,
+// because one fixture would pass just as well under any default low enough or
+// high enough -- a deny at 999 takes precedence over an unstated priority and a
+// deny at 1001 does not.
+func TestTheDefaultPriorityIsTheProvidersAndNotAGuess(t *testing.T) {
+	denied := firewall(t, "fw-default-priority-denied").Network
+	if !denied.PublicIngress.IsKnown() {
+		t.Fatalf("an unstated priority left the set undetermined: %v", denied.PublicIngress.State)
+	}
+	if denied.PublicIngress.Get() {
+		t.Error("a deny at 999 did not take precedence over an unstated priority, which is 1000")
+	}
+
+	open := firewall(t, "fw-default-priority-open").Network
+	if !open.PublicIngress.Get() {
+		t.Error("a deny at 1001 took precedence over an unstated priority, which is 1000")
+	}
+}
+
+// TestADirectionThisBuildCannotNameIsUndetermined is the same correction as
+// Azure's. An unrecognized spelling was read as EGRESS, and an egress firewall
+// says nothing about who can reach in -- so a grant disappeared instead of being
+// reported as undetermined.
+func TestADirectionThisBuildCannotNameIsUndetermined(t *testing.T) {
+	capabilities := firewall(t, "fw-unnameable-direction").Network
+
+	if capabilities.PublicIngress.IsKnown() {
+		t.Fatalf("a direction this build cannot name was settled as %v",
+			capabilities.PublicIngress.Get())
+	}
+
+	// And both spellings that are real still read.
+	if open := firewall(t, "fw-public").Network; !open.PublicIngress.Get() {
+		t.Error("an INGRESS firewall stopped being read")
+	}
+	if out := firewall(t, "fw-egress").Network; out.PublicIngress.Get() {
+		t.Error("an EGRESS firewall was read as permitting ingress")
+	}
+}
