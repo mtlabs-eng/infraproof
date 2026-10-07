@@ -45,6 +45,8 @@ InfraProof independently verifies agent-generated Terraform and OpenTofu changes
 - Object-storage public-access detection as the first vertical slice
 - Public-ingress detection as the second: security groups, network security groups
   and firewalls, through one rule that names no cloud
+- Database reachability as the third, and the first family that composes the two
+  above rather than adding a column beside them
 - Generic destructive-change and environment-mismatch rules
 - JSON and Markdown Evidence Bundle output
 - Fixture-driven tests with no cloud accounts
@@ -72,6 +74,31 @@ closed. Closure is never *fully* provable either — the providers advise agains
 mixing inline rules with separate rule resources and do not prevent it — so a
 proven closure carries a non-required unknown saying a rule declared elsewhere
 could admit more.
+
+For databases the claim is a **conjunction**, and both halves have to be proven
+from the plan: an endpoint outside the private network, and something admitting
+every address to it. Neither half alone is reported, because an endpoint nobody
+is admitted to reaches nothing and an allow list in front of no endpoint reaches
+nothing either. One half known and the other not in the plan is `UNKNOWN` naming
+which half is missing — and on AWS that is the ordinary case rather than the
+exception, because the allow list is a security group and a security group is
+usually declared in another module.
+
+Two things about a database are read rather than proven, and both are disclosed
+where they are used. The port it listens on is almost never in a plan, so it is
+read from the engine through a closed table of documented assignments; an engine
+this build cannot name leaves the port undetermined, and an undetermined port
+makes any public ingress count as possibly reaching the database. That
+over-reports, which is the safe direction, and the approximation is recorded
+beside the verdict. In the other direction, a database that reads as unreachable
+*because* of that port carries an unknown saying so, since a reader of a `PASS`
+would not otherwise learn the verdict rests on a port nobody stated.
+
+What a database finding does not say is anything about credentials. A reachable
+database still demands authentication, which is why the severity is `HIGH` rather
+than the `CRITICAL` public object storage carries: public storage exposes the data
+itself, and a reachable database exposes one layer of several. Database users,
+grants, password policy, and encryption are all outside this build.
 
 Where the plan does not determine exposure, InfraProof answers `UNKNOWN`, and
 `UNKNOWN` is not `PASS`. It is the honest answer in more cases than a reader may

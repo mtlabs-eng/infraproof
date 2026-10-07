@@ -74,12 +74,18 @@ three defects that came from reading docs instead of plans.
   internet, and the well-known `0.0.0.0`–`0.0.0.0` rule means "Azure services"
   rather than one host. `declared.SetReach` is already interval arithmetic
   internally, so a range maps onto it without a second implementation.
-- **`port` is never in the plan.** `Optional` and `Computed` on `aws_db_instance`
-  and `aws_rds_cluster`, and `Computed` only — not settable at all — on
-  `aws_rds_cluster_instance`. It comes back unknown on a create even when `engine`
-  is written, so any design that needs the port has to get it from somewhere
-  else. The conclusion holds for all three and is strongest where the attribute
-  cannot be written.
+- **`port` is usually not in the plan, and "never" was wrong.** `Optional` and
+  `Computed` on `aws_db_instance` and `aws_rds_cluster`, and `Computed` only --
+  not settable at all -- on `aws_rds_cluster_instance`. It comes back unknown on
+  a create *when nobody writes it*, even with `engine` written, so a design that
+  needs the port has to get it from somewhere else. This section originally said
+  the attribute is never in the plan and that the conclusion held for all three;
+  an independent review disproved the first half. An author who writes `port`
+  states it, the plan carries it, and the mapper reads it in preference to the
+  engine table -- a stated fact outranks a documented default, and the earlier
+  reading would have ignored a Postgres instance deliberately moved to 5433. The
+  conclusion survives only where the attribute cannot be written, which is
+  `aws_rds_cluster_instance`.
 - **Azure cannot be planned offline**, as in milestone 08: the provider acquires
   an AAD token before it finishes building. Its fixtures come from the
   authoritative schema and say so.
@@ -187,6 +193,48 @@ choice most likely to be wrong in practice.
 10. Object-storage and network verdicts are unchanged: every committed fixture
     produces the bundle it produced before this milestone, proven by comparing
     binaries built at both ends.
+
+## Limitations as built
+
+Written after the implementation, from what the tests and fixtures measure rather
+than from what the design intended.
+
+- **The port is read from the engine where the plan does not state it.** The table
+  is closed and documented, and an engine outside it leaves the port undetermined.
+  An undetermined port makes any public ingress count as possibly reaching the
+  database, which over-reports, and the approximation is recorded beside the
+  verdict. In the other direction, a database that reads as unreachable *because*
+  of an engine-derived port carries a non-required unknown saying so.
+- **The port reaches no decision on Azure or GCP.** It is consulted only when
+  resolving a gate, which walks `GatedBy` -- so on a cloud where the mapper
+  answers the admission from inside the subject, the port is reported and nothing
+  compares it. Both clouds disclose that the port is undetermined where it is;
+  neither claims the verdict rests on it.
+- **Closure is never provable on Azure.** The firewall rules are separate
+  resources, so a set that looks closed may be missing one declared elsewhere.
+  The same asymmetry milestone 08 has, for the same reason.
+- **One Azure fixture's shape is unverified.** `sql-switch-absent` encodes the
+  endpoint switch stated in neither half of the change. The attribute is Optional
+  and not Computed, and the analogous AWS attribute was measured stating a
+  determined `false` when unwritten -- so a real plan may always state it and this
+  shape may not occur. If so, the fixture defends a path nothing reaches and the
+  `UNKNOWN` over-reports. Measuring it needs a tenant.
+- **`declared.Targets` cannot tell a conditional inside a list from a list
+  literal.** Both record the same way in the configuration, so both branches are
+  returned. A gate can only open the question, never close it, so the
+  over-reporting is safe -- but the set is not exact and the AWS mapper bounds it
+  rather than presenting it as exact.
+- **A cluster whose instances are not in the plan settles nothing**, and says so.
+  An Aurora cluster is reachable through its instances, and the endpoint switch is
+  on the instance.
+- **Criterion 5 held, with one qualification.** No file of the network family
+  changed. `internal/policy/storage.go` changed by one line, when `referencesOf`
+  was made generic across families; an earlier commit on this branch claimed
+  storage was untouched and that claim was wrong.
+- **`model.NormalizedResource.Removed` is set only by the database mappers.** The
+  storage and network families answer the question from their controls and have
+  never needed it. Setting it there would change files this milestone promised not
+  to touch, for no behaviour.
 
 ## Out of scope
 
