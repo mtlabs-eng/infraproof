@@ -348,3 +348,104 @@ func TestAnInterpolatedSwitchIsAGapAndNotADefault(t *testing.T) {
 		t.Fatal("the fixture holds no instance writing an unresolvable switch")
 	}
 }
+
+// TestThePlansOwnPortBeatsTheEngineTable covers the authority this mapper threw
+// away.
+//
+// `port` is Optional and Computed, so it comes back unknown when nobody writes
+// it -- which is the common case and the reason the engine table exists. It is
+// **known when somebody does** write it, and then it is the authoritative value:
+// the engine table is a documented default and the plan is the plan.
+//
+// Reading the table anyway is the one direction `declared.DatabasePort`'s own
+// comment calls dangerous: a wrong port makes a reachable database report as
+// closed. A Postgres instance moved to 1433 behind a group open to the world on
+// 1433 was ruled out against 5432, leaving only a non-required unknown.
+func TestThePlansOwnPortBeatsTheEngineTable(t *testing.T) {
+	capabilities := database(t, "rds-port-written", "aws_db_instance.offport").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if !capabilities.Port.IsKnown() {
+		t.Fatal("the port the plan states was not read")
+	}
+	if got := capabilities.Port.Get(); got != 1433 {
+		t.Fatalf("port = %d, want 1433: the plan states it and the engine table says 5432", got)
+	}
+
+	// And the engine table still answers when the plan does not, or the fix has
+	// traded one authority for the other rather than ordering them.
+	if port := database(t, "real-databases", "aws_db_instance.reachable").Database.Port; !port.IsKnown() ||
+		port.Get() != 5432 {
+		t.Errorf("port = %v, want 5432 from the engine when the plan states none", port)
+	}
+}
+
+// TestAnAllowListThePlanDescribesOnlyPartOfIsNotAnAllowList covers the
+// confidence this mapper had no right to.
+//
+// `vpc_security_group_ids` is a list, and a list can hold a reference beside a
+// variable, a local, a module output or a literal id. The configuration records
+// the reference and the variable; `References` keeps only the reference, because
+// correlation is about resources. Reading what survives as the whole list made a
+// publicly accessible Postgres instance behind one closed group and one unknown
+// group report PASS, exit 0, with nothing said about it.
+//
+// Two different gaps, and only one is detectable. A variable or a module output
+// leaves a trace the plan records, and that trace is now read. A literal id
+// leaves none at all -- `["sg-0aaa"]` and a one-reference list are
+// indistinguishable -- so closure here is never fully provable and every proven
+// closure carries a bound, the way the network family already bounds its own.
+func TestAnAllowListThePlanDescribesOnlyPartOfIsNotAnAllowList(t *testing.T) {
+	capabilities := database(t, "rds-partial-allow-list", "aws_db_instance.partial").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if len(capabilities.GatedBy) != 0 {
+		t.Errorf("gated by %v: the plan describes only part of this list, so naming part of it "+
+			"as the whole gate is the mistake", capabilities.GatedBy)
+	}
+	var said bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN" {
+			said = true
+			if !strings.Contains(control.Reason, "part") && !strings.Contains(control.Reason, "not in this plan") {
+				t.Errorf("the reason does not say the list is incomplete: %q", control.Reason)
+			}
+		}
+	}
+	if !said {
+		t.Error("a half-described allow list reports no missing control")
+	}
+}
+
+// TestAProvenClosureIsAlwaysBounded covers the gap no plan can show.
+//
+// A security group id written as a literal leaves no reference at all, so a list
+// holding one reference and one literal is byte-identical to a list holding one
+// reference. Closure on this cloud is therefore never fully provable, and saying
+// so is the difference between a verdict a reader can act on and one they have to
+// take on trust. The network family attaches exactly this bound to its own
+// closure.
+func TestAProvenClosureIsAlwaysBounded(t *testing.T) {
+	capabilities := database(t, "real-databases", "aws_db_instance.endpoint_closed_group").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if len(capabilities.GatedBy) == 0 {
+		t.Fatal("the gate is not named, so this test is about something else now")
+	}
+	var bounded bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL" {
+			bounded = true
+		}
+	}
+	if !bounded {
+		t.Error("a named allow list is presented as complete, and a literal group id leaves no " +
+			"trace for this build to find")
+	}
+}

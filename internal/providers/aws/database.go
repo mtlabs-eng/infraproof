@@ -15,10 +15,15 @@ const (
 	attrSecurityGroupIDs   = "vpc_security_group_ids"
 	attrClusterIdentifier  = "cluster_identifier"
 	attrEngine             = "engine"
+	attrPort               = "port"
+	// lastPort is the highest port there is, so a number outside the range is
+	// not read as one -- the same refusal the contract's own port parser makes.
+	lastPort = 65535
 
 	checkDatabaseGroupsUnknown = "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN"
 	checkDatabaseEngineUnknown = "AWS_DATABASE_ENGINE_UNREADABLE"
 	checkClusterNotInPlan      = "AWS_DATABASE_CLUSTER_NOT_IN_PLAN"
+	checkAllowListMayBePartial = "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL"
 )
 
 // database normalizes a database instance.
@@ -137,16 +142,38 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	cited := []model.Provenance{declared.Source(model.CloudAWS, holder.Address,
 		attrSecurityGroupIDs, holder.After.Field(attrSecurityGroupIDs))}
 
+	// The list draws on something this plan does not describe -- a variable, a
+	// local, a module output. The references it does carry are a part of the
+	// list and not the list, and a gate nobody can name could be the one that
+	// admits everything.
+	if holder.DrawsOnOpaque(attrSecurityGroupIDs) {
+		return nil, []model.MissingControl{{
+			CheckID: checkDatabaseGroupsUnknown,
+			Reason: "The security groups that decide who may reach this database are named partly " +
+				"from something this plan does not describe, so the groups it does name are part " +
+				"of the list rather than the list.",
+			Sources: cited,
+			Cloud:   model.CloudAWS,
+		}}
+	}
+
 	switch state {
 	case declared.CorrelationNamed:
 	case declared.CorrelationAbsent:
 		// The author named no group, so AWS applies the default security group
 		// of the database's VPC -- which is not in the plan. Different from a
 		// group the plan does not contain, and a different thing to go and fix.
+		// No reference to a security group. Either the author named none, and
+		// AWS applies the default group of the VPC, or they named them as
+		// literal ids -- which the plan records as a value and not as a
+		// correlation. The sentence does not choose between them, because this
+		// build cannot.
 		return nil, []model.MissingControl{{
 			CheckID: checkDatabaseGroupsUnknown,
-			Reason: "This database names no security group, so AWS applies the default security " +
-				"group of its VPC and nothing here can show who may reach it.",
+			Reason: "This database's security groups are not named in a way this plan can correlate, " +
+				"so nothing here can show who may reach it. Either none was named, and AWS applies " +
+				"the default security group of the VPC, or they were named by identifier rather " +
+				"than by reference.",
 			Sources: cited,
 			Cloud:   model.CloudAWS,
 		}}
@@ -164,11 +191,20 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	// Named instances resolved to the changes in the plan. One the plan does not
 	// contain stays named: the rule reports a gate it cannot find as a gate it
 	// cannot read, which is the honest answer and not an absence.
-	var groups []string
-	for _, identity := range named {
-		groups = append(groups, identity)
-	}
-	return groups, nil
+	//
+	// And the list is bounded even so. A security group named by its identifier
+	// -- `["sg-0aaa"]` -- leaves no reference at all, so a list holding one
+	// reference and one literal is indistinguishable from a list holding one
+	// reference. Closure here is never fully provable, and the network family
+	// attaches the same kind of bound to its own.
+	return named, []model.MissingControl{{
+		CheckID: checkAllowListMayBePartial,
+		Reason: "A security group named by identifier rather than by reference leaves nothing in " +
+			"the plan to correlate, so a group admitting more than the ones named here could be " +
+			"attached to this database.",
+		Sources: cited,
+		Cloud:   model.CloudAWS,
+	}}
 }
 
 // clusterOf finds the cluster an Aurora instance belongs to.
@@ -200,6 +236,21 @@ func (Mapper) clusterOf(subject terraformplan.ResourceChange,
 // its cluster, which is the same two hops the allow list takes.
 func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange) model.Fact[int] {
+
+	// The plan's own port first, because it is the plan. `port` is Optional and
+	// Computed, so it is unknown when nobody writes it -- the common case, and
+	// the reason the engine table exists at all -- and authoritative when
+	// somebody does. Reading the table over a stated port is the one direction
+	// DatabasePort's own comment calls dangerous: a wrong port makes a
+	// reachable database report as closed, and a Postgres instance moved to 1433
+	// was ruled out against 5432.
+	if stated := subject.After.Field(attrPort); stated.State() == terraformplan.StateKnown &&
+		stated.Kind() == terraformplan.KindNumber {
+		if value, err := stated.Number().Int64(); err == nil && value > 0 && value <= lastPort {
+			return model.Known(int(value),
+				declared.Source(model.CloudAWS, subject.Address, attrPort, stated))
+		}
+	}
 
 	holder := subject
 	engine := subject.After.Field(attrEngine)

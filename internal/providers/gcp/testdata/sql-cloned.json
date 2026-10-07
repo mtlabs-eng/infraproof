@@ -1,0 +1,177 @@
+{
+ "applyable": true,
+ "complete": true,
+ "configuration": {
+  "provider_config": {
+   "google": {
+    "expressions": {
+     "project": {
+      "constant_value": "fake-project"
+     },
+     "region": {
+      "constant_value": "us-central1"
+     }
+    },
+    "full_name": "registry.terraform.io/hashicorp/google",
+    "name": "google",
+    "version_constraint": "~> 6.0"
+   }
+  },
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_sql_database_instance.cloned",
+     "expressions": {
+      "clone": [
+       {
+        "source_instance_name": {
+         "constant_value": "some-existing-instance"
+        }
+       }
+      ],
+      "database_version": {
+       "constant_value": "POSTGRES_15"
+      },
+      "name": {
+       "constant_value": "cloned"
+      }
+     },
+     "mode": "managed",
+     "name": "cloned",
+     "provider_config_key": "google",
+     "schema_version": 0,
+     "type": "google_sql_database_instance"
+    }
+   ]
+  }
+ },
+ "errored": false,
+ "format_version": "1.2",
+ "planned_values": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_sql_database_instance.cloned",
+     "mode": "managed",
+     "name": "cloned",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 0,
+     "sensitive_values": {
+      "available_maintenance_versions": [],
+      "clone": [
+       {}
+      ],
+      "dns_names": [],
+      "ip_address": [],
+      "replica_configuration": [],
+      "replica_names": [],
+      "replication_cluster": [],
+      "restore_backup_context": [],
+      "root_password": true,
+      "server_ca_cert": true,
+      "settings": []
+     },
+     "type": "google_sql_database_instance",
+     "values": {
+      "clone": [
+       {
+        "allocated_ip_range": null,
+        "database_names": null,
+        "point_in_time": null,
+        "preferred_zone": null,
+        "source_instance_name": "some-existing-instance"
+       }
+      ],
+      "database_version": "POSTGRES_15",
+      "deletion_protection": true,
+      "name": "cloned",
+      "project": "fake-project",
+      "restore_backup_context": [],
+      "root_password": null,
+      "timeouts": null
+     }
+    }
+   ]
+  }
+ },
+ "resource_changes": [
+  {
+   "address": "google_sql_database_instance.cloned",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "clone": [
+      {
+       "allocated_ip_range": null,
+       "database_names": null,
+       "point_in_time": null,
+       "preferred_zone": null,
+       "source_instance_name": "some-existing-instance"
+      }
+     ],
+     "database_version": "POSTGRES_15",
+     "deletion_protection": true,
+     "name": "cloned",
+     "project": "fake-project",
+     "restore_backup_context": [],
+     "root_password": null,
+     "timeouts": null
+    },
+    "after_sensitive": {
+     "available_maintenance_versions": [],
+     "clone": [
+      {}
+     ],
+     "dns_names": [],
+     "ip_address": [],
+     "replica_configuration": [],
+     "replica_names": [],
+     "replication_cluster": [],
+     "restore_backup_context": [],
+     "root_password": true,
+     "server_ca_cert": true,
+     "settings": []
+    },
+    "after_unknown": {
+     "available_maintenance_versions": true,
+     "clone": [
+      {}
+     ],
+     "connection_name": true,
+     "dns_name": true,
+     "dns_names": true,
+     "encryption_key_name": true,
+     "first_ip_address": true,
+     "id": true,
+     "instance_type": true,
+     "ip_address": true,
+     "maintenance_version": true,
+     "master_instance_name": true,
+     "node_count": true,
+     "private_ip_address": true,
+     "psc_service_attachment_link": true,
+     "public_ip_address": true,
+     "region": true,
+     "replica_configuration": true,
+     "replica_names": true,
+     "replication_cluster": true,
+     "restore_backup_context": [],
+     "self_link": true,
+     "server_ca_cert": true,
+     "service_account_email_address": true,
+     "settings": true
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "cloned",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_sql_database_instance"
+  }
+ ],
+ "terraform_version": "1.14.0",
+ "timestamp": "2026-10-07T11:57:26Z"
+}

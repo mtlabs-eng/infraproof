@@ -242,3 +242,87 @@ func TestWhatCannotBeReadIsNamedRatherThanAssumed(t *testing.T) {
 			admits.Get())
 	}
 }
+
+// TestAClonedInstanceInheritsWhatThisPlanCannotSee is the shape that turned an
+// author's silence into a proof of privacy.
+//
+// Cloud SQL requires one of `clone` or `settings`. An instance created from a
+// clone writes no `settings` at all, so `settings.ip_configuration` is unwritten
+// -- and the mapper read that the same way it reads an instance that wrote
+// `settings` and left `ip_configuration` out, which is a provider default of no
+// authorized networks. A clone is not that. It inherits the source instance's IP
+// configuration, authorized networks included, and the source is not in the plan.
+//
+// The result was PASS, exit 0, with no finding and no unknown, against a contract
+// demanding privacy.
+//
+// The guard is the positive form: a silence about something inside a block is
+// only the author's silence if the author wrote the block. ARCHITECTURE.md
+// already says a decision that a rule set is complete must ask `Written` rather
+// than `Unwritten`, and this is that decision.
+func TestAClonedInstanceInheritsWhatThisPlanCannotSee(t *testing.T) {
+	capabilities := instance(t, "sql-cloned", "cloned").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if capabilities.AdmitsAnyAddress.IsKnown() {
+		t.Fatalf("a clone's inherited allow list was settled as %v",
+			capabilities.AdmitsAnyAddress.Get())
+	}
+	if capabilities.PublicEndpoint.IsKnown() {
+		t.Errorf("a clone's inherited endpoint was settled as %v",
+			capabilities.PublicEndpoint.Get())
+	}
+	var said bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "GCP_SQL_IP_CONFIGURATION_UNREADABLE" {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("nothing says why the clone cannot be settled")
+	}
+}
+
+// TestTheClonedFixtureWritesNoSettings guards that fixture's premise, and the
+// distinction the fix turns on: a clone writes `clone` and no `settings`, while
+// the instance criterion 6 is about writes `settings` and no `ip_configuration`.
+// Both are silences and only one is the author's about the allow list.
+func TestTheClonedFixtureWritesNoSettings(t *testing.T) {
+	plan := planOf(t, "sql-cloned")
+
+	var found bool
+	for _, change := range plan.ResourceChanges {
+		if change.Type != "google_sql_database_instance" {
+			continue
+		}
+		found = true
+		if !change.Configured {
+			t.Fatal("the fixture records no arguments, so the silence is not the author's")
+		}
+		if change.States("settings") {
+			t.Error("the clone writes settings, so the fixture lost the shape it exists for")
+		}
+		if !change.States("clone") {
+			t.Error("the clone does not write clone, so it is not a clone")
+		}
+	}
+	if !found {
+		t.Fatal("the fixture holds no instance")
+	}
+
+	// And the shape it must stay distinguishable from.
+	other := planOf(t, "real-databases")
+	for _, change := range other.ResourceChanges {
+		if !strings.HasSuffix(change.Address, ".implicit") {
+			continue
+		}
+		if !change.States("settings") {
+			t.Error("the implicit instance does not write settings, so the two shapes have merged")
+		}
+		if change.States("settings.ip_configuration") {
+			t.Error("the implicit instance writes ip_configuration, so it is not the default case")
+		}
+	}
+}

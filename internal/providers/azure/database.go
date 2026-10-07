@@ -4,22 +4,27 @@ import (
 	"github.com/mtlabs-eng/infraproof/internal/model"
 	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
+	"slices"
 )
 
 const (
-	typeSQLServer        = "azurerm_mssql_server"
-	typeSQLFirewallRule  = "azurerm_mssql_firewall_rule"
-	typePostgresServer   = "azurerm_postgresql_flexible_server"
-	typePostgresRule     = "azurerm_postgresql_flexible_server_firewall_rule"
-	attrPublicNetwork    = "public_network_access_enabled"
-	attrStartIP          = "start_ip_address"
-	attrEndIP            = "end_ip_address"
-	attrServerID         = "server_id"
+	typeSQLServer       = "azurerm_mssql_server"
+	typeSQLFirewallRule = "azurerm_mssql_firewall_rule"
+	typePostgresServer  = "azurerm_postgresql_flexible_server"
+	typePostgresRule    = "azurerm_postgresql_flexible_server_firewall_rule"
+	attrPublicNetwork   = "public_network_access_enabled"
+	attrStartIP         = "start_ip_address"
+	attrEndIP           = "end_ip_address"
+	attrServerID        = "server_id"
+	// azureServices is the address Azure's own convention uses to mean "traffic
+	// from inside Azure", written as a range from it to itself.
+	azureServices        = "0.0.0.0"
 	portSQLServer        = 1433
 	portPostgres         = 5432
 	checkRulesIncomplete = "AZURE_DATABASE_FIREWALL_RULES_INCOMPLETE"
 	checkEndpointUnknown = "AZURE_DATABASE_PUBLIC_ACCESS_UNDETERMINED"
 	checkRuleRangeUnread = "AZURE_DATABASE_FIREWALL_RANGE_UNREADABLE"
+	checkAllowsAzure     = "AZURE_DATABASE_ALLOWS_AZURE_SERVICES"
 )
 
 // database normalizes a managed database server.
@@ -98,6 +103,14 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	var rules int
 
 	for _, candidate := range related {
+		// A rule being destroyed is not a rule this build cannot read. Its
+		// addresses are absent from `after` because it is going away, and
+		// reading that as unreadable made a plan whose whole purpose is to close
+		// the hole report the question as reopened. The network mapper filters
+		// removals for the same reason.
+		if slices.Contains(candidate.Actions, terraformplan.ActionDelete) && !candidate.IsReplace() {
+			continue
+		}
 		if candidate.Type != ruleTypeFor(subject.Type) {
 			// A guard the correlator makes unreachable rather than a decision
 			// this makes: the only binding pointing at a server is from its own
@@ -123,6 +136,26 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 			unread = append(unread, rangeUnreadable(candidate))
 			continue
 		}
+		// The rule Azure writes to mean "services inside Azure". One address by
+		// the arithmetic, which is right -- it is not 0.0.0.0/0 -- and in Azure
+		// it admits every Azure-hosted address, which is anyone who can rent a
+		// virtual machine. The arithmetic stays and the reader is told, for the
+		// reason the inferred port is disclosed: a verdict resting on a
+		// provider's convention has to say so.
+		if span.Start == azureServices && span.End == azureServices {
+			unread = append(unread, model.MissingControl{
+				CheckID: checkAllowsAzure,
+				Reason: "A firewall rule in front of this server spans 0.0.0.0 to 0.0.0.0, which is " +
+					"how Azure admits traffic from inside Azure. It is one address by arithmetic, " +
+					"and in practice it admits every Azure-hosted address.",
+				Sources: []model.Provenance{
+					declared.Source(model.CloudAzure, candidate.Address, attrStartIP, start),
+					declared.Source(model.CloudAzure, candidate.Address, attrEndIP, end),
+				},
+				Cloud: model.CloudAzure,
+			})
+			continue
+		}
 		ranges = append(ranges, span)
 	}
 
@@ -136,28 +169,30 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	if len(ranges) > 0 && declared.RangeReach(ranges) == declared.ReachAnyAddress {
 		return model.Known(true, cited...), unread
 	}
-	if len(unread) > 0 {
-		// Closure is what cannot be proven from part of a set. A rule nobody
-		// could read could be the one that admits everything.
-		return model.Unknown[bool](cited...), unread
-	}
+	// Closure is not provable on this cloud at all, and that is not a limitation
+	// of this build. A database firewall rule is always a separate resource --
+	// there is no inline form -- so a plan never holds the whole set, whether it
+	// holds none of it or all but one.
+	//
+	// Two fixtures used to contradict each other here: zero rules gave a
+	// required UNKNOWN saying the set could not be complete, and one benign rule
+	// gave PASS while the same build still reported that a rule declared
+	// elsewhere could admit more. PRODUCT.md states the rule for the product --
+	// a set whose rules live in separate resources is UNKNOWN rather than closed
+	// -- and the AWS network mapper refuses closure the moment one rule is a
+	// separate resource, which is this cloud's permanent condition.
+	//
+	// The grant half of the asymmetry is above and unchanged: one rule admitting
+	// every address settles it.
+	reason := "This server's firewall rules are separate resources, so a rule declared outside " +
+		"this plan could admit every address and nothing here can show that none does."
 	if rules == 0 {
-		return model.Unknown[bool](cited...), append(unread, model.MissingControl{
-			CheckID: checkRulesIncomplete,
-			Reason: "This server's firewall rules are separate resources and none of them is in this " +
-				"plan, so nothing here can show that no rule admits every address.",
-			Sources: []model.Provenance{declared.Source(model.CloudAzure, subject.Address,
-				attrPublicNetwork, subject.After.Field(attrPublicNetwork))},
-			Cloud: model.CloudAzure,
-		})
+		reason = "This server's firewall rules are separate resources and none of them is in " +
+			"this plan, so nothing here can show that no rule admits every address."
 	}
-
-	// Every rule in the plan was read and none admits everything. The set may
-	// still be incomplete, which is reported rather than assumed away.
-	return model.Known(false, cited...), append(unread, model.MissingControl{
+	return model.Unknown[bool](cited...), append(unread, model.MissingControl{
 		CheckID: checkRulesIncomplete,
-		Reason: "This server's firewall rules are separate resources, so a rule declared outside " +
-			"this plan could admit more than the rules written here.",
+		Reason:  reason,
 		Sources: []model.Provenance{declared.Source(model.CloudAzure, subject.Address,
 			attrPublicNetwork, subject.After.Field(attrPublicNetwork))},
 		Cloud: model.CloudAzure,

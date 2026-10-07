@@ -511,3 +511,126 @@ func TestABlockIndexIsNotPartOfAnArgumentsPath(t *testing.T) {
 		}
 	}
 }
+
+// An argument whose value is composed partly from outside the configuration's
+// resources is a different thing from one that names none of them, and the
+// difference decides whether a list can be read as complete.
+//
+// References deliberately drop what is not a resource -- `var`, `local`,
+// `count.index`, a module output -- because correlation is about resources and a
+// variable correlates nothing. That is right, and it silently destroyed the one
+// signal a mapper needed: `vpc_security_group_ids = concat([aws_security_group.a.id],
+// var.extra)` left exactly one placeable reference, so an allow list the plan
+// describes half of read as the whole one. The verdict was PASS.
+//
+// So the fact is recorded rather than the filter relaxed: Opaque names the
+// arguments that drew on something the configuration does not declare.
+func TestAnArgumentDrawingOnSomethingOutsideTheConfigurationIsRecorded(t *testing.T) {
+	plan, err := Parse([]byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "aws_db_instance.partial", "mode": "managed",
+	      "type": "aws_db_instance", "name": "partial", "provider_name": "p",
+	      "change": {"actions": ["create"], "before": null, "after": {"identifier": "partial"}}
+	    },
+	    {
+	      "address": "aws_db_instance.whole", "mode": "managed",
+	      "type": "aws_db_instance", "name": "whole", "provider_name": "p",
+	      "change": {"actions": ["create"], "before": null, "after": {"identifier": "whole"}}
+	    },
+	    {
+	      "address": "aws_security_group.a", "mode": "managed",
+	      "type": "aws_security_group", "name": "a", "provider_name": "p",
+	      "change": {"actions": ["create"], "before": null, "after": {"name": "a"}}
+	    }
+	  ],
+	  "configuration": {"root_module": {"resources": [
+	    {
+	      "address": "aws_db_instance.partial", "mode": "managed",
+	      "type": "aws_db_instance", "name": "partial", "provider_config_key": "aws",
+	      "expressions": {
+	        "identifier": {"constant_value": "partial"},
+	        "vpc_security_group_ids": {"references": [
+	          "aws_security_group.a.id", "aws_security_group.a", "var.extra"]}
+	      }
+	    },
+	    {
+	      "address": "aws_db_instance.whole", "mode": "managed",
+	      "type": "aws_db_instance", "name": "whole", "provider_config_key": "aws",
+	      "expressions": {
+	        "identifier": {"constant_value": "whole"},
+	        "vpc_security_group_ids": {"references": [
+	          "aws_security_group.a.id", "aws_security_group.a"]}
+	      }
+	    },
+	    {
+	      "address": "aws_security_group.a", "mode": "managed",
+	      "type": "aws_security_group", "name": "a", "provider_config_key": "aws",
+	      "expressions": {"name": {"constant_value": "a"}}
+	    }
+	  ]}}
+	}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	partial := changeAt(t, plan, "aws_db_instance.partial")
+	if !partial.DrawsOnOpaque("vpc_security_group_ids") {
+		t.Errorf("the attribute drew on var.extra and is not recorded; opaque = %v", partial.Opaque)
+	}
+	// The resource references it does have are still there: the filter is not
+	// relaxed, only the loss is recorded.
+	var named int
+	for _, reference := range partial.References {
+		if reference.Attribute == "vpc_security_group_ids" {
+			named++
+		}
+	}
+	if named != 1 {
+		t.Errorf("%d resource references survived, want 1", named)
+	}
+
+	whole := changeAt(t, plan, "aws_db_instance.whole")
+	if whole.DrawsOnOpaque("vpc_security_group_ids") {
+		t.Errorf("an attribute naming only resources is recorded as drawing on something else; "+
+			"opaque = %v", whole.Opaque)
+	}
+	if whole.DrawsOnOpaque("identifier") {
+		t.Error("a constant argument is recorded as drawing on something else")
+	}
+
+	// And the two differ in exactly the fact that decides whether the list can
+	// be read as complete.
+	if partial.DrawsOnOpaque("vpc_security_group_ids") ==
+		whole.DrawsOnOpaque("vpc_security_group_ids") {
+		t.Fatal("a half-described list and a fully described one are indistinguishable")
+	}
+}
+
+// A plan with no configuration records nothing about what an argument drew on,
+// for the same reason it records nothing about what was written: the question is
+// not answerable, and answering it no would say the list is complete.
+func TestWithoutAConfigurationNothingDrawsOnAnythingKnown(t *testing.T) {
+	plan, err := Parse([]byte(`{
+	  "format_version": "1.2",
+	  "resource_changes": [
+	    {
+	      "address": "aws_db_instance.main", "mode": "managed",
+	      "type": "aws_db_instance", "name": "main", "provider_name": "p",
+	      "change": {"actions": ["create"], "before": null, "after": {"identifier": "main"}}
+	    }
+	  ]
+	}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	change := changeAt(t, plan, "aws_db_instance.main")
+
+	if change.Opaque != nil || change.DrawsOnOpaque("vpc_security_group_ids") {
+		t.Errorf("opaque = %v for a plan that records no configuration", change.Opaque)
+	}
+	if change.Configured {
+		t.Error("the resource is reported as configured")
+	}
+}

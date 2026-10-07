@@ -47,7 +47,7 @@ func parseConfiguration(document map[string]any, errs *[]error) (map[string]Prov
 	// form of every reference, and also names variables, count.index and
 	// each.key, none of which is a resource.
 	for address, resource := range byAddress {
-		resource.references = resolveReferences(resource.references, byAddress)
+		resource.references, resource.opaque = resolveReferences(resource.references, byAddress)
 		byAddress[address] = resource
 	}
 	return configs, byAddress, calls
@@ -59,24 +59,51 @@ type configResource struct {
 	repeated          bool
 	references        []ExpressionReference
 	stated            []string
+	opaque            []string
 	// recorded reports that the entry carries an expressions object, which is
 	// what makes stated an answer rather than a silence.
 	recorded bool
 }
 
-func resolveReferences(refs []ExpressionReference, byAddress map[string]configResource) []ExpressionReference {
+func resolveReferences(refs []ExpressionReference,
+	byAddress map[string]configResource) ([]ExpressionReference, []string) {
+
 	if len(refs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	out := make([]ExpressionReference, 0, len(refs))
+	opaque := map[string]bool{}
 	for _, ref := range refs {
 		if _, declared := byAddress[ref.Target]; declared {
 			out = append(out, ref)
+			continue
+		}
+		// Dropped. Most drops are ordinary: Terraform emits the attribute form
+		// of every reference beside the bare one, and `aws_security_group.a.id`
+		// names no resource while `aws_security_group.a` does. Those say nothing
+		// new.
+		//
+		// A drop that names nothing declared at any depth is the signal: the
+		// argument's value draws on a variable, a local, a module output or a
+		// literal, which this plan does not describe. The filter is right and
+		// the loss of that fact was not -- a list with one placeable reference
+		// and one variable read as a complete list.
+		if ref.Attribute != "" && !namesSomethingDeclared(ref.Target, byAddress) {
+			opaque[ref.Attribute] = true
 		}
 	}
+
+	drew := make([]string, 0, len(opaque))
+	for attribute := range opaque {
+		drew = append(drew, attribute)
+	}
+	slices.Sort(drew)
+	if len(drew) == 0 {
+		drew = nil
+	}
 	if len(out) == 0 {
-		return nil
+		return nil, drew
 	}
 
 	slices.SortFunc(out, func(a, b ExpressionReference) int {
@@ -91,7 +118,7 @@ func resolveReferences(refs []ExpressionReference, byAddress map[string]configRe
 	return slices.CompactFunc(out, func(a, b ExpressionReference) bool {
 		return a.Attribute == b.Attribute && a.Target == b.Target &&
 			slices.Equal(a.TargetKeys, b.TargetKeys)
-	})
+	}), drew
 }
 
 func parseProviderConfigs(configuration map[string]any, errs *[]error) map[string]ProviderConfig {
@@ -238,6 +265,27 @@ func recordsArguments(fields map[string]any) bool {
 	}
 	_, ok := raw.(map[string]any)
 	return ok
+}
+
+// namesSomethingDeclared reports that a reference target, or any prefix of it,
+// is a resource the configuration declares.
+//
+// Terraform writes the attribute form of a reference beside the bare one, so a
+// target like `aws_security_group.a.id` is dropped as a matter of course while
+// `aws_security_group.a` is kept. Treating the first as evidence that an
+// argument drew on something outside the configuration would mark every argument
+// that references anything at all.
+func namesSomethingDeclared(target string, byAddress map[string]configResource) bool {
+	for {
+		if _, declared := byAddress[target]; declared {
+			return true
+		}
+		cut := strings.LastIndex(target, ".")
+		if cut <= 0 {
+			return false
+		}
+		target = target[:cut]
+	}
 }
 
 // statedArguments names every argument a resource's configuration writes.
@@ -519,6 +567,7 @@ func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
 		change.References = configured.references
 		change.Configured = configured.recorded
 		change.Stated = configured.stated
+		change.Opaque = configured.opaque
 	}
 }
 

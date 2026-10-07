@@ -45,13 +45,15 @@ func TestReachabilityOnThisCloud(t *testing.T) {
 			"a public endpoint and a rule admitting every address"},
 		// The rule Azure writes to mean "services inside Azure". Reading its
 		// start address as a zero-bit prefix would make the most common benign
-		// rule in this cloud mean the whole internet.
+		// rule in this cloud mean the whole internet -- so the arithmetic says
+		// one address, and the admission stays open because closure on this
+		// cloud is never provable.
 		"sql-azure-services": {"azurerm_mssql_server.db",
-			model.FactKnown, true, model.FactKnown, false, 1433,
-			"0.0.0.0 to 0.0.0.0 is one address, not every address"},
+			model.FactKnown, true, model.FactUnknown, false, 1433,
+			"one address by arithmetic, and a rule elsewhere could still admit everything"},
 		"sql-one-office": {"azurerm_mssql_server.db",
-			model.FactKnown, true, model.FactKnown, false, 1433,
-			"a range that is eleven addresses"},
+			model.FactKnown, true, model.FactUnknown, false, 1433,
+			"eleven addresses, and the rules are separate resources so the set cannot be complete"},
 		// Two ranges that are each narrow and together are everything, which is
 		// the arithmetic this grammar needed.
 		"sql-split-halves": {"azurerm_mssql_server.db",
@@ -59,7 +61,7 @@ func TestReachabilityOnThisCloud(t *testing.T) {
 			"the union of the two halves is every address"},
 		"sql-no-endpoint": {"azurerm_mssql_server.db",
 			model.FactKnown, false, model.FactKnown, true, 1433,
-			"the allow list still reads; it just reaches no endpoint"},
+			"a rule admitting every address still proves the grant half; it reaches no endpoint"},
 		// The rules are separate resources, so a plan holding none of them holds
 		// none of the set: a grant is provable from part of a set and closure is
 		// not.
@@ -273,5 +275,106 @@ func TestAServersRelatedSetHoldsOnlyItsOwnRules(t *testing.T) {
 	}
 	if !server.Database.AdmitsAnyAddress.Get() {
 		t.Error("the rule did not reach the server, so the binding is not working")
+	}
+}
+
+// TestClosureIsNeverProvenFromRulesThatLiveElsewhere covers a contradiction two
+// committed fixtures had with each other.
+//
+// Azure's database firewall rules are *always* separate resources -- there is no
+// inline form -- so a plan never holds the whole set. Zero rules in the plan gave
+// a required UNKNOWN saying as much; one benign rule gave PASS, while the same
+// build still reported that "a rule declared outside this plan could admit
+// more". Nothing about what lies outside the plan differed between the two.
+//
+// PRODUCT.md states the rule for the whole product: a set whose rules live in
+// separate resources is UNKNOWN rather than closed. The AWS network mapper
+// refuses closure the moment any rule is a separate resource, which is Azure's
+// permanent condition. This cloud now answers the same way: a grant is provable
+// from one rule, and closure is not provable at all.
+func TestClosureIsNeverProvenFromRulesThatLiveElsewhere(t *testing.T) {
+	for _, fixture := range []string{"sql-no-rules", "sql-one-office", "sql-azure-services"} {
+		t.Run(fixture, func(t *testing.T) {
+			capabilities := databaseAt(t, fixture, "azurerm_mssql_server.db").Database
+
+			if capabilities.AdmitsAnyAddress.IsKnown() {
+				t.Fatalf("closure was proven from a set that cannot be complete: admits = %v",
+					capabilities.AdmitsAnyAddress.Get())
+			}
+			var said bool
+			for _, control := range capabilities.Unresolved {
+				if control.CheckID == "AZURE_DATABASE_FIREWALL_RULES_INCOMPLETE" {
+					said = true
+				}
+			}
+			if !said {
+				t.Error("nothing says the rule set cannot be complete")
+			}
+		})
+	}
+
+	// And a grant is still provable from one rule, which is the half of the
+	// asymmetry that must not move.
+	for _, fixture := range []string{"sql-reachable", "sql-split-halves", "pg-reachable"} {
+		t.Run(fixture, func(t *testing.T) {
+			var capabilities *model.DatabaseCapabilities
+			if fixture == "pg-reachable" {
+				capabilities = databaseAt(t, fixture, "azurerm_postgresql_flexible_server.db").Database
+			} else {
+				capabilities = databaseAt(t, fixture, "azurerm_mssql_server.db").Database
+			}
+			if !capabilities.AdmitsAnyAddress.IsKnown() || !capabilities.AdmitsAnyAddress.Get() {
+				t.Fatalf("a rule admitting every address stopped proving the grant: %v",
+					capabilities.AdmitsAnyAddress.State)
+			}
+		})
+	}
+}
+
+// TestARuleBeingRemovedIsNotARuleThisBuildCannotRead covers a plan whose whole
+// purpose is to close the hole.
+//
+// A rule being destroyed has `after: null`, so its start and end addresses are
+// absent -- which read as a range this build could not read, and reopened the
+// question with a sentence saying the range was unreadable. It was perfectly
+// readable in `before`; it is going away. The AWS network mapper filters
+// removals for this reason.
+func TestARuleBeingRemovedIsNotARuleThisBuildCannotRead(t *testing.T) {
+	capabilities := databaseAt(t, "sql-rule-being-removed", "azurerm_mssql_server.db").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AZURE_DATABASE_FIREWALL_RANGE_UNREADABLE" {
+			t.Errorf("a rule being destroyed is reported as one whose range could not be read: %q",
+				control.Reason)
+		}
+	}
+}
+
+// TestTheAzureServicesRuleIsReportedForWhatItIs covers the one rule the milestone
+// singles out as not meaning what it literally says.
+//
+// `0.0.0.0`-`0.0.0.0` is one address by the arithmetic, which is right: it is not
+// `0.0.0.0/0`. In Azure it means "any Azure-hosted address", which is anyone who
+// can rent a virtual machine. The arithmetic stays and the reader is told,
+// because a verdict resting on a provider's convention needs to say so -- the
+// same reason the inferred port is disclosed.
+func TestTheAzureServicesRuleIsReportedForWhatItIs(t *testing.T) {
+	capabilities := databaseAt(t, "sql-azure-services", "azurerm_mssql_server.db").Database
+
+	var said bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AZURE_DATABASE_ALLOWS_AZURE_SERVICES" {
+			said = true
+			if !strings.Contains(control.Reason, "Azure") {
+				t.Errorf("the reason does not say what the rule means: %q", control.Reason)
+			}
+		}
+	}
+	if !said {
+		t.Error("the rule that admits every Azure-hosted address is reported as one address " +
+			"and nothing says what it means")
 	}
 }

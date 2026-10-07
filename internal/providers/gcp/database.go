@@ -19,6 +19,8 @@ const (
 	// pathIPv4Enabled is where the endpoint switch sits in the configuration's
 	// own nesting, which is what Unwritten is asked about.
 	pathIPv4Enabled = attrSettings + "." + attrIPConfig + "." + attrIPv4Enabled
+	// pathIPConfig is the block the switch and the allow list share.
+	pathIPConfig = attrSettings + "." + attrIPConfig
 
 	checkIPConfigUnread = "GCP_SQL_IP_CONFIGURATION_UNREADABLE"
 	checkAuthNetsUnread = "GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE"
@@ -101,9 +103,10 @@ func publicEndpoint(subject terraformplan.ResourceChange, config terraformplan.V
 	if value.State() == terraformplan.StateKnown && value.Kind() == terraformplan.KindBool {
 		return model.Known(value.Bool(), cited)
 	}
-	if declared.Unwritten(subject, pathIPv4Enabled) {
-		// Nobody wrote it, so the provider's documented default applies: Cloud
-		// SQL gives an instance a public IP unless asked not to.
+	if wroteSettings(subject) && declared.Unwritten(subject, pathIPv4Enabled) {
+		// Nobody wrote it inside a block the author did write, so the provider's
+		// documented default applies: Cloud SQL gives an instance a public IP
+		// unless asked not to.
 		return model.Known(true, cited)
 	}
 	return model.Unknown[bool](cited)
@@ -136,7 +139,7 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 		// The same reasoning as the switch two functions up, and it has to be
 		// the same: applying a default to one half of a block and not the other
 		// would read a single silence two ways.
-		if declared.Unwritten(subject, attrSettings+"."+attrIPConfig) {
+		if wroteSettings(subject) && declared.Unwritten(subject, pathIPConfig) {
 			return model.Known(false, cited), nil
 		}
 		return model.Unknown[bool](cited), []model.MissingControl{{
@@ -195,6 +198,23 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 	// Every entry was read and none covers every address. The list is inside the
 	// instance, so this is the whole list and an empty one authorizes nobody.
 	return model.Known(false, cited), nil
+}
+
+// wroteSettings reports that the author wrote the block the switch and the allow
+// list live inside.
+//
+// It is what makes a silence about `ip_configuration` the author's silence. Cloud
+// SQL requires one of `clone` or `settings`, so an instance created from a clone
+// writes no `settings` at all -- and reading that as "the author left
+// ip_configuration out, so the provider's defaults apply" turned a clone into a
+// proof of privacy. A clone inherits the source instance's IP configuration,
+// authorized networks included, and the source is not in the plan.
+//
+// The positive form, which ARCHITECTURE.md requires for any decision that a rule
+// set is complete: an argument's presence proves the author wrote it, and its
+// absence proves nothing.
+func wroteSettings(subject terraformplan.ResourceChange) bool {
+	return declared.Written(subject, attrSettings)
 }
 
 // listeningPort reads the port this instance answers on, from its version.

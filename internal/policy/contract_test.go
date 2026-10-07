@@ -777,8 +777,15 @@ func TestOneRuleCoversThreeCloudsForDatabases(t *testing.T) {
 						cloud, finding.Claim)
 				}
 			}
-			// And it is settled, not merely unreported: an unknown here would
-			// be a different answer wearing the same silence.
+			// Whether it is *settled* rather than merely unreported differs by
+			// cloud, and the difference is real rather than an inconsistency.
+			// GCP keeps its allow list in an attribute, so a readable instance
+			// has the whole list and closure is provable. Azure's rules are
+			// always separate resources -- there is no inline form -- so the
+			// plan never holds the whole set and closure is never provable.
+			// AWS is in between: the groups are correlated by reference, and a
+			// group named by identifier leaves no trace, so a proven closure is
+			// bounded rather than absolute.
 			var undetermined bool
 			for _, unknown := range result.Unknowns {
 				if unknown.CheckID == policy.CheckDatabaseReachabilityDeterminable &&
@@ -786,8 +793,9 @@ func TestOneRuleCoversThreeCloudsForDatabases(t *testing.T) {
 					undetermined = true
 				}
 			}
-			if undetermined {
-				t.Errorf("%s: an endpoint nobody is admitted to was reported as undetermined", cloud)
+			if settles := cloud != "azure"; settles == undetermined {
+				t.Errorf("%s: settled = %v, want %v; the clouds differ in whether this is "+
+					"provable and the test has to say which", cloud, !undetermined, settles)
 			}
 		}
 	})
