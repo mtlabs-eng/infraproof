@@ -163,6 +163,25 @@ type NetworkCapabilities struct {
 	// address. It is non-empty only when PublicIngress is Known(true), and it is
 	// what the contract's declared ports are compared against.
 	OpenToAnyAddress []OpenRange
+	// RangesPartial reports that OpenToAnyAddress is not the whole set: at least
+	// one rule contributed no range because something about it could not be read.
+	//
+	// PublicIngress can be a determined true over a partial set, and on AWS
+	// deliberately is: an AWS set has no denies, so a rule nobody could read can
+	// only add openness and a proven grant stays proven. That is sound for the
+	// boolean, which is all the network family asks. It is not sound for anyone
+	// asking whether a particular port is in the set, because the rule that was
+	// not read is exactly the rule that might hold it -- and an absence proved
+	// from an incomplete list is the direction that hides a grant.
+	//
+	// So a reader comparing a port against OpenToAnyAddress must not conclude
+	// "not reached" while this is set. Azure and GCP never set it: on both, a rule
+	// nobody could read outranks the grant and PublicIngress goes Unknown, so
+	// there is no partial set to report.
+	//
+	// False is the unsafe default, which is why it is the mapper's job to set it
+	// and the field is named for the exception rather than for completeness.
+	RangesPartial bool
 	// Withdrawn reports that PublicIngress was determined and then unset,
 	// because the answer was reached by choosing between a source this build may
 	// use and one it may not. ObjectStorageCapabilities carries this for the

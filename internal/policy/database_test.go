@@ -733,3 +733,62 @@ func TestAnUndeterminedPortChangesNothingWhereTheMapperAnsweredTheAdmission(t *t
 		})
 	}
 }
+
+// TestAGateWhoseRangeSetIsPartialCannotProveItDoesNotReach is the other half of
+// model.NetworkCapabilities.RangesPartial, and the reason the field exists.
+//
+// A gate open to every address on 443, in front of a Postgres instance, reaches
+// nothing -- that silence is a product decision this milestone took deliberately
+// and the fixture `shared_group` pins. It holds only while the range set is the
+// whole set. When one rule contributed no range because its ports could not be
+// read, "443 is the only range" is not a fact about the group; it is a fact about
+// what was readable. The unread rule is exactly the one that might hold 5432.
+//
+// Measured before this: PASS, exit 0, on a real plan of a publicly accessible
+// Postgres instance behind a group with one such rule.
+func TestAGateWhoseRangeSetIsPartialCannotProveItDoesNotReach(t *testing.T) {
+	gateOn := func(port int, partial bool) model.NormalizedResource {
+		gate := group("aws_security_group.db", known(true), model.OpenRange{
+			Protocol: model.ProtocolTCP,
+			Ports:    model.PortRange{From: port, To: port},
+		})
+		gate.Network.RangesPartial = partial
+		return gate
+	}
+
+	cases := map[string]struct {
+		partial bool
+		settled bool
+	}{
+		"the whole set was read":        {false, true},
+		"one rule contributed no range": {true, false},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			// 443 open, the database on 5432: the gate does not reach it, if the
+			// set is complete.
+			graph := reachable(known(true), unknownBool(), knownPort(5432), gateOn(443, want.partial))
+			result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate), graph)
+
+			var open bool
+			for _, unknown := range result.Unknowns {
+				if unknown.CheckID == policy.CheckDatabaseReachabilityDeterminable && unknown.Required {
+					open = true
+				}
+			}
+			if want.settled && open {
+				t.Fatal("a complete set that does not hold the port settles the " +
+					"question, and that silence is the milestone's own decision")
+			}
+			if !want.settled && !open {
+				t.Fatal("the port was absent from a set that is not the whole set, " +
+					"and the rule read that absence as proof the gate does not reach")
+			}
+			if len(result.Findings) > 0 {
+				t.Fatalf("raised a finding on a gate that holds no database port: %v",
+					result.Findings[0].RuleID)
+			}
+		})
+	}
+}

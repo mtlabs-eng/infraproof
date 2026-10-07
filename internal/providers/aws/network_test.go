@@ -349,3 +349,45 @@ func TestAnInlineSetWrittenOnlyAsADynamicBlockIsNotAStatedAbsence(t *testing.T) 
 		}
 	}
 }
+
+// TestAGroupWhoseRangesAreIncompleteSaysSo is the fact milestone 08 did not need
+// and milestone 09 does.
+//
+// This mapper prefers the grant over the gap: a rule nobody can read can only add
+// openness to an AWS set, which has no denies, so a proven grant stays proven and
+// `PublicIngress` is a determined true. That is right, and five cases in
+// `TestTheMapperAgreesWithARealPlan` pin it.
+//
+// What was lost is that the *range set* behind that true was partial. Milestone
+// 08 only ever read the boolean, so it could not matter. The database family
+// compares a port against `OpenToAnyAddress` and treats "no range holds the port"
+// as proof the group does not reach the database -- and a rule whose ports nobody
+// could read is exactly the rule that might hold it.
+//
+// Measured on this real plan: a group with one readable rule on tcp/443 and one
+// rule admitting `0.0.0.0/0` on tcp with a `from_port` known only after apply.
+// The database behind it, a Postgres instance with a public endpoint, came out
+// PASS, exit 0.
+func TestAGroupWhoseRangesAreIncompleteSaysSo(t *testing.T) {
+	found, ok := normalize(t, "sg-rule-port-unread").At("aws_security_group.db")
+	if !ok {
+		t.Fatal("the fixture holds no group at that address")
+	}
+	if found.Network == nil {
+		t.Fatal("the mapper produced no network capabilities")
+	}
+
+	if !found.Network.PublicIngress.IsKnown() || !found.Network.PublicIngress.Get() {
+		t.Fatalf("public ingress = %v, want a known true: a grant is provable from "+
+			"part of an AWS set, and that is deliberate", found.Network.PublicIngress)
+	}
+	if len(found.Network.OpenToAnyAddress) == 0 {
+		t.Fatal("a group reported as open to any address carries no range, so " +
+			"nothing downstream can ask which ports it reaches")
+	}
+	if !found.Network.RangesPartial {
+		t.Fatal("one rule's ports were never read, so the range set is not the " +
+			"whole set -- and a reader comparing a port against it would be " +
+			"proving an absence from an incomplete list")
+	}
+}

@@ -120,6 +120,11 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	switch {
 	case len(found.ranges) > 0:
 		capabilities.PublicIngress = model.Known(true, found.cited...)
+		// The grant is proven and the set behind it may not be whole. The
+		// boolean is unaffected -- an unread rule can only add openness here --
+		// but anyone asking which ports the set reaches has to be told that the
+		// list they are reading is short.
+		capabilities.RangesPartial = found.unread
 	case found.unread:
 		capabilities.PublicIngress = model.Unknown[bool](found.cited...)
 	case stated:

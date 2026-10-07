@@ -183,6 +183,16 @@ func admitsAnyAddress(capabilities model.DatabaseCapabilities,
 			how.widerThanReality = how.widerThanReality || wider
 			return model.Known(true, referencesTo(gate)...), how
 		}
+		if gate.Network.RangesPartial {
+			// The port is not in the set, and the set is not the whole set: at
+			// least one rule contributed no range because something about it
+			// could not be read, and that rule is exactly the one that might
+			// hold this port. The absence is a fact about what was readable, so
+			// it settles nothing.
+			settled = false
+			how.unreadableGates = append(how.unreadableGates, address)
+			continue
+		}
 		// A gate open to the world that does not reach this database. Whether
 		// that rests on an inference depends on what ruled it out: a port from
 		// the engine table did, and a protocol carrying no ports did not --
