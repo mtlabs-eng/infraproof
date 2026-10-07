@@ -1,10 +1,14 @@
 package gcp_test
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
@@ -39,9 +43,23 @@ func TestReachabilityFromARealPlan(t *testing.T) {
 		open     bool
 		why      string
 	}{
-		// The trap: no ip_configuration written anywhere.
-		"implicit": {model.FactKnown, true, model.FactKnown, false,
-			"the block is unknown and nobody wrote it, so Google's default applies: a public IP"},
+		// The trap: no ip_configuration written anywhere. The endpoint takes
+		// Google's documented default, which is criterion 6 and is the *unsafe*
+		// direction, so applying it hides nothing.
+		//
+		// The admission used to be a determined false here, by the same
+		// reasoning applied to the other half of the same block: nobody wrote
+		// the authorized networks, and the default for those is none. A review
+		// disproved it with a real plan. An `ip_configuration` written as a
+		// `dynamic` block whose `for_each` nobody can resolve is byte-identical
+		// to this shape in `after`, in `after_unknown` and in `configuration`,
+		// and that one admits every address. Indistinguishable, so this build
+		// does not answer -- and the cost, which is this line, is that an
+		// idiomatic instance is undetermined on the admission half.
+		//
+		// See TestADynamicIPConfigurationIsNotAProvenEmptyAllowList.
+		"implicit": {model.FactKnown, true, model.FactUnknown, false,
+			"the block is unknown and the plan cannot say whether that is a default or a dynamic nobody resolved"},
 		"reachable": {model.FactKnown, true, model.FactKnown, true,
 			"a public IP and an authorized network covering every address"},
 		// Two authorized networks that are each narrow and together everything.
@@ -372,5 +390,121 @@ func TestADestroyedInstanceIsDistinguishedFromAReplacedOne(t *testing.T) {
 				t.Fatalf("Removed = %v, want %v", found.Removed, want.removed)
 			}
 		})
+	}
+}
+
+// TestADynamicIPConfigurationIsNotAProvenEmptyAllowList is the correction of a
+// claim this milestone made twice and measured wrong once.
+//
+// The allow-list branch proved an empty list from the *negative* form of the
+// question -- the author did not write `ip_configuration`, so nobody wrote
+// `authorized_networks` inside it, so the list is empty. ARCHITECTURE.md forbids
+// exactly that: "a `dynamic` block is not represented in a resource's arguments
+// at all, so an argument's absence proves nothing."
+//
+// The defence was that a `dynamic` block resolves to a readable list and so the
+// shape does not exist. That was measured with a resolvable `for_each`. With an
+// unresolvable one -- here, `toset(split(",", <another instance>.connection_name))`
+// -- Terraform accepts the configuration and emits the whole block as unknown,
+// and the plan records *nothing* about the dynamic block: not the block, not its
+// content, not even its `for_each` reference.
+//
+// Measured against a real plan of an instance writing `settings` with no
+// `ip_configuration` at all, the two are identical in `after`, in `after_unknown`
+// and in `configuration`. So this build cannot tell a world-open instance from
+// the ordinary one, and the answer has to be the one that does not hide the
+// grant. Before this, the fixture below was PASS, exit 0, with no finding and no
+// unknown of any kind about the database.
+//
+// The cost is stated in the milestone's limitations: an idiomatic instance that
+// writes no `ip_configuration` is now undetermined on the admission half. The
+// endpoint half still takes the provider's documented default, which is
+// criterion 6 and is unaffected -- the default there is the unsafe direction, so
+// applying it hides nothing.
+func TestADynamicIPConfigurationIsNotAProvenEmptyAllowList(t *testing.T) {
+	found := instance(t, "sql-dynamic-unresolvable", "pg")
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	capabilities := *found.Database
+
+	if !capabilities.PublicEndpoint.IsKnown() || !capabilities.PublicEndpoint.Get() {
+		t.Fatalf("endpoint = %v, want a known true: criterion 6's default still "+
+			"applies, and it is the safe direction", capabilities.PublicEndpoint)
+	}
+	if capabilities.AdmitsAnyAddress.IsKnown() {
+		t.Fatalf("admits any address = %v, want undetermined: the block is unknown, "+
+			"and an unknown block cannot prove its allow list empty",
+			capabilities.AdmitsAnyAddress)
+	}
+
+	var said bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "GCP_SQL_IP_CONFIGURATION_UNREADABLE" {
+			said = true
+		}
+	}
+	if !said {
+		t.Fatal("the admission is undetermined and nothing names what would settle it")
+	}
+}
+
+// TestAnAuthorizedNetworkListThatIsNotAListIsNotAnEmptyList guards the boundary
+// `declared.ListReach` already guards, for the reason written there: a scalar
+// where a set belongs reads as a list of length zero, which is narrower than
+// reality and comes out as a proven closure.
+//
+// Terraform will not emit this shape. The plan is input, and CLAUDE.md requires
+// validation at boundaries, so the one place this defect class is already named
+// should not be the one place it is unguarded.
+func TestAnAuthorizedNetworkListThatIsNotAListIsNotAnEmptyList(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "real-databases.json"))
+	if err != nil {
+		t.Fatalf("reading the fixture: %v", err)
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("decoding the fixture: %v", err)
+	}
+
+	var rewritten bool
+	for _, entry := range document["resource_changes"].([]any) {
+		change := entry.(map[string]any)
+		if change["address"] != "google_sql_database_instance.reachable" {
+			continue
+		}
+		after := change["change"].(map[string]any)["after"].(map[string]any)
+		settings := after["settings"].([]any)[0].(map[string]any)
+		config := settings["ip_configuration"].([]any)[0].(map[string]any)
+		// A string where the list belongs.
+		config["authorized_networks"] = "0.0.0.0/0"
+		rewritten = true
+	}
+	if !rewritten {
+		t.Fatal("the fixture no longer holds the instance this test rewrites")
+	}
+
+	patched, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("encoding the rewritten plan: %v", err)
+	}
+	parsed, err := terraformplan.Parse(patched)
+	if err != nil {
+		t.Fatalf("the rewritten plan does not load: %v", err)
+	}
+
+	graph := providers.Normalize(parsed, providers.Default())
+	found, ok := graph.At("google_sql_database_instance.reachable")
+	if !ok {
+		t.Fatal("the rewritten plan produced no resource at that address")
+	}
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	if found.Database.AdmitsAnyAddress.IsKnown() {
+		t.Fatalf("admits any address = %v, want undetermined: a string where the "+
+			"list belongs is not a list of length zero",
+			found.Database.AdmitsAnyAddress)
 	}
 }

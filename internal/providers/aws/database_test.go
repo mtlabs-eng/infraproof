@@ -595,3 +595,92 @@ func TestARealPlanSaysADestroyedDatabaseHasNoAfterState(t *testing.T) {
 		})
 	}
 }
+
+// TestADeleteThatStatesAPublicEndpointIsNotReadAsARemoval holds the line this
+// build already holds elsewhere: a plan is input, and two declarations inside it
+// that contradict each other are not resolved in the permissive direction.
+//
+// `Removed` suppresses the reachability question, so reading it from the action
+// list alone means one field of a plan can switch the rule off. The fixture says
+// `actions: ["delete"]` and in the same breath states `publicly_accessible: true`
+// in front of a security group open to the world on the database's port. A real
+// destroy states nothing -- `after` is JSON null, which `rds-destroyed` pins --
+// so the two cannot both be true of the same change.
+//
+// Measured before this guard existed: BLOCK became WARN and every database
+// finding and unknown disappeared. The same reasoning produced
+// `HasUnrecognizedAction` and `ModeContradictsActions` in the plan reader: what a
+// contradiction means is Terraform's to say, and this build refuses rather than
+// picking the half that reports less.
+func TestADeleteThatStatesAPublicEndpointIsNotReadAsARemoval(t *testing.T) {
+	const address = "aws_db_instance.reachable"
+
+	found := database(t, "rds-delete-contradicted", address)
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	if found.Removed {
+		t.Fatal("a change that states a public endpoint is read as removing the " +
+			"database, so the rule never asks whether it is reachable")
+	}
+	if !found.Database.PublicEndpoint.IsKnown() || !found.Database.PublicEndpoint.Get() {
+		t.Fatalf("public endpoint = %v, want a known true: the fixture exists to "+
+			"carry a stated endpoint beside a delete",
+			found.Database.PublicEndpoint)
+	}
+}
+
+// TestAChangeThatStatesNothingProvesNothingAboutTheEndpoint holds the one place
+// the AWS endpoint default is not safe to apply.
+//
+// `publicly_accessible` is Optional and not Computed, so on a create an absent
+// value is the provider's default and a determined private endpoint -- measured,
+// and the reason this cloud needs no configuration guard on a plain instance.
+// That reading asks "the author did not write it". It answers the same way to a
+// change with no after-object at all, where nobody wrote *anything*.
+//
+// `removed { lifecycle { destroy = false } }` is exactly that change: Terraform
+// emits `actions: ["forget"]` with `after` null. The database stays up, stays
+// publicly accessible, and leaves Terraform's management -- and the endpoint read
+// as a determined false, so the rule concluded there was no endpoint outside the
+// private network and said nothing. Measured: PASS, exit 0, under a contract
+// declaring the family private.
+//
+// A forget is not a destroy, so the removal guard does not cover it, and it
+// should not: the object survives. What the plan does not state about it cannot
+// be read as a default either.
+func TestAChangeThatStatesNothingProvesNothingAboutTheEndpoint(t *testing.T) {
+	const address = "aws_db_instance.old"
+
+	change := func() terraformplan.ResourceChange {
+		for _, candidate := range plan(t, "rds-forgotten").ResourceChanges {
+			if candidate.Address == address {
+				return candidate
+			}
+		}
+		t.Fatalf("fixture rds-forgotten has no change at %s", address)
+		return terraformplan.ResourceChange{}
+	}()
+
+	if change.After.Kind() != terraformplan.KindNull {
+		t.Fatalf("after kind = %v, want null: the fixture exists to carry a change "+
+			"that states nothing", change.After.Kind())
+	}
+	if change.IsDestructive() {
+		t.Fatal("a forget reads as destructive, so the removal guard covers it and " +
+			"this fixture tests the wrong thing")
+	}
+
+	found := database(t, "rds-forgotten", address)
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	if found.Removed {
+		t.Fatal("a forget is not a removal: the database survives, unmanaged")
+	}
+	if found.Database.PublicEndpoint.IsKnown() {
+		t.Fatalf("endpoint = %v, want undetermined: nothing in this change states "+
+			"anything about it, so the provider's default is not what is being read",
+			found.Database.PublicEndpoint)
+	}
+}

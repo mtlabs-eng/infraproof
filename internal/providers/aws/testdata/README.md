@@ -49,9 +49,19 @@ What was verified against the authoritative schema or a real plan:
 | `rds-switch-stated-nowhere` | the sanitized shape: the switch in neither half of the change |
 | `rds-destroyed` | a destroy-only change, where `after` is JSON null and the switch is therefore absent |
 | `rds-replaced` | a replacement, where `after` is a full object because the database is there afterwards |
+| `rds-destroyed` is not the only change that states nothing: | |
+| `rds-forgotten` | a `removed` block with `lifecycle { destroy = false }`, which Terraform emits as `actions: ["forget"]` with `after` null -- the database stays up, stays publicly accessible, and leaves Terraform's management |
+| `rds-delete-contradicted` | a plan claiming to delete while still stating a public endpoint, which is not a shape Terraform emits and is not one this build resolves in the permissive direction |
 
 `rds-destroyed` and `rds-replaced` are genuine `terraform show -json`: Terraform
 1.14.0, hashicorp/aws v6, planned with `-refresh=false` against a hand-written
 state file so no cloud was contacted. Provider credentials were placeholders and
 the arguments were deleted from the plan afterwards; the database password, also
 a placeholder, is redacted in the committed files.
+
+`rds-forgotten` is genuine `terraform show -json`, planned the same way as the two
+above. `rds-delete-contradicted` is derived from `real-databases` by setting one
+database's actions to `["delete"]` while leaving its `after` intact: Terraform
+does not emit that, and the fixture exists precisely because a plan is input and a
+plan whose action list contradicts its own state must not be read as the half that
+reports less.

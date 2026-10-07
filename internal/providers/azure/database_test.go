@@ -418,3 +418,43 @@ func TestADestroyedServerIsDistinguishedFromAReplacedOne(t *testing.T) {
 		})
 	}
 }
+
+// TestTheAzureServicesRuleJoinsTheUnionItBelongsTo is the arithmetic criterion 7
+// claims and did not have.
+//
+// The `0.0.0.0`-`0.0.0.0` rule really is one address by the arithmetic, and
+// saying so is right: it is not `0.0.0.0/0`. But it was recorded as a disclosure
+// and then skipped, so its one address never joined the union the cover sweep
+// runs over. Removing a rule from the set makes the set smaller than what it
+// admits, and a sentinel beside `0.0.0.1`-`255.255.255.255` -- which together
+// admit every IPv4 address -- came out as no finding at all. Measured: exit 0
+// under `unspecified`, against `sql-split-halves`, which the same arithmetic
+// BLOCKs.
+//
+// A disclosure is not a subtraction. The reader still has to be told that this
+// build reads the sentinel as one address while Azure admits every Azure-hosted
+// machine through it, which is the reason the control stays.
+func TestTheAzureServicesRuleJoinsTheUnionItBelongsTo(t *testing.T) {
+	found := databaseAt(t, "sql-services-plus-rest", "azurerm_mssql_server.db")
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	capabilities := *found.Database
+
+	if !capabilities.AdmitsAnyAddress.IsKnown() || !capabilities.AdmitsAnyAddress.Get() {
+		t.Fatalf("admits any address = %v, want a known true: 0.0.0.0-0.0.0.0 and "+
+			"0.0.0.1-255.255.255.255 are every IPv4 address between them",
+			capabilities.AdmitsAnyAddress)
+	}
+
+	var disclosed bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AZURE_DATABASE_ALLOWS_AZURE_SERVICES" {
+			disclosed = true
+		}
+	}
+	if !disclosed {
+		t.Fatal("the sentinel joined the union but the reader is no longer told " +
+			"this build reads it as one address")
+	}
+}

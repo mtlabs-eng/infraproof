@@ -55,6 +55,7 @@ Verified against `terraform providers schema -json`:
 | `pg-reachable` | the other type in scope, and its own port |
 | `sql-server-destroyed` | a destroy-only change on the server itself, which permits nothing through it |
 | `sql-server-replaced` | a replacement of the server, whose reachability is still the verdict |
+| `sql-services-plus-rest` | the Azure-services sentinel beside `0.0.0.1`-`255.255.255.255`, which together are every IPv4 address |
 
 `sql-server-destroyed` and `sql-server-replaced` are shaped like the rest of this
 cloud's fixtures, but the grammar they turn on is not guessed: `["delete"]` with

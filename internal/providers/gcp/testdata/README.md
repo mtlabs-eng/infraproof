@@ -44,6 +44,7 @@ refusal is covered where the table lives.
 | `sql-cloned` | an instance created from a clone, which writes no `settings` and inherits the source's authorized networks |
 | `sql-destroyed` | a destroy-only change, where `after` is JSON null so `ipv4_enabled` is absent for a reason that is not a gap |
 | `sql-replaced` | a replacement, whose `after` is complete because the instance exists when the change is done |
+| `sql-dynamic-unresolvable` | a `dynamic "ip_configuration"` whose `for_each` nobody can resolve, which the plan records identically to an instance writing no `ip_configuration` at all |
 
 A fixture encoding the `ip_configuration` block as unknown **and** written was
 removed rather than kept as a guard. Measured against the provider, a
@@ -56,3 +57,11 @@ instead.
 1.14.0, hashicorp/google v6, planned with `-refresh=false` against a hand-written
 state file so no cloud was contacted. The provider's `credentials` argument was a
 placeholder and was deleted from the plan afterwards.
+
+`sql-dynamic-unresolvable` is genuine `terraform show -json`. It is the fixture
+that disproved this cloud's earlier reading of an absent `ip_configuration`.
+Measured against a real plan of an instance writing `settings` with no
+`ip_configuration`, the two are identical in `after`, in `after_unknown` and in
+`configuration` -- the plan records nothing about a `dynamic` block, not even its
+`for_each` reference -- and one of them admits every address. So this build no
+longer proves an empty allow list from the block's absence.

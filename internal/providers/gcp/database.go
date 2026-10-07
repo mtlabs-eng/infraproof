@@ -67,7 +67,7 @@ func (m Mapper) database(subject terraformplan.ResourceChange) model.NormalizedR
 		Cloud:       model.CloudGCP,
 		Family:      model.FamilyDatabase,
 		Destructive: subject.IsDestructive(),
-		Removed:     subject.IsDestructive() && !subject.IsReplace(),
+		Removed:     declared.Removed(subject),
 		Environment: declared.Environment(subject, attrLabels, model.CloudGCP),
 		Database:    &capabilities,
 	}
@@ -144,29 +144,40 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 		attrSettings+"."+attrIPConfig+"."+attrAuthorizedNets, config.Field(attrAuthorizedNets))
 
 	if config.State() != terraformplan.StateKnown {
-		// The block could not be read. If nobody wrote it, nobody wrote the
-		// authorized networks either, and the provider's default for those is
-		// none -- so the list is empty and it authorizes nobody. That is the
-		// ordinary Cloud SQL instance: a public IP that nothing can reach until
-		// a network is added.
+		// The block could not be read, and this build does not answer the allow
+		// list from its absence.
 		//
-		// The same reasoning as the switch two functions up, and it has to be
-		// the same: applying a default to one half of a block and not the other
-		// would read a single silence two ways.
-		if wroteSettings(subject) && declared.Unwritten(subject, pathIPConfig) {
-			return model.Known(false, cited), nil
-		}
-		// The block is unreadable and the silence is not the author's. The
-		// reason says which cause it is, because they are different things to
-		// go and fix -- and because a `dynamic` block, measured, resolves to a
-		// readable list and records nothing in the configuration, so "written
-		// from something unresolvable" was a sentence about a shape no plan
-		// emits.
+		// It used to: if nobody wrote `ip_configuration`, nobody wrote the
+		// authorized networks inside it, and the provider's default for those is
+		// none -- so the list was taken as empty and authorizing nobody. That is
+		// proving a set complete from the *negative* form of the question, which
+		// ARCHITECTURE.md forbids by name, and the defence was that a `dynamic`
+		// block resolves to a readable list so the shape does not arise. That
+		// was measured with a resolvable `for_each`. With an unresolvable one the
+		// block comes back wholly unknown and the plan records nothing about it
+		// -- not the block, not its content, not even its `for_each` reference --
+		// so it is identical in `after`, `after_unknown` and `configuration` to
+		// an instance that writes no `ip_configuration` at all. Measured on real
+		// plans of both.
+		//
+		// Indistinguishable, and one of them is a world-open database, so the
+		// answer is the one that does not hide the grant.
+		//
+		// The endpoint switch two functions up still takes the provider's
+		// documented default, and that is not the same choice read two ways:
+		// there the default is the *unsafe* direction, so applying it hides
+		// nothing. Here it is the safe-looking one, which is what made it wrong.
 		reason := "This instance takes its settings from somewhere this plan does not describe, so " +
 			"nothing here can show which addresses are authorized to reach it."
-		if !subject.Configured {
+		switch {
+		case !subject.Configured:
 			reason = "This plan does not record what was written for this instance, so nothing " +
 				"here can show which addresses are authorized to reach it."
+		case wroteSettings(subject) && declared.Unwritten(subject, pathIPConfig):
+			reason = "This instance writes no ip_configuration block that this plan records, which " +
+				"is both what an instance using the provider's defaults looks like and what a " +
+				"dynamic block nobody can resolve looks like. The two are identical here, so " +
+				"which addresses may reach it is undetermined."
 		}
 		return model.Unknown[bool](cited), []model.MissingControl{{
 			CheckID: checkIPConfigUnread,
@@ -177,6 +188,20 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 	}
 
 	networks := config.Field(attrAuthorizedNets)
+	if networks.State() == terraformplan.StateKnown && networks.Kind() != terraformplan.KindArray {
+		// A scalar where the list belongs. Len is 0 for it, which reads as an
+		// empty allow list and so as a proven closure -- narrower than reality,
+		// in the direction that hides a grant. `declared.ListReach` guards the
+		// same boundary for the same reason; a plan is input, and this is the one
+		// place the defect class is already named.
+		return model.Unknown[bool](cited), []model.MissingControl{{
+			CheckID: checkAuthNetsUnread,
+			Reason: "The authorized networks of this instance are not a list in this plan, so " +
+				"nothing here can show which addresses may reach it.",
+			Sources: []model.Provenance{cited},
+			Cloud:   model.CloudGCP,
+		}}
+	}
 	if networks.State() != terraformplan.StateKnown && networks.State() != terraformplan.StateAbsent {
 		return model.Unknown[bool](cited), []model.MissingControl{{
 			CheckID: checkAuthNetsUnread,

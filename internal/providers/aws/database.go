@@ -63,7 +63,7 @@ func (m Mapper) database(subject terraformplan.ResourceChange,
 		Cloud:       model.CloudAWS,
 		Family:      model.FamilyDatabase,
 		Destructive: subject.IsDestructive(),
-		Removed:     subject.IsDestructive() && !subject.IsReplace(),
+		Removed:     declared.Removed(subject),
 		Environment: declared.Environment(subject, attrTags, model.CloudAWS),
 		Database:    &capabilities,
 	}
@@ -85,9 +85,19 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 		subject.After.Field(attrPubliclyAccessible))
 	value := subject.After.Field(attrPubliclyAccessible)
 
+	if declared.Unstated(subject) {
+		// Nothing in this change states anything, so the absence below is not the
+		// author declining to write an attribute -- it is a change with no
+		// after-object. A destroy is one; so is a `removed` block with
+		// `lifecycle { destroy = false }`, which leaves the database up and
+		// publicly accessible while Terraform stops managing it.
+		return model.Unknown[bool](cited)
+	}
+
 	switch value.State() {
 	case terraformplan.StateAbsent:
-		// Not stated anywhere. The provider's default is a private endpoint.
+		// Not stated anywhere, in a change that states other things. The
+		// provider's default is a private endpoint.
 		return model.Known(false, cited)
 	case terraformplan.StateKnown:
 		if value.Kind() != terraformplan.KindBool {

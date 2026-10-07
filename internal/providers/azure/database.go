@@ -62,7 +62,7 @@ func (m Mapper) database(subject terraformplan.ResourceChange,
 		Cloud:       model.CloudAzure,
 		Family:      model.FamilyDatabase,
 		Destructive: subject.IsDestructive(),
-		Removed:     subject.IsDestructive() && !subject.IsReplace(),
+		Removed:     declared.Removed(subject),
 		Environment: declared.Environment(subject, attrTags, model.CloudAzure),
 		Database:    &capabilities,
 	}
@@ -143,6 +143,12 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 		// virtual machine. The arithmetic stays and the reader is told, for the
 		// reason the inferred port is disclosed: a verdict resting on a
 		// provider's convention has to say so.
+		//
+		// Disclosed and *kept*. It used to be disclosed and skipped, which made
+		// the union smaller than the set it describes: a sentinel beside
+		// 0.0.0.1-255.255.255.255 admits every IPv4 address between them, and the
+		// cover sweep never saw the first one. Measured, that was exit 0 on a
+		// server open to the whole internet. A disclosure is not a subtraction.
 		if span.Start == azureServices && span.End == azureServices {
 			unread = append(unread, model.MissingControl{
 				CheckID: checkAllowsAzure,
@@ -155,7 +161,6 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 				},
 				Cloud: model.CloudAzure,
 			})
-			continue
 		}
 		ranges = append(ranges, span)
 	}
