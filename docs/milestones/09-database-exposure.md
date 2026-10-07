@@ -66,6 +66,21 @@ three defects that came from reading docs instead of plans.
 - **Azure cannot be planned offline**, as in milestone 08: the provider acquires
   an AAD token before it finishes building. Its fixtures come from the
   authoritative schema and say so.
+- **For Aurora the two halves live on two different resources.** Measured against
+  the schema: `aws_rds_cluster_instance` has `publicly_accessible` and **no**
+  `vpc_security_group_ids`; `aws_rds_cluster` has `vpc_security_group_ids` and
+  **no** `publicly_accessible`. So the endpoint switch is on the instance and the
+  allow list is on the cluster, and reaching one from the other takes two hops --
+  instance to cluster by `cluster_identifier`, cluster to security group by
+  `vpc_security_group_ids`. A subject's `related` carries one hop, so the mapper
+  needs `scope`, which `Map` already receives. This was not in the design and is
+  the kind of thing only a real plan says.
+- **`vpc_security_group_ids` is Optional and Computed, so it is unknown even when
+  unwritten.** The configuration is what separates "the author named no group",
+  where AWS assigns the default VPC security group that is not in the plan, from
+  "the author named one the plan cannot resolve". `declared.Unwritten` answers it,
+  and both answers are the same verdict for different reasons -- which is exactly
+  the distinction milestone 08 learned to keep.
 
 ## Product decisions taken before implementation
 
