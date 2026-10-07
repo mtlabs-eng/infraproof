@@ -634,3 +634,85 @@ func TestWithoutAConfigurationNothingDrawsOnAnythingKnown(t *testing.T) {
 		t.Error("the resource is reported as configured")
 	}
 }
+
+// TestASingleNestedBlockIsABlockAndNotAnExpression corrects this package's model
+// of the configuration grammar, which said a nested block is always an array.
+//
+// A block with `nesting_mode: single` -- `timeouts`, and the same shape on 641
+// aws resource types -- is written as a bare **object**, not as an array of one.
+// Measured on a real plan: `"timeouts": {"create": {"constant_value": "40m"}}`.
+//
+// Both hand-written readers of that grammar got it wrong, in opposite
+// directions. `collectArguments` recorded `timeouts` and stopped, so
+// `timeouts.create` was absent from Stated although the author wrote it, and a
+// caller asking `Unwritten("timeouts.create")` was told nobody wrote it -- which
+// is how a provider default gets applied over something somebody wrote. And the
+// expression walker handed the block to the attribute reader, which looks for a
+// `references` key that is not there, so every reference inside a single-nested
+// block was dropped in silence: no correlation, no Opaque record, no parse error.
+//
+// How live each half is, measured against `terraform providers schema -json` for
+// hashicorp/aws v6, hashicorp/google v6 and hashicorp/azurerm v5:
+//
+//   - 641 single-nested blocks on aws, 723 on google, 1106 on azurerm.
+//   - Of those, the number with a settable attribute and a name other than
+//     `timeouts`: **zero**, on all three.
+//
+// So the Stated half is live -- `timeouts.create` is a real argument a real plan
+// records and this build reported as unwritten -- and the reference half is
+// defensive: no single-nested block in any of the three providers can hold a
+// reference today, because `timeouts` holds duration strings. A hand-authored
+// fixture carrying one would be exactly the fiction that caused three of
+// milestone 08's defects, so the decision itself is tested instead, in
+// TestIsExpressionTellsAnAttributeFromASingleNestedBlock.
+//
+// Nothing in the three families reads a single-nested block at all: `settings`,
+// `ip_configuration`, `authorized_networks`, `ingress` and `security_rule` are
+// list- or set-nested, measured. The grammar was stated as exhaustive in a doc
+// comment, which is what made it worth measuring.
+//
+// The two forms are told apart by their keys: an attribute expression carries
+// only `constant_value` and `references`, and anything else is a block. That is
+// Terraform's encoding and it is ambiguous at the edge -- a provider attribute
+// literally named `references` would be read as an expression -- which the
+// grammar's own comment now says rather than claiming certainty.
+func TestASingleNestedBlockIsABlockAndNotAnExpression(t *testing.T) {
+	const address = "aws_db_instance.withsingle"
+
+	var change ResourceChange
+	for _, candidate := range parseFixture(t, "single-nested-block").ResourceChanges {
+		if candidate.Address == address {
+			change = candidate
+		}
+	}
+	if change.Address == "" {
+		t.Fatalf("the fixture holds no change at %s", address)
+	}
+
+	stated := change.States("timeouts")
+	if !stated {
+		t.Fatal("the author wrote a timeouts block and the configuration does not " +
+			"record it at all, so the fixture has stopped carrying its shape")
+	}
+	if !change.States("timeouts.create") {
+		t.Fatal("the author wrote timeouts.create and this build reports it as " +
+			"unwritten, which is how a provider default is applied over something " +
+			"somebody wrote")
+	}
+	if change.States("timeouts.delete") {
+		t.Fatal("nobody wrote timeouts.delete and this build reports it as written")
+	}
+
+	// And the reference beside it still arrives, which is what proves the block
+	// is not being read as an expression at the cost of the attributes around it.
+	var named bool
+	for _, reference := range change.References {
+		if reference.Attribute == "vpc_security_group_ids" &&
+			reference.Target == "aws_security_group.ref" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatal("the security group this database names is no longer in its references")
+	}
+}
