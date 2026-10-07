@@ -11,6 +11,11 @@ const (
 	// resource: security groups, network security groups, firewalls, and the
 	// rule resources that belong to them.
 	FamilyNetwork Family = "network"
+	// FamilyDatabase covers managed relational databases and the controls over
+	// their reachability. It is the first family whose answer is the
+	// conjunction of two others' shapes: a switch, as object storage has, and
+	// an allow list, as network exposure has.
+	FamilyDatabase Family = "database"
 	// FamilyUnknown covers every resource no mapper claimed. Such a resource is
 	// retained rather than dropped, and must never read as one that was
 	// examined and found safe.
@@ -77,11 +82,16 @@ type NormalizedResource struct {
 	// contract's own environment: a resource that did not say where it belongs
 	// has not agreed with anything.
 	Environment Fact[string]
-	// ObjectStorage and Network hold the normalized capabilities of their
-	// family, and are nil for a resource of another family or for an opaque one.
-	// Nil means "not interpreted", never "nothing to worry about".
+	// ObjectStorage, Network and Database hold the normalized capabilities of
+	// their family, and are nil for a resource of another family or for an
+	// opaque one. Nil means "not interpreted", never "nothing to worry about".
+	//
+	// Exactly one is set on a subject this build understands. A control resource
+	// has none of them and names what it governs in DefersTo instead, because
+	// its meaning belongs to the subject rather than to itself.
 	ObjectStorage *ObjectStorageCapabilities
 	Network       *NetworkCapabilities
+	Database      *DatabaseCapabilities
 }
 
 // ObjectStorageCapabilities is the cloud-neutral view of an object store.

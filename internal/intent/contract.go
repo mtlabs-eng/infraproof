@@ -5,7 +5,7 @@ import "github.com/mtlabs-eng/infraproof/internal/model"
 // SchemaVersion is the contract version this build understands. The major
 // version is the compatibility boundary: a contract written against a later
 // major version is rejected rather than read partially.
-const SchemaVersion = "1.1"
+const SchemaVersion = "1.2"
 
 // Contract is a Version 1 Intent Contract.
 //
@@ -122,7 +122,12 @@ func (e Exposure) Valid() bool {
 // which one wins.
 const (
 	FamilyObjectStorage = "object_storage"
-	FamilyNetwork       = "network"
+	// FamilyDatabase is a managed database, which declares an exposure for the
+	// same reason object storage does: the question is binary. Ports belong to
+	// the network family, where an author is describing a service they chose to
+	// publish.
+	FamilyDatabase = "database"
+	FamilyNetwork  = "network"
 )
 
 // Constraints are explicit restrictions the contract records.
@@ -171,9 +176,16 @@ func (c Contract) Unevaluated() []string {
 // contract declared one at all.
 func (c Contract) ExposureOf(family string) (Exposure, bool) {
 	for _, resource := range c.Resources {
-		if resource.Family == family {
-			return resource.Exposure, true
+		// An entry of the family that carries no exposure is not a declaration
+		// of one, which is the rule PublicPortsOf already follows for its own
+		// field. Returning ("", true) said the contract had declared an exposure
+		// and that it was the empty string -- harmless while only object storage
+		// asked, since validation requires the field there, and a trap for the
+		// next family to ask about an entry that does not carry it.
+		if resource.Family != family || resource.Exposure == "" {
+			continue
 		}
+		return resource.Exposure, true
 	}
 	return "", false
 }
