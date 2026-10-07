@@ -241,7 +241,7 @@ func locate(sources []model.Provenance) []evidence.EvidenceRef {
 // it from the fact's own state marked every source of a redacted fact, which
 // told a reader that values the mapper had read in order to conclude were
 // secret.
-func referencesOf(fact model.Fact[bool]) []evidence.EvidenceRef {
+func referencesOf[T any](fact model.Fact[T]) []evidence.EvidenceRef {
 	canonical := fact.Canonical()
 
 	refs := make([]evidence.EvidenceRef, 0, len(canonical.Sources))
