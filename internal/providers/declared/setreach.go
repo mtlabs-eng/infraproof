@@ -151,3 +151,70 @@ func ListReach(field terraformplan.Value) Reach {
 	}
 	return SetReach(texts)
 }
+
+// AddressRange is an allow-list entry written as two addresses rather than as a
+// prefix, which is the only form Azure's database firewall rules have.
+type AddressRange struct {
+	Start, End string
+}
+
+// RangeReach describes how much of the internet a list of address ranges covers,
+// taken together.
+//
+// The same question SetReach answers in the other grammar, and the same
+// arithmetic: coverage was already computed over intervals, so a range is the
+// shape the sweep wanted in the first place. A test pins that a range and the
+// prefix covering the same addresses read identically, because two entry points
+// that disagree about one question make the verdict depend on which one a mapper
+// happened to call.
+//
+// Unreadable when any entry is: a start or end nobody could read, a range running
+// backwards -- this build does not know which end was meant -- or a start and end
+// in different address families, which is not a span of anything.
+//
+// The entry to be careful with is `0.0.0.0`-`0.0.0.0`, which is how Azure says
+// "services inside Azure". It is one address and reads as narrower, which it is;
+// treating its start as a zero-bit prefix would make the most common benign rule
+// in the cloud mean every address.
+func RangeReach(ranges []AddressRange) Reach {
+	spans := map[int][]span{}
+	for _, entry := range ranges {
+		start, err := netip.ParseAddr(entry.Start)
+		if err != nil {
+			return ReachUnreadable
+		}
+		end, err := netip.ParseAddr(entry.End)
+		if err != nil {
+			return ReachUnreadable
+		}
+		if start.BitLen() != end.BitLen() {
+			return ReachUnreadable
+		}
+		if end.Less(start) {
+			return ReachUnreadable
+		}
+		spans[start.BitLen()] = append(spans[start.BitLen()], span{
+			low:  value(start),
+			high: value(end),
+		})
+	}
+	for bits, group := range spans {
+		if covers(group, bits) {
+			return ReachAnyAddress
+		}
+	}
+	return ReachNarrower
+}
+
+// value reads an address as the integer the sweep compares.
+//
+// The same conversion spanOf does for a prefix, which is why both grammars reach
+// one implementation of coverage rather than two.
+func value(address netip.Addr) *big.Int {
+	if address.Is4() {
+		four := address.As4()
+		return new(big.Int).SetBytes(four[:])
+	}
+	sixteen := address.As16()
+	return new(big.Int).SetBytes(sixteen[:])
+}

@@ -193,3 +193,96 @@ func TestASetCoveringEveryAddressButTheLastIsNarrower(t *testing.T) {
 		t.Fatalf("the same set with the last address reads as %v", got)
 	}
 }
+
+// Azure writes an allow list as start and end addresses rather than as prefixes,
+// so `0.0.0.0` to `255.255.255.255` is the whole internet and no prefix appears
+// anywhere. The arithmetic underneath SetReach is already intervals; what it
+// needs is an entry point in the other grammar, not a second implementation.
+//
+// The well-known `0.0.0.0`-`0.0.0.0` rule is the trap: it is Azure's way of
+// saying "services inside Azure", and reading its start address as a zero-bit
+// prefix would make it every address.
+func TestARangeOfAddressesIsReadAsTheSpanItCovers(t *testing.T) {
+	cases := map[string]struct {
+		ranges [][2]string
+		want   declared.Reach
+		why    string
+	}{
+		"the whole of IPv4": {
+			[][2]string{{"0.0.0.0", "255.255.255.255"}}, declared.ReachAnyAddress,
+			"every address, in the only spelling this field has"},
+		"Azure's own services": {
+			[][2]string{{"0.0.0.0", "0.0.0.0"}}, declared.ReachNarrower,
+			"the rule that means services inside Azure, which is not every address"},
+		"one host": {
+			[][2]string{{"10.0.0.5", "10.0.0.5"}}, declared.ReachNarrower,
+			"a single address"},
+		"a private span": {
+			[][2]string{{"10.0.0.0", "10.255.255.255"}}, declared.ReachNarrower,
+			"the common closed case"},
+		"two halves that meet": {
+			[][2]string{{"0.0.0.0", "127.255.255.255"}, {"128.0.0.0", "255.255.255.255"}},
+			declared.ReachAnyAddress,
+			"the union is every address, which is the defect this arithmetic exists for"},
+		"two halves with a gap": {
+			[][2]string{{"0.0.0.0", "127.255.255.254"}, {"128.0.0.0", "255.255.255.255"}},
+			declared.ReachNarrower,
+			"one address missing is not every address"},
+		"a span one address short": {
+			[][2]string{{"0.0.0.0", "255.255.255.254"}}, declared.ReachNarrower,
+			"the top of the space, which an off-by-one would open"},
+		"the whole of IPv6": {
+			[][2]string{{"::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"}},
+			declared.ReachAnyAddress,
+			"a rule admitting all of one family is reachable from any address"},
+		"a range running backwards": {
+			[][2]string{{"255.255.255.255", "0.0.0.0"}}, declared.ReachUnreadable,
+			"this build does not know which end was meant, and guessing is guessing about how much is open"},
+		"an unreadable start": {
+			[][2]string{{"not-an-address", "255.255.255.255"}}, declared.ReachUnreadable,
+			"an end nobody read could be the one that opens everything"},
+		"a start and end in different families": {
+			[][2]string{{"0.0.0.0", "::1"}}, declared.ReachUnreadable,
+			"a span across two address spaces is not a span"},
+		"no ranges at all": {
+			nil, declared.ReachNarrower,
+			"a list naming nobody admits nobody"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			spans := make([]declared.AddressRange, 0, len(c.ranges))
+			for _, pair := range c.ranges {
+				spans = append(spans, declared.AddressRange{Start: pair[0], End: pair[1]})
+			}
+			if got := declared.RangeReach(spans); got != c.want {
+				t.Fatalf("RangeReach = %v, want %v: %s", got, c.want, c.why)
+			}
+		})
+	}
+}
+
+// A range and the prefix covering the same addresses must read the same way, or
+// the two entry points disagree about one question and which one a mapper
+// happens to call decides the verdict. That is the property the single-element
+// agreement test already pins for SetReach.
+func TestARangeAgreesWithThePrefixCoveringIt(t *testing.T) {
+	equivalent := map[string][2]string{
+		"0.0.0.0/0":      {"0.0.0.0", "255.255.255.255"},
+		"10.0.0.0/8":     {"10.0.0.0", "10.255.255.255"},
+		"10.0.0.5/32":    {"10.0.0.5", "10.0.0.5"},
+		"::/0":           {"::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"},
+		"192.168.0.0/16": {"192.168.0.0", "192.168.255.255"},
+	}
+
+	for prefix, span := range equivalent {
+		t.Run(prefix, func(t *testing.T) {
+			byPrefix := declared.SetReach([]string{prefix})
+			byRange := declared.RangeReach([]declared.AddressRange{{Start: span[0], End: span[1]}})
+			if byPrefix != byRange {
+				t.Fatalf("%s reads as %v and %s-%s reads as %v",
+					prefix, byPrefix, span[0], span[1], byRange)
+			}
+		})
+	}
+}
