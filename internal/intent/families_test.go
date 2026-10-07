@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -64,7 +65,7 @@ func TestEveryFamilyTheModelHasIsAFamilyAContractMayName(t *testing.T) {
 	}
 }
 
-// TestEveryKnownFamilyHasItsOwnValidationArm covers the second half of the same
+// TestEveryKnownFamilyIsNamedByAValidationArm covers the second half of the same
 // agreement, and the half that fails permissively.
 //
 // validateFamilyFields decides which fields a family requires and which it
@@ -76,7 +77,7 @@ func TestEveryFamilyTheModelHasIsAFamilyAContractMayName(t *testing.T) {
 // Read from the source rather than exercised, because the arms are a switch and
 // what this asserts is that the switch names every family -- not what any one of
 // them does with it.
-func TestEveryKnownFamilyHasItsOwnValidationArm(t *testing.T) {
+func TestEveryKnownFamilyIsNamedByAValidationArm(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "validate.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parsing validate.go: %v", err)
@@ -120,7 +121,7 @@ func TestEveryKnownFamilyHasItsOwnValidationArm(t *testing.T) {
 
 	for _, family := range knownFamilies {
 		if !named[family] {
-			t.Errorf("a contract may name %q and validateFamilyFields has no arm for it, so it "+
+			t.Errorf("a contract may name %q and no arm of validateFamilyFields names it, so it "+
 				"inherits another family's required and forbidden fields", family)
 		}
 	}
@@ -132,15 +133,31 @@ func TestEveryKnownFamilyHasItsOwnValidationArm(t *testing.T) {
 // written a fourth time -- the same defect this file exists to catch, one layer
 // up. A constant block is the authority; restating it would make the guard agree
 // with itself.
+//
+// Every file in the package, not just resource.go. This milestone's own
+// convention is a file per family, so a family declared in the next one would
+// have been invisible to the guard whose comment calls it the one that goes
+// quiet -- and the floor below only fires if every constant moves at once.
 func modelFamilies(t *testing.T) map[model.Family]bool {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(),
-		filepath.Join("..", "model", "resource.go"), nil, 0)
-	if err != nil {
-		t.Fatalf("parsing the model's families: %v", err)
-	}
 
 	families := map[model.Family]bool{}
+	for _, path := range packageFiles(t, filepath.Join("..", "model")) {
+		collectFamilies(t, path, families)
+	}
+	if len(families) == 0 {
+		t.Fatal("no family constant was found in the model, so this guard reads nothing")
+	}
+	return families
+}
+
+// collectFamilies records every Family constant one file declares.
+func collectFamilies(t *testing.T, path string, into map[model.Family]bool) {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
 	ast.Inspect(file, func(node ast.Node) bool {
 		spec, ok := node.(*ast.ValueSpec)
 		if !ok || len(spec.Names) != 1 || len(spec.Values) != 1 {
@@ -155,14 +172,29 @@ func modelFamilies(t *testing.T) map[model.Family]bool {
 			return true
 		}
 		if text, err := strconv.Unquote(literal.Value); err == nil {
-			families[model.Family(text)] = true
+			into[model.Family(text)] = true
 		}
 		return true
 	})
-	if len(families) == 0 {
-		t.Fatal("no family constant was found in the model, so this guard reads nothing")
+}
+
+// packageFiles lists a package's own source, test files excluded.
+func packageFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatalf("listing %s: %v", dir, err)
 	}
-	return families
+	var out []string
+	for _, path := range entries {
+		if !strings.HasSuffix(path, "_test.go") {
+			out = append(out, path)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("%s holds no source, so this guard reads nothing", dir)
+	}
+	return out
 }
 
 // familyValue resolves a family constant's name to the string a contract writes.
@@ -212,4 +244,42 @@ func declaredFamilies(t *testing.T) map[string]string {
 		t.Fatal("no family constant was found in the contract, so this guard reads nothing")
 	}
 	return families
+}
+
+// TestEveryKnownFamilyIsJudgedBySomeRule closes the gap the validation guard
+// cannot see.
+//
+// Naming a family in a validation arm says which fields it may carry. It says
+// nothing about whether any rule reads them, and a review added a fourth family
+// to all three places, shared an existing validation arm, wrote no rule, and
+// kept the whole suite green. Coverage would report such a family honestly at
+// runtime -- a declaration nothing exercised -- but a contract field that no rule
+// can ever read is a promise this build cannot keep, and it should fail at build
+// time.
+//
+// Read from the policy package's source, by the family constant each rule asks
+// the graph for. A rule that judges a family calls graph.OfFamily with it.
+func TestEveryKnownFamilyIsJudgedBySomeRule(t *testing.T) {
+	judged := map[string]bool{}
+	for _, path := range packageFiles(t, filepath.Join("..", "policy")) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for constant, value := range declaredFamilies(t) {
+			if strings.Contains(string(raw), "OfFamily(model."+strings.Replace(constant, "Family", "Family", 1)+")") {
+				judged[value] = true
+			}
+		}
+	}
+	if len(judged) == 0 {
+		t.Fatal("no rule asks the graph for a family, so this guard reads nothing")
+	}
+
+	for _, family := range knownFamilies {
+		if !judged[family] {
+			t.Errorf("a contract may declare %q and no rule in internal/policy judges a resource "+
+				"of that family, so the field is a promise this build cannot keep", family)
+		}
+	}
 }

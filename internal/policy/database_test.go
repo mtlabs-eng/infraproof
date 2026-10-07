@@ -382,3 +382,138 @@ func TestADeclarationForOneFamilyDoesNotCoverAnother(t *testing.T) {
 		t.Errorf("a network resource exercised a database declaration: %+v", unknowns)
 	}
 }
+
+// TestAGateProvenClosedIsReadAsClosed covers the one thing the rule reads from
+// another resource's verdict, and the mutation that showed nothing held it.
+//
+// The fixture carries a shape no mapper produces: a gate whose PublicIngress is
+// Known(false) and whose OpenToAnyAddress is non-empty. The model documents that
+// pairing as impossible -- ranges are recorded only alongside a grant -- and all
+// three mappers honour it. It is written here anyway, because this rule now
+// depends on that invariant and the invariant is documented in one direction and
+// enforced in none: deleting the guard that reads the gate's verdict changed no
+// test, which means a gate proven closed could have started admitting traffic
+// with a green suite.
+func TestAGateProvenClosedIsReadAsClosed(t *testing.T) {
+	postgres := model.OpenRange{
+		Protocol: model.ProtocolTCP,
+		Ports:    model.PortRange{From: 5432, To: 5432},
+		Sources:  []model.Provenance{provenance()},
+	}
+	// Known(false) beside a range, which is the pairing the model forbids.
+	closed := group("aws_security_group.db", known(false), postgres)
+
+	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+		reachable(known(true), unknownBool(), knownPort(5432), closed))
+
+	if len(result.Findings) != 0 {
+		t.Fatalf("a gate the network family proved closed admitted traffic: %d findings",
+			len(result.Findings))
+	}
+	// And it settles the conjunction rather than leaving it open, because the
+	// gate did answer.
+	for _, unknown := range result.Unknowns {
+		if unknown.CheckID == policy.CheckDatabaseReachabilityDeterminable {
+			t.Errorf("a gate that answered left the question open: %q", unknown.Reason)
+		}
+	}
+}
+
+// TestAPortOfZeroIsNotAPort covers a value the rule must not compare against.
+//
+// Zero is what a failed lookup returns, and `declared.DatabasePort` pairs it with
+// a false second result so nothing reaches the rule with it today. The rule
+// accepted it as a legitimate port anyway: a gate open on every usable port,
+// 1 to 65535, does not contain zero, so the database read as unreachable in
+// silence.
+//
+// The assertion is that the gate is not ruled out. An earlier version checked
+// only that something was reported, and a separate fix -- disclosing a silence
+// that rests on an inferred port -- then satisfied it for the wrong reason.
+func TestAPortOfZeroIsNotAPort(t *testing.T) {
+	everyUsablePort := model.OpenRange{
+		Protocol: model.ProtocolTCP,
+		Ports:    model.PortRange{From: 1, To: 65535},
+		Sources:  []model.Provenance{provenance()},
+	}
+
+	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+		reachable(known(true), unknownBool(), model.Known(0, provenance()),
+			group("aws_security_group.db", known(true), everyUsablePort)))
+
+	if len(result.Findings) != 1 {
+		t.Fatalf("%d findings: a port of zero ruled out a gate open on every usable port",
+			len(result.Findings))
+	}
+	var said bool
+	for _, unknown := range result.Unknowns {
+		if unknown.CheckID == policy.CheckDatabasePortUndetermined {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("the answer rests on a port this build could not use and does not say so")
+	}
+}
+
+// TestAWithdrawnDeterminationSaysThatIsWhatItIs covers the sentence, not just
+// the unknown.
+//
+// Two different things produce an undetermined answer here and they need
+// different fixes: a plan that stated nothing, and an answer this build reached
+// and refused to use because it came from a source a verdict may not rest on.
+// Reporting the second with the first's wording tells a reader to go and write
+// something they have already written.
+func TestAWithdrawnDeterminationSaysThatIsWhatItIs(t *testing.T) {
+	graph := reachable(known(false), unknownBool(), knownPort(5432))
+	graph.Resources[0].Database.Withdrawn = true
+
+	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate), graph)
+
+	var found bool
+	for _, unknown := range result.Unknowns {
+		if unknown.CheckID != policy.CheckDatabaseReachabilityDeterminable {
+			continue
+		}
+		found = true
+		if !strings.Contains(unknown.Reason, "withdrawn") {
+			t.Errorf("a withdrawn determination is reported as a plan that stated nothing: %q",
+				unknown.Reason)
+		}
+		if !unknown.Required {
+			t.Error("a withdrawn determination does not bound the verdict")
+		}
+	}
+	if !found {
+		t.Fatal("a withdrawn determination is reported nowhere")
+	}
+}
+
+// TestAnUnreadableGateIsNamedInTheEvidence covers the one thing a reader needs in
+// order to act on this unknown.
+//
+// "Something admits every address and the plan does not say what" names the
+// missing half. It does not name which security group was missing, and that
+// address is the only thing a reader can go and look for -- the Evidence Bundle
+// requires evidence locating the source data, not merely evidence that exists.
+func TestAnUnreadableGateIsNamedInTheEvidence(t *testing.T) {
+	graph := reachable(known(true), unknownBool(), knownPort(5432))
+	graph.Resources[0].Database.GatedBy = []string{"aws_security_group.elsewhere"}
+
+	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate), graph)
+
+	var named bool
+	for _, unknown := range result.Unknowns {
+		if unknown.CheckID != policy.CheckDatabaseReachabilityDeterminable {
+			continue
+		}
+		for _, ref := range unknown.Evidence {
+			if ref.ResourceAddress == "aws_security_group.elsewhere" {
+				named = true
+			}
+		}
+	}
+	if !named {
+		t.Error("the gate the plan does not hold is not named, so a reader has nothing to look for")
+	}
+}

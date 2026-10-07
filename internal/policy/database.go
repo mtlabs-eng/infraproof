@@ -15,6 +15,10 @@ const (
 	// CheckDatabasePortUndetermined records that the answer is wider than
 	// reality because the engine does not name a port.
 	CheckDatabasePortUndetermined = "DATABASE_PORT_UNDETERMINED"
+	// CheckDatabasePortInferred is the opposite direction: a rule admitting every
+	// address was ruled out by a port the engine named rather than one the plan
+	// stated, so a silence rests on a documented default.
+	CheckDatabasePortInferred = "DATABASE_PORT_INFERRED"
 )
 
 // DatabaseExposure reports a database the change makes reachable from the public
@@ -58,31 +62,53 @@ func DatabaseExposure(contract intent.Contract, graph model.Graph) Result {
 		capabilities := *resource.Database
 		result.Evaluated = append(result.Evaluated, resource.Address)
 
-		admits, approximated := admitsAnyAddress(capabilities, graph)
+		admits, how := admitsAnyAddress(capabilities, graph)
 
 		switch {
+		case capabilities.Withdrawn:
+			// Something was determined here and this build declined to use it,
+			// because it came from a source a verdict may not rest on. That is
+			// not a question the plan left open, so the contract's silence does
+			// not bound it.
+			//
+			// Tested first, which the one-fact rules do not have to do: the
+			// normalizer resets their single fact to Unknown whenever it sets
+			// Withdrawn, so no known arm can fire. With two facts that invariant
+			// does not hold -- whichever fact was withdrawn, the other can still
+			// carry the switch to silence or to a BLOCK, and the withdrawal then
+			// reaches a reader nowhere.
+			result.Unknowns = append(result.Unknowns,
+				undeterminedReachability(resource, capabilities, admits, how, true))
 		case capabilities.PublicEndpoint.IsKnown() && !capabilities.PublicEndpoint.Get():
 			// No endpoint outside the private network. What the allow list says
 			// cannot make it reachable, so there is nothing to settle.
 		case admits.IsKnown() && !admits.Get():
-			// An endpoint nobody is admitted to.
+			// An endpoint nobody is admitted to. If that silence rests on a port
+			// the engine named rather than one the plan stated, say so -- a
+			// reader of a PASS cannot otherwise learn the verdict depends on it.
+			if how.restsOnInferredPort {
+				result.Unknowns = append(result.Unknowns, portInferred(resource, capabilities))
+			}
 		case capabilities.PublicEndpoint.IsKnown() && admits.IsKnown():
 			if declared != intent.ExposurePublic {
 				result.Findings = append(result.Findings,
 					reachableFinding(resource, capabilities, admits, declared))
 			}
-			if approximated {
+			if how.widerThanReality {
 				result.Unknowns = append(result.Unknowns, portUndetermined(resource, capabilities))
 			}
-		case capabilities.Withdrawn:
-			// Something was determined here and this build declined to use it.
-			// That is not a question the plan left open, so the contract's
-			// silence does not bound it.
-			result.Unknowns = append(result.Unknowns,
-				undeterminedReachability(resource, capabilities, admits, true))
 		default:
+			// Required only when the contract asked for a private database, which
+			// is the rule StorageExposure states and explains: an author who
+			// declared public exposure, or none, is not waiting on evidence of
+			// privacy, and raising a required unknown for them would make every
+			// undetermined plan an UNKNOWN regardless of what was asked. For
+			// this family that matters more than for storage, because a security
+			// group is usually in another module -- so the undetermined half is
+			// the common case and would have made exit 4 the normal answer.
 			result.Unknowns = append(result.Unknowns,
-				undeterminedReachability(resource, capabilities, admits, mentioned))
+				undeterminedReachability(resource, capabilities, admits, how,
+					declared == intent.ExposurePrivate))
 		}
 
 		result.Unknowns = append(result.Unknowns, unresolvedUnknowns(resource, capabilities.Unresolved)...)
@@ -92,74 +118,122 @@ func DatabaseExposure(contract intent.Contract, graph model.Graph) Result {
 }
 
 // admitsAnyAddress answers whether every address is admitted to this database,
-// and whether the answer is wider than reality.
+// and how far that answer can be trusted.
 //
-// Three sources, in order. The mapper answers directly where the allow list
-// belongs to the database or its own controls. Where it belongs to another
-// subject, the mapper named it and the gate's own verdict answers. A gate the
-// graph does not hold is a security group managed elsewhere, and settles
-// nothing.
+// A disjunction, not a precedence. Two sources can answer: the mapper, where the
+// allow list belongs to the database or its own controls, and each gate the
+// mapper named, where it belongs to another subject the network family judges.
+// Either can open the question and neither can close what the other opens.
 //
-// The port is what decides whether a gate's open ranges reach this database. When
-// the engine does not name one, any admitted range is treated as reaching it --
-// wider than reality, which is the safe direction, and reported as such rather
-// than presented as exact.
+// Reading the mapper's answer first and returning it was a false proof of
+// privacy. A database with a public endpoint, an inline Known(false), and a gate
+// in the graph open to every address on every port produced no finding and no
+// unknown at all -- PASS, exit 0. Nothing in the model forbids a mapper from
+// answering both ways, and three mappers were about to be written against it.
+//
+// The port decides whether a gate's open ranges reach this database, and it is an
+// inference rather than a plan fact. Both directions of that inference are
+// recorded: a port the engine cannot name makes every admitted address count, and
+// a port it does name is what makes an admitted address *not* count. The second
+// is the dangerous one, because then a silence rests on a table.
 func admitsAnyAddress(capabilities model.DatabaseCapabilities,
-	graph model.Graph) (model.Fact[bool], bool) {
+	graph model.Graph) (model.Fact[bool], approximation) {
 
-	if capabilities.AdmitsAnyAddress.IsKnown() {
-		return capabilities.AdmitsAnyAddress, false
-	}
-	if len(capabilities.GatedBy) == 0 {
-		return capabilities.AdmitsAnyAddress, false
+	var how approximation
+	if capabilities.AdmitsAnyAddress.IsKnown() && capabilities.AdmitsAnyAddress.Get() {
+		return capabilities.AdmitsAnyAddress, how
 	}
 
-	var approximated bool
-	settled := true
+	// Settled when something can answer: the mapper's own fact, or at least one
+	// gate. An unreadable gate clears it again, because that gate could be the
+	// one that admits everything.
+	//
+	// Starting from the mapper's fact alone left the question open whenever a
+	// gate answered "closed" and the mapper had deferred -- which is the ordinary
+	// AWS shape, and meant a database behind a security group the network family
+	// had proven closed came out UNKNOWN rather than settled.
+	settled := capabilities.AdmitsAnyAddress.IsKnown() || len(capabilities.GatedBy) > 0
 	for _, address := range capabilities.GatedBy {
 		gate, found := graph.At(address)
 		if !found || gate.Network == nil || !gate.Network.PublicIngress.IsKnown() {
-			// A gate nobody here can read leaves the conjunction open: it could
-			// be the one that admits everything.
+			// A gate nobody here can read leaves the question open: it could be
+			// the one that admits everything.
 			settled = false
+			how.unreadableGates = append(how.unreadableGates, address)
 			continue
 		}
 		if !gate.Network.PublicIngress.Get() {
 			continue
 		}
 		reaches, wider := rangesReach(gate.Network.OpenToAnyAddress, capabilities.Port)
-		if wider {
-			approximated = true
-		}
 		if reaches {
-			return model.Known(true, referencesTo(gate)...), approximated
+			how.widerThanReality = how.widerThanReality || wider
+			return model.Known(true, referencesTo(gate)...), how
 		}
+		// A gate open to the world that does not reach this database. Whether
+		// that is exact depends on a port nobody wrote down.
+		how.restsOnInferredPort = how.restsOnInferredPort || capabilities.Port.IsKnown()
 	}
+
 	if !settled {
-		return model.Unknown[bool](capabilities.AdmitsAnyAddress.Sources...), approximated
+		return model.Unknown[bool](capabilities.AdmitsAnyAddress.Sources...), how
 	}
-	return model.Known(false, capabilities.AdmitsAnyAddress.Sources...), approximated
+	return model.Known(false, capabilities.AdmitsAnyAddress.Sources...), how
+}
+
+// approximation records how far the admission answer can be trusted, so every
+// inference the verdict rests on reaches the reader.
+//
+// It is a struct rather than a bool because the two directions need different
+// sentences, and because reporting only the harmless one -- over-reporting --
+// while staying silent about a PASS that rests on an inferred port is the
+// asymmetry a review found here.
+type approximation struct {
+	// widerThanReality: a finding rests on a comparison this build could not
+	// make exactly.
+	widerThanReality bool
+	// restsOnInferredPort: a gate open to every address was ruled out by a port
+	// that came from the engine rather than from the plan.
+	restsOnInferredPort bool
+	// unreadableGates names the gates the graph does not hold, so an unknown can
+	// say which resource to go and look for.
+	unreadableGates []string
 }
 
 // rangesReach reports whether any range admitted from every address reaches this
 // database's port, and whether the answer is wider than reality.
 //
-// A protocol with no ports reaches a port by definition: there is nothing to
-// compare, and a rule admitting ICMP from everywhere does not reach a database
-// port -- but this build cannot tell which protocols a database answers on, so
-// treating it as reaching is the direction that cannot hide a grant.
+// Every range is scanned and an exact containment is preferred over an
+// approximation. Returning on the first port-less range made the answer depend
+// on the order the provider happened to write the rules in: one set reported an
+// approximation and the same set reordered did not.
+//
+// A protocol with no ports cannot reach a port. This build cannot tell which
+// protocols a database answers on, so it is reported as reaching -- the direction
+// that cannot hide a grant -- and the approximation says so, because a BLOCK
+// resting on it is a BLOCK whose claim is wider than the evidence.
 func rangesReach(open []model.OpenRange, port model.Fact[int]) (reaches, wider bool) {
-	if !port.IsKnown() {
-		// No port to compare against, so any range admitted at all is treated
-		// as reaching it.
+	if !port.IsKnown() || port.Get() <= 0 {
+		// No port to compare against, or a value that is not a port -- zero is
+		// not one. Any range admitted at all is treated as reaching it.
 		return len(open) > 0, len(open) > 0
 	}
+
 	wanted := model.PortRange{From: port.Get(), To: port.Get()}
-	for _, range_ := range open {
-		if !range_.Protocol.HasPorts() {
-			return true, true
+	for _, admitted := range open {
+		// A protocol with no ports cannot reach a port. The port is known here,
+		// which means it came from the engine table -- and every engine in that
+		// table speaks TCP, so a rule admitting ICMP from everywhere reaches
+		// nothing this database listens on. That is exact, not approximate.
+		//
+		// Reporting it as reaching produced a BLOCK whose claim was untrue and an
+		// unknown whose reason was untrue with it. The network family refuses to
+		// decide a port-less protocol for its own reasons; this one can decide
+		// it, because it knows the port.
+		if !admitted.Protocol.HasPorts() {
+			continue
 		}
-		if range_.Ports.Contains(wanted) {
+		if admitted.Ports.Contains(wanted) {
 			return true, false
 		}
 	}
@@ -224,10 +298,13 @@ func reachableFinding(resource model.NormalizedResource, capabilities model.Data
 // group in another module, which for AWS is the common case rather than an edge
 // one.
 func undeterminedReachability(resource model.NormalizedResource, capabilities model.DatabaseCapabilities,
-	admits model.Fact[bool], required bool) evidence.Unknown {
+	admits model.Fact[bool], how approximation, required bool) evidence.Unknown {
 
 	reason := "Whether this database is reachable from any address could not be determined from the plan: "
 	switch {
+	case capabilities.Withdrawn:
+		reason += "a determination was reached from a source a verdict may not rest on, and was " +
+			"withdrawn."
 	case !capabilities.PublicEndpoint.IsKnown():
 		reason += "the plan does not state whether it has an endpoint outside the private network."
 	default:
@@ -236,12 +313,23 @@ func undeterminedReachability(resource model.NormalizedResource, capabilities mo
 	}
 
 	address := inline(resource.Address)
+	// The gate's own address, so a reader is told which resource to go and look
+	// for. Citing only the database's sources named the missing half and not
+	// which security group it was, which is the one thing a reader needs to act.
+	refs := append(referencesOf(capabilities.PublicEndpoint), referencesOf(admits)...)
+	for _, gate := range how.unreadableGates {
+		refs = append(refs, evidence.EvidenceRef{
+			Source:          "terraform_plan",
+			ResourceAddress: inline(gate),
+			Path:            "network.public_ingress",
+		})
+	}
 	return evidence.Unknown{
 		CheckID:         CheckDatabaseReachabilityDeterminable,
 		Required:        required,
 		Reason:          reason,
 		ResourceAddress: &address,
-		Evidence:        append(referencesOf(capabilities.PublicEndpoint), referencesOf(admits)...),
+		Evidence:        refs,
 	}
 }
 
@@ -254,9 +342,35 @@ func portUndetermined(resource model.NormalizedResource,
 	return evidence.Unknown{
 		CheckID:  CheckDatabasePortUndetermined,
 		Required: false,
-		Reason: "The port this database listens on is not stated in the plan and its engine does not " +
-			"name one, so every address admitted by a rule in front of it is reported as reaching " +
-			"it, which may be wider than what the set permits.",
+		Reason: "This database is reported as reachable from a comparison this build could not make " +
+			"exactly: either the port it listens on is not stated in the plan and its engine does " +
+			"not name one, or a rule in front of it admits a protocol that carries no ports. Either " +
+			"way what is reported may be wider than what the set permits.",
+		ResourceAddress: &address,
+		Evidence:        referencesOf(capabilities.Port),
+	}
+}
+
+// portInferred records that a database reads as unreachable because of a port
+// the engine named rather than one the plan stated.
+//
+// The direction that needed saying. The approximation was announced when it
+// over-reported -- harmless -- and not when a gate open to every address was
+// ruled out by an inferred port, which is a PASS resting on a table of
+// documented defaults. The milestone names this as the choice most likely to be
+// wrong in practice, and a reader of that PASS had no way to learn the verdict
+// depended on it.
+func portInferred(resource model.NormalizedResource,
+	capabilities model.DatabaseCapabilities) evidence.Unknown {
+
+	address := inline(resource.Address)
+	return evidence.Unknown{
+		CheckID:  CheckDatabasePortInferred,
+		Required: false,
+		Reason: "A rule in front of this database admits every address, and this build reads it as " +
+			"not reaching the database because of the port the engine listens on by default. The " +
+			"plan does not state the port, so that part of the answer rests on a documented " +
+			"default rather than on the plan.",
 		ResourceAddress: &address,
 		Evidence:        referencesOf(capabilities.Port),
 	}

@@ -44,9 +44,16 @@ Measured against `terraform providers schema -json` and against genuine
 `terraform plan` output, not against documentation prose. Milestone 08 shipped
 three defects that came from reading docs instead of plans.
 
-- **AWS is the easy cloud this time.** `publicly_accessible` is `Optional` and
-  *not* `Computed`: a real plan emits `false` when it is unwritten, which is both
-  the provider's default and the safe one. No configuration guard is needed.
+- **AWS is the easy cloud for a plain instance and not for Aurora.** On
+  `aws_db_instance`, `publicly_accessible` is `Optional` and *not* `Computed`: a
+  real plan emits `false` when it is unwritten, which is both the provider's
+  default and the safe one, and no configuration guard is needed there.
+  - On `aws_rds_cluster_instance` it is `Optional` **and `Computed`**, and a real
+    plan emits it **unknown** when unwritten. That is milestone 08's worst trap
+    again, so the Aurora path does need `declared.Unwritten` — a mapper built on
+    the first sentence alone would answer UNKNOWN for every idiomatic Aurora
+    instance. An independent review found this stated the other way round here,
+    and the schema and a real plan both contradicted it.
 - **AWS splits the switch away from the cluster.** `aws_rds_cluster` has no
   `publicly_accessible` at all; `aws_rds_cluster_instance` does. An Aurora
   cluster is reachable through its instances, so the subject is the instance and
@@ -67,9 +74,12 @@ three defects that came from reading docs instead of plans.
   internet, and the well-known `0.0.0.0`–`0.0.0.0` rule means "Azure services"
   rather than one host. `declared.SetReach` is already interval arithmetic
   internally, so a range maps onto it without a second implementation.
-- **`port` is never in the plan.** It is `Optional` and `Computed` on every AWS
-  database resource and comes back unknown on a create even when `engine` is
-  written. Any design that needs the port has to get it from somewhere else.
+- **`port` is never in the plan.** `Optional` and `Computed` on `aws_db_instance`
+  and `aws_rds_cluster`, and `Computed` only — not settable at all — on
+  `aws_rds_cluster_instance`. It comes back unknown on a create even when `engine`
+  is written, so any design that needs the port has to get it from somewhere
+  else. The conclusion holds for all three and is strongest where the attribute
+  cannot be written.
 - **Azure cannot be planned offline**, as in milestone 08: the provider acquires
   an AAD token before it finishes building. Its fixtures come from the
   authoritative schema and say so.
@@ -102,7 +112,13 @@ three defects that came from reading docs instead of plans.
   question is binary: reachable from the internet, or not. Ports belong to the
   `network` family, where the author is describing a service they chose to
   publish; nobody publishes a database port on purpose and then wants to name it.
-  Intent Contract becomes `1.2`; `1.1` and `1.0` keep loading.
+  Intent Contract becomes `1.2`; `1.1` and `1.0` keep loading. The bump is a
+  statement about what a reader of the contract may expect and **gates nothing**:
+  validation is version-independent, so a `1.0` document declaring a `database`
+  entry is accepted. That is deliberate — the same reading that accepts
+  `public_ports` in a `1.0` contract, recorded in `INTENT-CONTRACT.md` — but it
+  is worth saying beside a sentence that reads as though the minor versions
+  differed in capability.
 - **Severity is `HIGH`, not `CRITICAL`.** Public object storage is `CRITICAL`
   because it exposes the data itself to anyone; a reachable database still
   demands credentials, so it is one layer of several — the same reading network

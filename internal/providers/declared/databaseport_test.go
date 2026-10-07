@@ -64,6 +64,11 @@ func TestAnEngineOutsideTheTableHasNoPort(t *testing.T) {
 		// Spellings that are not engines.
 		"", "postgres ", "Postgres", "POSTGRES", "postgresql", "mysql5",
 		"../postgres", "postgres\n", "MYSQL", "SQLSERVER",
+		// A Cloud SQL family name in the wrong case. The provider emits
+		// POSTGRES_15 and nothing emits postgres_15, so matching it would be
+		// accepting a spelling that does not exist -- and an upper-casing lookup
+		// is the obvious way to write this wrong.
+		"postgres_15", "mysql_8_0", "Postgres_15", "sqlserver_2019_standard",
 		// The bare family name of a hyphenated AWS engine. The provider emits
 		// `oracle-se2` and `sqlserver-ex`, never these, so reading them would be
 		// accepting a spelling nothing writes -- and the prefix match is what
