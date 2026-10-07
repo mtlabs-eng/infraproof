@@ -449,3 +449,82 @@ func TestAProvenClosureIsAlwaysBounded(t *testing.T) {
 			"trace for this build to find")
 	}
 }
+
+// TestAGateIsFoundWhereverThePlanSpellsIt covers the gap between how a reference
+// names a resource and how the plan does.
+//
+// A reference carries the configuration's spelling: module instance keys absent,
+// and every key it does carry quoted. The graph holds the plan's spelling. The
+// two differ in exactly the shapes people write most -- a module per database,
+// and a `count`ed group -- so each of these was a database whose gate was lost,
+// reported as undetermined with evidence citing an address that appears nowhere
+// in the plan.
+//
+// All four fixtures are real `terraform plan` output.
+func TestAGateIsFoundWhereverThePlanSpellsIt(t *testing.T) {
+	cases := map[string]struct {
+		fixture, address, gate string
+		why                    string
+	}{
+		"a count-indexed group": {
+			"rds-group-shapes", "aws_db_instance.counted_group",
+			"aws_security_group.counted[0]",
+			"a plan writes a count index bare and an identity quotes every key"},
+		"a for_each group": {
+			"rds-group-shapes", "aws_db_instance.keyed_group",
+			`aws_security_group.keyed["a"]`,
+			"this half already worked, and has to keep working"},
+		"a module per database": {
+			"rds-repeated-shapes", `module.perdb["eu"].aws_db_instance.db`,
+			`module.perdb["eu"].aws_security_group.open`,
+			"the module instance key is in the plan address and not in the reference"},
+		"the sibling module instance": {
+			"rds-repeated-shapes", `module.perdb["us"].aws_db_instance.db`,
+			`module.perdb["us"].aws_security_group.open`,
+			"each instance has its own group, and taking the wrong one gates the wrong database"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			capabilities := database(t, c.fixture, c.address).Database
+			if capabilities == nil {
+				t.Fatal("the mapper produced no database capabilities")
+			}
+
+			var found bool
+			for _, gate := range capabilities.GatedBy {
+				if gate == c.gate {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("gated by %v, want %s among them: %s",
+					capabilities.GatedBy, c.gate, c.why)
+			}
+		})
+	}
+}
+
+// TestAnAuroraClusterIsFoundUnderRepetition covers the same gap on the other hop.
+//
+// `clusterOf` compared an identity against a key-stripped configuration address,
+// so an Aurora instance written with `for_each` reported its cluster as not part
+// of a plan that contained it -- and the identifier written for a genuinely
+// absent cluster fired for a shape it was not about.
+func TestAnAuroraClusterIsFoundUnderRepetition(t *testing.T) {
+	capabilities := database(t, "rds-aurora-repeated",
+		`aws_rds_cluster_instance.each["eu"]`).Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_CLUSTER_NOT_IN_PLAN" {
+			t.Errorf("the cluster is in the plan and is reported as absent: %q", control.Reason)
+		}
+	}
+	if len(capabilities.GatedBy) == 0 {
+		t.Error("the cluster's security groups were not reached, so the two-hop walk failed " +
+			"under repetition")
+	}
+}

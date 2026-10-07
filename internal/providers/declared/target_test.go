@@ -1,6 +1,7 @@
 package declared_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
@@ -238,5 +239,121 @@ func TestAListValuedAttributeNamesEveryInstanceItRefers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A reference names a resource the way the configuration does; the graph holds it
+// the way the plan does. The two differ in two ways, and both were wrong.
+//
+// A module instance key is in the plan address and not in the reference target --
+// `module.perdb["eu"].aws_security_group.open` against
+// `module.perdb.aws_security_group.open` -- so every database written as a module
+// per database lost its gate, and the evidence cited an address that appears
+// nowhere in the plan. And a `count` index is written bare in a plan address and
+// was quoted here, so `aws_security_group.counted[0]` was looked up as
+// `counted["0"]` and never found.
+//
+// Resolving against the plan's own changes fixes both at once, because the plan is
+// what spells them.
+func TestAnIdentityIsResolvedToThePlansOwnAddress(t *testing.T) {
+	// ModuleAddress is what a real plan carries beside the address, and it is
+	// where the module instance keys live -- so a helper that leaves it empty
+	// would be testing a shape no plan has.
+	moduleOf := func(address string) string {
+		cut := strings.LastIndex(address, ".aws_")
+		if cut < 0 || !strings.HasPrefix(address, "module.") {
+			return ""
+		}
+		return address[:cut]
+	}
+	change := func(address string, keys bool) terraformplan.ResourceChange {
+		return terraformplan.ResourceChange{
+			Address: address, ModuleAddress: moduleOf(address),
+			Type: "aws_security_group", DeclaredRepeated: keys,
+		}
+	}
+	subject := func(address string) terraformplan.ResourceChange {
+		return terraformplan.ResourceChange{
+			Address: address, ModuleAddress: moduleOf(address), Type: "aws_db_instance",
+		}
+	}
+
+	cases := map[string]struct {
+		subject  terraformplan.ResourceChange
+		identity string
+		scope    []terraformplan.ResourceChange
+		resolved string
+		found    bool
+		why      string
+	}{
+		"an address the plan spells the same way": {
+			subject("aws_db_instance.main"), "aws_security_group.open",
+			[]terraformplan.ResourceChange{change("aws_security_group.open", false)},
+			"aws_security_group.open", true, "the ordinary case"},
+		"a count index, which the plan writes bare": {
+			subject("aws_db_instance.main"), `aws_security_group.counted["0"]`,
+			[]terraformplan.ResourceChange{
+				change("aws_security_group.counted[0]", true),
+				change("aws_security_group.counted[1]", true),
+			},
+			"aws_security_group.counted[0]", true,
+			"a quoted index never matched the plan's bare one"},
+		"a for_each key, which the plan quotes": {
+			subject("aws_db_instance.main"), `aws_security_group.keyed["eu"]`,
+			[]terraformplan.ResourceChange{change(`aws_security_group.keyed["eu"]`, true)},
+			`aws_security_group.keyed["eu"]`, true, "this half already worked"},
+		"a group inside the same module instance as the database": {
+			subject(`module.perdb["eu"].aws_db_instance.db`),
+			"module.perdb.aws_security_group.open",
+			[]terraformplan.ResourceChange{
+				change(`module.perdb["eu"].aws_security_group.open`, false),
+				change(`module.perdb["us"].aws_security_group.open`, false),
+			},
+			`module.perdb["eu"].aws_security_group.open`, true,
+			"the module key is in the plan address and not in the reference"},
+		"the sibling module instance is not the answer": {
+			subject(`module.perdb["us"].aws_db_instance.db`),
+			"module.perdb.aws_security_group.open",
+			[]terraformplan.ResourceChange{
+				change(`module.perdb["eu"].aws_security_group.open`, false),
+				change(`module.perdb["us"].aws_security_group.open`, false),
+			},
+			`module.perdb["us"].aws_security_group.open`, true,
+			"each module instance has its own, and taking the wrong one gates the wrong database"},
+		"a group the plan does not contain": {
+			subject("aws_db_instance.main"), "aws_security_group.elsewhere",
+			[]terraformplan.ResourceChange{change("aws_security_group.open", false)},
+			"", false,
+			"managed in another plan, which the caller reports as a gate it cannot read"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, found := declared.Resolve(c.subject, c.identity, c.scope)
+
+			if found != c.found {
+				t.Fatalf("found = %v, want %v: %s", found, c.found, c.why)
+			}
+			if found && got != c.resolved {
+				t.Fatalf("resolved to %q, want %q: %s", got, c.resolved, c.why)
+			}
+		})
+	}
+}
+
+// An identity matching more than one instance of a repeated resource in the
+// caller's own module instance is not resolvable: picking either would gate the
+// database by a group chosen at random.
+func TestAnIdentityMatchingSeveralInstancesResolvesToNone(t *testing.T) {
+	subject := terraformplan.ResourceChange{
+		Address: "aws_db_instance.main", Type: "aws_db_instance",
+	}
+	scope := []terraformplan.ResourceChange{
+		{Address: "aws_security_group.counted[0]", Type: "aws_security_group", DeclaredRepeated: true},
+		{Address: "aws_security_group.counted[1]", Type: "aws_security_group", DeclaredRepeated: true},
+	}
+
+	if got, found := declared.Resolve(subject, "aws_security_group.counted", scope); found {
+		t.Fatalf("an identity naming no instance resolved to %q", got)
 	}
 }

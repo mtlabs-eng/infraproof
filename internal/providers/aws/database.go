@@ -188,16 +188,32 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 		}}
 	}
 
-	// Named instances resolved to the changes in the plan. One the plan does not
-	// contain stays named: the rule reports a gate it cannot find as a gate it
-	// cannot read, which is the honest answer and not an absence.
+	// Named instances resolved to the addresses the plan spells them with. A
+	// reference names a resource the way the configuration does -- module
+	// instance keys absent, every key quoted -- and the graph holds it the way
+	// the plan does. Handing the first to the rule lost the gate of every
+	// database written as a module per database, and cited an address appearing
+	// nowhere in the plan.
+	//
+	// One the plan does not contain keeps its identity: the rule reports a gate
+	// it cannot find as a gate it cannot read, which is the honest answer and
+	// not an absence.
 	//
 	// And the list is bounded even so. A security group named by its identifier
 	// -- `["sg-0aaa"]` -- leaves no reference at all, so a list holding one
 	// reference and one literal is indistinguishable from a list holding one
 	// reference. Closure here is never fully provable, and the network family
 	// attaches the same kind of bound to its own.
-	return named, []model.MissingControl{{
+	groups := make([]string, 0, len(named))
+	for _, identity := range named {
+		if address, found := declared.Resolve(holder, identity, scope); found {
+			groups = append(groups, address)
+			continue
+		}
+		groups = append(groups, identity)
+	}
+
+	return groups, []model.MissingControl{{
 		CheckID: checkAllowListMayBePartial,
 		Reason: "A security group named by identifier rather than by reference leaves nothing in " +
 			"the plan to correlate, so a group admitting more than the ones named here could be " +
@@ -220,8 +236,17 @@ func (Mapper) clusterOf(subject terraformplan.ResourceChange,
 	if state != declared.CorrelationNamed {
 		return terraformplan.ResourceChange{}, false
 	}
+	// Resolved against the plan's own addresses rather than compared with
+	// ConfigAddress, which discards keys: an Aurora instance written with
+	// for_each named `aws_rds_cluster.each["eu"]` could never match a
+	// key-stripped address, so its cluster was reported as not part of a plan
+	// that contained it.
+	address, found := declared.Resolve(subject, identity, scope)
+	if !found {
+		return terraformplan.ResourceChange{}, false
+	}
 	for _, candidate := range scope {
-		if candidate.Type == typeRDSCluster && candidate.ConfigAddress() == identity {
+		if candidate.Address == address {
 			return candidate, true
 		}
 	}
