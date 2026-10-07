@@ -98,6 +98,12 @@ func TestEveryMissingControlAnUnsettledSetReportsIsAsserted(t *testing.T) {
 			[]string{"AZURE_DATABASE_FIREWALL_RANGE_UNREADABLE"}},
 		{"azure", "sql-switch-absent", "azurerm_mssql_server.db",
 			[]string{"AZURE_DATABASE_PUBLIC_ACCESS_UNDETERMINED"}},
+		{"gcp", "real-databases-unreadable", "google_sql_database_instance.version_unreadable",
+			[]string{"GCP_SQL_DATABASE_VERSION_UNREADABLE"}},
+		{"gcp", "real-databases-unreadable", "google_sql_database_instance.network_unreadable",
+			[]string{"GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE"}},
+		{"gcp", "sql-block-written-unresolvable", "google_sql_database_instance.block_unreadable",
+			[]string{"GCP_SQL_IP_CONFIGURATION_UNREADABLE"}},
 	}
 
 	for _, c := range cases {
