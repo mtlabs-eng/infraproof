@@ -51,8 +51,10 @@ func (m Mapper) database(subject terraformplan.ResourceChange) model.NormalizedR
 	if !capabilities.Port.IsKnown() {
 		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
 			CheckID: checkVersionUnread,
-			Reason: "This build does not know which port this database's version listens on, so an " +
-				"authorized network is reported as reaching it whatever port it would reach.",
+			Reason: "This build does not know which port this database's version listens on, so " +
+				"the port is reported as undetermined. The verdict does not rest on it: an " +
+				"authorized network admits addresses and names no port, so nothing here " +
+				"compares one.",
 			Sources: []model.Provenance{declared.Source(model.CloudGCP, subject.Address,
 				attrDatabaseVer, subject.After.Field(attrDatabaseVer))},
 			Cloud: model.CloudGCP,
@@ -77,6 +79,17 @@ func (m Mapper) database(subject terraformplan.ResourceChange) model.NormalizedR
 // it with one element, so the walk is two indexes deep. An absent or unreadable
 // block is returned as the zero value, and the callers tell that apart from a
 // block that is there.
+// ipConfiguration returns the nested block both halves of the question live in,
+// or a zero Value when this plan does not describe it.
+//
+// The zero Value does not say *why* the block is not there: an instance that
+// writes no settings and one whose settings are unknown arrive the same way, and
+// Len is 0 for an absent list and for an unknown one alike. That is deliberate,
+// because the attribute is the wrong place to ask. Both callers ask the
+// configuration instead -- the authority on whether the author wrote something --
+// and that is what separates a provider default from a gap. Teaching this
+// function the difference would put the answer in two places, which is where
+// milestone 08's defects came from.
 func ipConfiguration(subject terraformplan.ResourceChange) terraformplan.Value {
 	settings := subject.After.Field(attrSettings)
 	if settings.Len() == 0 {

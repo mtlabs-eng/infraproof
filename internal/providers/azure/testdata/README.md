@@ -48,7 +48,7 @@ Verified against `terraform providers schema -json`:
 | `sql-split-halves` | two ranges each narrow and together the whole internet |
 | `sql-no-endpoint` | a rule admitting everything in front of no public endpoint |
 | `sql-no-rules` | a public endpoint and no rule in the plan, which cannot be shown closed |
-| `sql-switch-absent` | the switch stated nowhere, which this build will not default |
+| `sql-switch-absent` | the switch stated nowhere, which this build will not default (see the caveat below) |
 | `sql-unreadable-range` | a range this build could not read, which could be the one that opens everything |
 | `sql-open-beside-unreadable` | a proven grant beside an unreadable rule: the grant stands |
 | `sql-with-resource-group` | a server referencing something that is not a rule, which must not reach its related set |
@@ -61,3 +61,12 @@ cloud's fixtures, but the grammar they turn on is not guessed: `["delete"]` with
 `after` null, and `["delete","create"]` with a full `after`, were both measured on
 genuine `terraform show -json` output for AWS and GCP, where a plan could be
 produced. The actions array is Terraform core rather than provider behaviour.
+
+`sql-switch-absent` is the one fixture here whose *shape* is unverified, not just
+its values. `public_network_access_enabled` is Optional and not Computed, and on
+AWS the analogous attribute was measured emitting a determined `false` when
+unwritten -- so this provider may well state it too, and an absent switch may be
+a shape no real plan carries. If that turns out to be so, the fixture defends a
+path nothing reaches and this build's `UNKNOWN` is over-reporting rather than
+hiding anything. Measuring it needs a tenant, which is the one thing this project
+will not acquire to answer a question.

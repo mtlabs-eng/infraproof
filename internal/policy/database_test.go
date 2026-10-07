@@ -687,3 +687,49 @@ func TestADatabaseBeingDestroyedMakesNothingReachable(t *testing.T) {
 		t.Errorf("a database being replaced produced %d findings, want one", len(result.Findings))
 	}
 }
+
+// TestAnUndeterminedPortChangesNothingWhereTheMapperAnsweredTheAdmission pins
+// which half of the rule the port belongs to.
+//
+// The port exists to decide whether a gate open to every address reaches *this*
+// database, and only the gate resolution asks it. A mapper that answers the
+// admission from inside the subject -- GCP's authorized networks, Azure's
+// firewall rules -- names no gate, and an authorized network has no port for the
+// port to be compared against.
+//
+// So an undetermined port must not widen or narrow anything here, and the
+// approximations must stay silent. The mapper may still disclose that it could
+// not name the port; what it may not do is say the verdict rests on it.
+func TestAnUndeterminedPortChangesNothingWhereTheMapperAnsweredTheAdmission(t *testing.T) {
+	cases := map[string]struct {
+		admits  model.Fact[bool]
+		finding bool
+	}{
+		"a mapper that proved every address admitted": {known(true), true},
+		"a mapper that proved the allow list closed":  {known(false), false},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			// No gate: the admission came from the subject itself.
+			graph := reachable(known(true), want.admits, unknownPort())
+			result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate), graph)
+
+			if got := len(result.Findings) > 0; got != want.finding {
+				t.Fatalf("finding = %v, want %v: the port is not part of this half "+
+					"of the question", got, want.finding)
+			}
+			for _, unknown := range result.Unknowns {
+				switch unknown.CheckID {
+				case policy.CheckDatabasePortUndetermined, policy.CheckDatabasePortInferred:
+					t.Fatalf("raised %s where no gate was consulted, so the verdict "+
+						"is reported as resting on a port nothing compared",
+						unknown.CheckID)
+				case policy.CheckDatabaseReachabilityDeterminable:
+					t.Fatalf("raised %s where both halves are known",
+						unknown.CheckID)
+				}
+			}
+		})
+	}
+}
