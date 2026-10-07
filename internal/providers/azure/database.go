@@ -1,0 +1,218 @@
+package azure
+
+import (
+	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
+	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
+)
+
+const (
+	typeSQLServer        = "azurerm_mssql_server"
+	typeSQLFirewallRule  = "azurerm_mssql_firewall_rule"
+	typePostgresServer   = "azurerm_postgresql_flexible_server"
+	typePostgresRule     = "azurerm_postgresql_flexible_server_firewall_rule"
+	attrPublicNetwork    = "public_network_access_enabled"
+	attrStartIP          = "start_ip_address"
+	attrEndIP            = "end_ip_address"
+	attrServerID         = "server_id"
+	portSQLServer        = 1433
+	portPostgres         = 5432
+	checkRulesIncomplete = "AZURE_DATABASE_FIREWALL_RULES_INCOMPLETE"
+	checkEndpointUnknown = "AZURE_DATABASE_PUBLIC_ACCESS_UNDETERMINED"
+	checkRuleRangeUnread = "AZURE_DATABASE_FIREWALL_RANGE_UNREADABLE"
+)
+
+// database normalizes a managed database server.
+//
+// This cloud answers both halves of the conjunction itself. The endpoint switch
+// is an attribute of the server, and the allow list is the server's own firewall
+// rules -- control resources the normalizer joins to it through a declared
+// binding -- so nothing is deferred to another subject and GatedBy stays empty.
+//
+// A rule is a start and an end address rather than a prefix, which is the only
+// grammar this field has, so the arithmetic goes through declared.RangeReach.
+func (m Mapper) database(subject terraformplan.ResourceChange,
+	related []terraformplan.ResourceChange) model.NormalizedResource {
+
+	capabilities := model.DatabaseCapabilities{
+		PublicEndpoint: m.publicEndpoint(subject),
+		Port:           model.Known(portOf(subject.Type), portCitation(subject)),
+	}
+	capabilities.AdmitsAnyAddress, capabilities.Unresolved = m.allowList(subject, related)
+	if !capabilities.PublicEndpoint.IsKnown() {
+		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
+			CheckID: checkEndpointUnknown,
+			Reason: "The plan does not state whether this server accepts connections from outside " +
+				"its virtual network, and this build does not know what the provider defaults that " +
+				"to, so it does not assume one.",
+			Sources: []model.Provenance{declared.Source(model.CloudAzure, subject.Address,
+				attrPublicNetwork, subject.After.Field(attrPublicNetwork))},
+			Cloud: model.CloudAzure,
+		})
+	}
+
+	return model.NormalizedResource{
+		Address:     subject.Address,
+		Provider:    subject.ProviderName,
+		Cloud:       model.CloudAzure,
+		Family:      model.FamilyDatabase,
+		Destructive: subject.IsDestructive(),
+		Environment: declared.Environment(subject, attrTags, model.CloudAzure),
+		Database:    &capabilities,
+	}
+}
+
+// publicEndpoint reads whether the server accepts connections from outside its
+// virtual network.
+//
+// No default is applied, and that is deliberate rather than an omission. The
+// attribute is Optional and not Computed on both types in scope, so a real plan
+// would state it -- but this provider cannot be planned offline, so what it
+// states when nobody writes it has not been measured here. Guessing it in the
+// direction that reads as private would hide a reachable database, and guessing
+// it the other way would invent a finding. Undetermined is the answer that is
+// true either way.
+func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bool] {
+	value := subject.After.Field(attrPublicNetwork)
+	cited := declared.Source(model.CloudAzure, subject.Address, attrPublicNetwork, value)
+
+	if value.State() != terraformplan.StateKnown || value.Kind() != terraformplan.KindBool {
+		return model.Unknown[bool](cited)
+	}
+	return model.Known(value.Bool(), cited)
+}
+
+// allowList reads the server's firewall rules and answers whether any of them
+// admits every address.
+//
+// The asymmetry this family shares with the network one: a grant is provable from
+// part of a rule set and closure is not. The rules are separate resources, so a
+// plan holding none of them holds none of the set, and one that admits everything
+// settles the question whatever else is missing.
+func (m Mapper) allowList(subject terraformplan.ResourceChange,
+	related []terraformplan.ResourceChange) (model.Fact[bool], []model.MissingControl) {
+
+	var cited []model.Provenance
+	var unread []model.MissingControl
+	var ranges []declared.AddressRange
+	var rules int
+
+	for _, candidate := range related {
+		if candidate.Type != ruleTypeFor(subject.Type) {
+			// A guard the correlator makes unreachable rather than a decision
+			// this makes: the only binding pointing at a server is from its own
+			// rule type, so nothing else reaches the related set -- which a test
+			// pins, because it is the correlator's discipline and not this
+			// mapper's. Kept because a binding added later would otherwise walk
+			// straight through here.
+			continue
+		}
+		rules++
+		start := candidate.After.Field(attrStartIP)
+		end := candidate.After.Field(attrEndIP)
+		cited = append(cited,
+			declared.Source(model.CloudAzure, candidate.Address, attrStartIP, start),
+			declared.Source(model.CloudAzure, candidate.Address, attrEndIP, end))
+
+		if start.Kind() != terraformplan.KindString || end.Kind() != terraformplan.KindString {
+			unread = append(unread, rangeUnreadable(candidate))
+			continue
+		}
+		span := declared.AddressRange{Start: start.Text(), End: end.Text()}
+		if declared.RangeReach([]declared.AddressRange{span}) == declared.ReachUnreadable {
+			unread = append(unread, rangeUnreadable(candidate))
+			continue
+		}
+		ranges = append(ranges, span)
+	}
+
+	// The grant is tested before the gaps, and that order is the asymmetry this
+	// family shares with the network one: a grant is provable from part of a
+	// set, so a rule admitting every address settles the question whatever else
+	// is missing -- an unreadable rule beside it could only admit more.
+	//
+	// The union, not any single rule: two halves of the space are each narrow
+	// and together are the internet.
+	if len(ranges) > 0 && declared.RangeReach(ranges) == declared.ReachAnyAddress {
+		return model.Known(true, cited...), unread
+	}
+	if len(unread) > 0 {
+		// Closure is what cannot be proven from part of a set. A rule nobody
+		// could read could be the one that admits everything.
+		return model.Unknown[bool](cited...), unread
+	}
+	if rules == 0 {
+		return model.Unknown[bool](cited...), append(unread, model.MissingControl{
+			CheckID: checkRulesIncomplete,
+			Reason: "This server's firewall rules are separate resources and none of them is in this " +
+				"plan, so nothing here can show that no rule admits every address.",
+			Sources: []model.Provenance{declared.Source(model.CloudAzure, subject.Address,
+				attrPublicNetwork, subject.After.Field(attrPublicNetwork))},
+			Cloud: model.CloudAzure,
+		})
+	}
+
+	// Every rule in the plan was read and none admits everything. The set may
+	// still be incomplete, which is reported rather than assumed away.
+	return model.Known(false, cited...), append(unread, model.MissingControl{
+		CheckID: checkRulesIncomplete,
+		Reason: "This server's firewall rules are separate resources, so a rule declared outside " +
+			"this plan could admit more than the rules written here.",
+		Sources: []model.Provenance{declared.Source(model.CloudAzure, subject.Address,
+			attrPublicNetwork, subject.After.Field(attrPublicNetwork))},
+		Cloud: model.CloudAzure,
+	})
+}
+
+// rangeUnreadable reports a rule whose span this build could not read.
+func rangeUnreadable(rule terraformplan.ResourceChange) model.MissingControl {
+	return model.MissingControl{
+		CheckID: checkRuleRangeUnread,
+		Reason: "A firewall rule in front of this server names a range of addresses this build " +
+			"could not read, and it could be the one that admits every address.",
+		Sources: []model.Provenance{
+			declared.Source(model.CloudAzure, rule.Address, attrStartIP, rule.After.Field(attrStartIP)),
+			declared.Source(model.CloudAzure, rule.Address, attrEndIP, rule.After.Field(attrEndIP)),
+		},
+		Cloud: model.CloudAzure,
+	}
+}
+
+// ruleTypeFor names the firewall-rule type that belongs to a server type.
+//
+// The pairing is the provider's and not a guess: each server type has its own
+// rule resource, and a rule of the wrong type names a different server entirely.
+func ruleTypeFor(serverType string) string {
+	switch serverType {
+	case typeSQLServer:
+		return typeSQLFirewallRule
+	case typePostgresServer:
+		return typePostgresRule
+	default:
+		return ""
+	}
+}
+
+// portOf names the port a server type listens on.
+//
+// This cloud has no engine attribute: the engine is the resource type, which is
+// readable with certainty rather than inferred from a value. AWS and GCP both
+// write an engine and need a table; here the type is the table.
+func portOf(serverType string) int {
+	switch serverType {
+	case typePostgresServer:
+		return portPostgres
+	default:
+		return portSQLServer
+	}
+}
+
+// portCitation names what the port was read from, which is the resource type
+// rather than any attribute -- so the citation points at the resource itself.
+func portCitation(subject terraformplan.ResourceChange) model.Provenance {
+	return model.Provenance{
+		ResourceAddress: subject.Address,
+		AttributePath:   "type",
+		Cloud:           model.CloudAzure,
+	}
+}

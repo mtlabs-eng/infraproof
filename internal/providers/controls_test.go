@@ -90,6 +90,14 @@ func TestEveryMissingControlAnUnsettledSetReportsIsAsserted(t *testing.T) {
 			[]string{"AWS_DATABASE_SECURITY_GROUPS_UNKNOWN"}},
 		{"aws", "real-databases", "aws_db_instance.unnameable_engine",
 			[]string{"AWS_DATABASE_ENGINE_UNREADABLE"}},
+		{"aws", "rds-cluster-elsewhere", "aws_rds_cluster_instance.aurora",
+			[]string{"AWS_DATABASE_CLUSTER_NOT_IN_PLAN"}},
+		{"azure", "sql-no-rules", "azurerm_mssql_server.db",
+			[]string{"AZURE_DATABASE_FIREWALL_RULES_INCOMPLETE"}},
+		{"azure", "sql-unreadable-range", "azurerm_mssql_server.db",
+			[]string{"AZURE_DATABASE_FIREWALL_RANGE_UNREADABLE"}},
+		{"azure", "sql-switch-absent", "azurerm_mssql_server.db",
+			[]string{"AZURE_DATABASE_PUBLIC_ACCESS_UNDETERMINED"}},
 	}
 
 	for _, c := range cases {
