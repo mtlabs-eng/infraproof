@@ -1,0 +1,658 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.14.0",
+  "planned_values": {
+    "root_module": {}
+  },
+  "resource_changes": [
+    {
+      "address": "google_sql_database_instance.going_away",
+      "mode": "managed",
+      "type": "google_sql_database_instance",
+      "name": "going_away",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "available_maintenance_versions": null,
+          "clone": [],
+          "connection_name": null,
+          "database_version": "POSTGRES_15",
+          "deletion_protection": false,
+          "dns_name": null,
+          "dns_names": null,
+          "encryption_key_name": null,
+          "first_ip_address": null,
+          "id": "going-away",
+          "instance_type": null,
+          "ip_address": null,
+          "maintenance_version": null,
+          "master_instance_name": null,
+          "name": "going-away",
+          "node_count": null,
+          "private_ip_address": null,
+          "project": "placeholder-project",
+          "psc_service_attachment_link": null,
+          "public_ip_address": null,
+          "region": "europe-west1",
+          "replica_configuration": [],
+          "replica_names": null,
+          "replication_cluster": [],
+          "restore_backup_context": [],
+          "root_password": null,
+          "self_link": "https://sqladmin.googleapis.com/v1/projects/placeholder-project/instances/going-away",
+          "server_ca_cert": null,
+          "service_account_email_address": null,
+          "settings": [
+            {
+              "activation_policy": null,
+              "active_directory_config": [],
+              "advanced_machine_features": [],
+              "availability_type": null,
+              "backup_configuration": [],
+              "collation": null,
+              "connection_pool_config": [],
+              "connector_enforcement": null,
+              "data_cache_config": [],
+              "database_flags": [],
+              "deletion_protection_enabled": null,
+              "deny_maintenance_period": [],
+              "disk_autoresize": null,
+              "disk_autoresize_limit": null,
+              "disk_size": null,
+              "disk_type": null,
+              "edition": null,
+              "effective_availability_type": null,
+              "enable_dataplex_integration": null,
+              "enable_google_ml_integration": null,
+              "insights_config": [],
+              "ip_configuration": [
+                {
+                  "allocated_ip_range": null,
+                  "authorized_networks": [
+                    {
+                      "expiration_time": "",
+                      "name": "world",
+                      "value": "0.0.0.0/0"
+                    }
+                  ],
+                  "custom_subject_alternative_names": null,
+                  "enable_private_path_for_google_cloud_services": null,
+                  "ipv4_enabled": true,
+                  "private_network": null,
+                  "psc_config": [],
+                  "server_ca_mode": null,
+                  "server_ca_pool": null,
+                  "ssl_mode": null
+                }
+              ],
+              "location_preference": [],
+              "maintenance_window": [],
+              "password_validation_policy": [],
+              "pricing_plan": null,
+              "retain_backups_on_delete": null,
+              "sql_server_audit_config": [],
+              "tier": "db-f1-micro",
+              "time_zone": null,
+              "user_labels": null,
+              "version": null
+            }
+          ],
+          "timeouts": null
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {
+          "clone": [],
+          "replica_configuration": [],
+          "replication_cluster": [],
+          "restore_backup_context": [],
+          "root_password": true,
+          "server_ca_cert": true,
+          "settings": [
+            {
+              "active_directory_config": [],
+              "advanced_machine_features": [],
+              "backup_configuration": [],
+              "connection_pool_config": [],
+              "data_cache_config": [],
+              "database_flags": [],
+              "deny_maintenance_period": [],
+              "insights_config": [],
+              "ip_configuration": [
+                {
+                  "authorized_networks": [
+                    {}
+                  ],
+                  "psc_config": []
+                }
+              ],
+              "location_preference": [],
+              "maintenance_window": [],
+              "password_validation_policy": [],
+              "sql_server_audit_config": []
+            }
+          ]
+        },
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "google_sql_database_instance.replaced",
+      "mode": "managed",
+      "type": "google_sql_database_instance",
+      "name": "replaced",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "available_maintenance_versions": null,
+          "clone": [],
+          "connection_name": null,
+          "database_version": "POSTGRES_15",
+          "deletion_protection": false,
+          "dns_name": null,
+          "dns_names": null,
+          "encryption_key_name": null,
+          "first_ip_address": null,
+          "id": "replaced",
+          "instance_type": null,
+          "ip_address": null,
+          "maintenance_version": null,
+          "master_instance_name": null,
+          "name": "replaced",
+          "node_count": null,
+          "private_ip_address": null,
+          "project": "placeholder-project",
+          "psc_service_attachment_link": null,
+          "public_ip_address": null,
+          "region": "europe-west1",
+          "replica_configuration": [],
+          "replica_names": null,
+          "replication_cluster": [],
+          "restore_backup_context": [],
+          "root_password": null,
+          "self_link": "https://sqladmin.googleapis.com/v1/projects/placeholder-project/instances/replaced",
+          "server_ca_cert": null,
+          "service_account_email_address": null,
+          "settings": [
+            {
+              "activation_policy": null,
+              "active_directory_config": [],
+              "advanced_machine_features": [],
+              "availability_type": null,
+              "backup_configuration": [],
+              "collation": null,
+              "connection_pool_config": [],
+              "connector_enforcement": null,
+              "data_cache_config": [],
+              "database_flags": [],
+              "deletion_protection_enabled": null,
+              "deny_maintenance_period": [],
+              "disk_autoresize": null,
+              "disk_autoresize_limit": null,
+              "disk_size": null,
+              "disk_type": null,
+              "edition": null,
+              "effective_availability_type": null,
+              "enable_dataplex_integration": null,
+              "enable_google_ml_integration": null,
+              "insights_config": [],
+              "ip_configuration": [
+                {
+                  "allocated_ip_range": null,
+                  "authorized_networks": [
+                    {
+                      "expiration_time": "",
+                      "name": "world",
+                      "value": "0.0.0.0/0"
+                    }
+                  ],
+                  "custom_subject_alternative_names": null,
+                  "enable_private_path_for_google_cloud_services": null,
+                  "ipv4_enabled": true,
+                  "private_network": null,
+                  "psc_config": [],
+                  "server_ca_mode": null,
+                  "server_ca_pool": null,
+                  "ssl_mode": null
+                }
+              ],
+              "location_preference": [],
+              "maintenance_window": [],
+              "password_validation_policy": [],
+              "pricing_plan": null,
+              "retain_backups_on_delete": null,
+              "sql_server_audit_config": [],
+              "tier": "db-f1-micro",
+              "time_zone": null,
+              "user_labels": null,
+              "version": null
+            }
+          ],
+          "timeouts": null
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {
+          "clone": [],
+          "replica_configuration": [],
+          "replication_cluster": [],
+          "restore_backup_context": [],
+          "root_password": true,
+          "server_ca_cert": true,
+          "settings": [
+            {
+              "active_directory_config": [],
+              "advanced_machine_features": [],
+              "backup_configuration": [],
+              "connection_pool_config": [],
+              "data_cache_config": [],
+              "database_flags": [],
+              "deny_maintenance_period": [],
+              "insights_config": [],
+              "ip_configuration": [
+                {
+                  "authorized_networks": [
+                    {}
+                  ],
+                  "psc_config": []
+                }
+              ],
+              "location_preference": [],
+              "maintenance_window": [],
+              "password_validation_policy": [],
+              "sql_server_audit_config": []
+            }
+          ]
+        },
+        "after_sensitive": false
+      }
+    }
+  ],
+  "prior_state": {
+    "format_version": "1.0",
+    "terraform_version": "1.14.0",
+    "values": {
+      "root_module": {
+        "resources": [
+          {
+            "address": "google_sql_database_instance.going_away",
+            "mode": "managed",
+            "type": "google_sql_database_instance",
+            "name": "going_away",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "available_maintenance_versions": null,
+              "clone": [],
+              "connection_name": null,
+              "database_version": "POSTGRES_15",
+              "deletion_protection": false,
+              "dns_name": null,
+              "dns_names": null,
+              "encryption_key_name": null,
+              "first_ip_address": null,
+              "id": "going-away",
+              "instance_type": null,
+              "ip_address": null,
+              "maintenance_version": null,
+              "master_instance_name": null,
+              "name": "going-away",
+              "node_count": null,
+              "private_ip_address": null,
+              "project": "placeholder-project",
+              "psc_service_attachment_link": null,
+              "public_ip_address": null,
+              "region": "europe-west1",
+              "replica_configuration": [],
+              "replica_names": null,
+              "replication_cluster": [],
+              "restore_backup_context": [],
+              "root_password": null,
+              "self_link": "https://sqladmin.googleapis.com/v1/projects/placeholder-project/instances/going-away",
+              "server_ca_cert": null,
+              "service_account_email_address": null,
+              "settings": [
+                {
+                  "activation_policy": null,
+                  "active_directory_config": [],
+                  "advanced_machine_features": [],
+                  "availability_type": null,
+                  "backup_configuration": [],
+                  "collation": null,
+                  "connection_pool_config": [],
+                  "connector_enforcement": null,
+                  "data_cache_config": [],
+                  "database_flags": [],
+                  "deletion_protection_enabled": null,
+                  "deny_maintenance_period": [],
+                  "disk_autoresize": null,
+                  "disk_autoresize_limit": null,
+                  "disk_size": null,
+                  "disk_type": null,
+                  "edition": null,
+                  "effective_availability_type": null,
+                  "enable_dataplex_integration": null,
+                  "enable_google_ml_integration": null,
+                  "insights_config": [],
+                  "ip_configuration": [
+                    {
+                      "allocated_ip_range": null,
+                      "authorized_networks": [
+                        {
+                          "expiration_time": "",
+                          "name": "world",
+                          "value": "0.0.0.0/0"
+                        }
+                      ],
+                      "custom_subject_alternative_names": null,
+                      "enable_private_path_for_google_cloud_services": null,
+                      "ipv4_enabled": true,
+                      "private_network": null,
+                      "psc_config": [],
+                      "server_ca_mode": null,
+                      "server_ca_pool": null,
+                      "ssl_mode": null
+                    }
+                  ],
+                  "location_preference": [],
+                  "maintenance_window": [],
+                  "password_validation_policy": [],
+                  "pricing_plan": null,
+                  "retain_backups_on_delete": null,
+                  "sql_server_audit_config": [],
+                  "tier": "db-f1-micro",
+                  "time_zone": null,
+                  "user_labels": null,
+                  "version": null
+                }
+              ],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "clone": [],
+              "replica_configuration": [],
+              "replication_cluster": [],
+              "restore_backup_context": [],
+              "root_password": true,
+              "server_ca_cert": true,
+              "settings": [
+                {
+                  "active_directory_config": [],
+                  "advanced_machine_features": [],
+                  "backup_configuration": [],
+                  "connection_pool_config": [],
+                  "data_cache_config": [],
+                  "database_flags": [],
+                  "deny_maintenance_period": [],
+                  "insights_config": [],
+                  "ip_configuration": [
+                    {
+                      "authorized_networks": [
+                        {}
+                      ],
+                      "psc_config": []
+                    }
+                  ],
+                  "location_preference": [],
+                  "maintenance_window": [],
+                  "password_validation_policy": [],
+                  "sql_server_audit_config": []
+                }
+              ]
+            }
+          },
+          {
+            "address": "google_sql_database_instance.replaced",
+            "mode": "managed",
+            "type": "google_sql_database_instance",
+            "name": "replaced",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "available_maintenance_versions": null,
+              "clone": [],
+              "connection_name": null,
+              "database_version": "POSTGRES_15",
+              "deletion_protection": false,
+              "dns_name": null,
+              "dns_names": null,
+              "encryption_key_name": null,
+              "first_ip_address": null,
+              "id": "replaced",
+              "instance_type": null,
+              "ip_address": null,
+              "maintenance_version": null,
+              "master_instance_name": null,
+              "name": "replaced",
+              "node_count": null,
+              "private_ip_address": null,
+              "project": "placeholder-project",
+              "psc_service_attachment_link": null,
+              "public_ip_address": null,
+              "region": "europe-west1",
+              "replica_configuration": [],
+              "replica_names": null,
+              "replication_cluster": [],
+              "restore_backup_context": [],
+              "root_password": null,
+              "self_link": "https://sqladmin.googleapis.com/v1/projects/placeholder-project/instances/replaced",
+              "server_ca_cert": null,
+              "service_account_email_address": null,
+              "settings": [
+                {
+                  "activation_policy": null,
+                  "active_directory_config": [],
+                  "advanced_machine_features": [],
+                  "availability_type": null,
+                  "backup_configuration": [],
+                  "collation": null,
+                  "connection_pool_config": [],
+                  "connector_enforcement": null,
+                  "data_cache_config": [],
+                  "database_flags": [],
+                  "deletion_protection_enabled": null,
+                  "deny_maintenance_period": [],
+                  "disk_autoresize": null,
+                  "disk_autoresize_limit": null,
+                  "disk_size": null,
+                  "disk_type": null,
+                  "edition": null,
+                  "effective_availability_type": null,
+                  "enable_dataplex_integration": null,
+                  "enable_google_ml_integration": null,
+                  "insights_config": [],
+                  "ip_configuration": [
+                    {
+                      "allocated_ip_range": null,
+                      "authorized_networks": [
+                        {
+                          "expiration_time": "",
+                          "name": "world",
+                          "value": "0.0.0.0/0"
+                        }
+                      ],
+                      "custom_subject_alternative_names": null,
+                      "enable_private_path_for_google_cloud_services": null,
+                      "ipv4_enabled": true,
+                      "private_network": null,
+                      "psc_config": [],
+                      "server_ca_mode": null,
+                      "server_ca_pool": null,
+                      "ssl_mode": null
+                    }
+                  ],
+                  "location_preference": [],
+                  "maintenance_window": [],
+                  "password_validation_policy": [],
+                  "pricing_plan": null,
+                  "retain_backups_on_delete": null,
+                  "sql_server_audit_config": [],
+                  "tier": "db-f1-micro",
+                  "time_zone": null,
+                  "user_labels": null,
+                  "version": null
+                }
+              ],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "clone": [],
+              "replica_configuration": [],
+              "replication_cluster": [],
+              "restore_backup_context": [],
+              "root_password": true,
+              "server_ca_cert": true,
+              "settings": [
+                {
+                  "active_directory_config": [],
+                  "advanced_machine_features": [],
+                  "backup_configuration": [],
+                  "connection_pool_config": [],
+                  "data_cache_config": [],
+                  "database_flags": [],
+                  "deny_maintenance_period": [],
+                  "insights_config": [],
+                  "ip_configuration": [
+                    {
+                      "authorized_networks": [
+                        {}
+                      ],
+                      "psc_config": []
+                    }
+                  ],
+                  "location_preference": [],
+                  "maintenance_window": [],
+                  "password_validation_policy": [],
+                  "sql_server_audit_config": []
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "configuration": {
+    "provider_config": {
+      "google": {
+        "name": "google",
+        "full_name": "registry.terraform.io/hashicorp/google",
+        "version_constraint": "~> 6.0",
+        "expressions": {
+          "project": {
+            "constant_value": "placeholder-project"
+          },
+          "region": {
+            "constant_value": "europe-west1"
+          }
+        }
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_sql_database_instance.going_away",
+          "mode": "managed",
+          "type": "google_sql_database_instance",
+          "name": "going_away",
+          "provider_config_key": "google",
+          "expressions": {
+            "database_version": {
+              "constant_value": "POSTGRES_15"
+            },
+            "deletion_protection": {
+              "constant_value": false
+            },
+            "name": {
+              "constant_value": "going-away"
+            },
+            "region": {
+              "constant_value": "europe-west1"
+            },
+            "settings": [
+              {
+                "ip_configuration": [
+                  {
+                    "authorized_networks": [
+                      {
+                        "name": {
+                          "constant_value": "world"
+                        },
+                        "value": {
+                          "constant_value": "0.0.0.0/0"
+                        }
+                      }
+                    ],
+                    "ipv4_enabled": {
+                      "constant_value": true
+                    }
+                  }
+                ],
+                "tier": {
+                  "constant_value": "db-f1-micro"
+                }
+              }
+            ]
+          },
+          "schema_version": 0
+        },
+        {
+          "address": "google_sql_database_instance.replaced",
+          "mode": "managed",
+          "type": "google_sql_database_instance",
+          "name": "replaced",
+          "provider_config_key": "google",
+          "expressions": {
+            "database_version": {
+              "constant_value": "POSTGRES_15"
+            },
+            "deletion_protection": {
+              "constant_value": false
+            },
+            "name": {
+              "constant_value": "replaced"
+            },
+            "region": {
+              "constant_value": "europe-west1"
+            },
+            "settings": [
+              {
+                "ip_configuration": [
+                  {
+                    "authorized_networks": [
+                      {
+                        "name": {
+                          "constant_value": "world"
+                        },
+                        "value": {
+                          "constant_value": "0.0.0.0/0"
+                        }
+                      }
+                    ],
+                    "ipv4_enabled": {
+                      "constant_value": true
+                    }
+                  }
+                ],
+                "tier": {
+                  "constant_value": "db-f1-micro"
+                }
+              }
+            ]
+          },
+          "schema_version": 0
+        }
+      ]
+    }
+  },
+  "timestamp": "2026-10-07T13:49:44Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}

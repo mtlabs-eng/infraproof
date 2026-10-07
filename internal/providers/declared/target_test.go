@@ -357,3 +357,42 @@ func TestAnIdentityMatchingSeveralInstancesResolvesToNone(t *testing.T) {
 		t.Fatalf("an identity naming no instance resolved to %q", got)
 	}
 }
+
+// A conditional inside a list element names both branches on the same attribute,
+// and the plan does not say which it resolves to. A list literal naming two
+// resources does the same thing and means both.
+//
+// The two are indistinguishable in the configuration, so Targets cannot tell
+// them apart -- and taking both is the over-reporting direction: a gate can only
+// open the question, never close it. What it must not do is present the set as
+// exact, so the caller is told the list may name a resource the change does not
+// attach.
+func TestAListMayNameMoreResourcesThanTheChangeAttaches(t *testing.T) {
+	group := func(target string) terraformplan.ExpressionReference {
+		return terraformplan.ExpressionReference{
+			Attribute: "vpc_security_group_ids", Target: target,
+		}
+	}
+	single := func(address string) terraformplan.ResourceChange {
+		return terraformplan.ResourceChange{Address: address, Type: "aws_security_group"}
+	}
+
+	change := terraformplan.ResourceChange{
+		Address: "aws_db_instance.main",
+		References: []terraformplan.ExpressionReference{
+			group("aws_security_group.a"), group("aws_security_group.b"),
+		},
+	}
+	scope := []terraformplan.ResourceChange{
+		single("aws_security_group.a"), single("aws_security_group.b"),
+	}
+
+	named, state := declared.Targets(change, "vpc_security_group_ids", "aws_security_group", scope)
+	if state != declared.CorrelationNamed {
+		t.Fatalf("state = %v, want %v: two groups on a list are two correlations",
+			state, declared.CorrelationNamed)
+	}
+	if len(named) != 2 {
+		t.Fatalf("named %v, want both: a gate can only open the question", named)
+	}
+}

@@ -85,6 +85,12 @@ func TestReachabilityOnThisCloud(t *testing.T) {
 	for fixture, want := range cases {
 		t.Run(fixture, func(t *testing.T) {
 			found := databaseAt(t, fixture, want.address)
+			if found.Removed {
+				// Every case in this table is a create. Reporting one as removed
+				// would make the rule skip it, which is silence on exactly the
+				// change worth reporting.
+				t.Fatal("a database being created is reported as removed")
+			}
 			if found.Family != model.FamilyDatabase {
 				t.Fatalf("family = %q, want %q", found.Family, model.FamilyDatabase)
 			}
@@ -376,5 +382,39 @@ func TestTheAzureServicesRuleIsReportedForWhatItIs(t *testing.T) {
 	if !said {
 		t.Error("the rule that admits every Azure-hosted address is reported as one address " +
 			"and nothing says what it means")
+	}
+}
+
+// TestADestroyedServerIsDistinguishedFromAReplacedOne pins the distinction the
+// rule needs: a change that removes a server permits nothing through it, and a
+// replacement creates one whose reachability is the verdict.
+//
+// This provider cannot be planned offline -- it acquires an AAD token before it
+// finishes building -- so these two fixtures are shaped, like the rest of this
+// cloud's, from the authoritative schema. What is *not* guessed is the action
+// grammar they turn on: `["delete"]` with `after` null for a destroy and
+// `["delete","create"]` with a full `after` for a replacement are Terraform core
+// rather than provider behaviour, and both were measured on real `terraform
+// show -json` output for AWS and GCP, where the plan could be produced.
+func TestADestroyedServerIsDistinguishedFromAReplacedOne(t *testing.T) {
+	cases := map[string]struct {
+		fixture string
+		removed bool
+	}{
+		"a destroy-only change": {"sql-server-destroyed", true},
+		"a replacement":         {"sql-server-replaced", false},
+	}
+
+	for label, want := range cases {
+		t.Run(label, func(t *testing.T) {
+			found := databaseAt(t, want.fixture, "azurerm_mssql_server.db")
+			if found.Database == nil {
+				t.Fatalf("%s produced no database capabilities, so the rule never "+
+					"sees it and coverage reports it unjudged", label)
+			}
+			if found.Removed != want.removed {
+				t.Fatalf("Removed = %v, want %v", found.Removed, want.removed)
+			}
+		})
 	}
 }

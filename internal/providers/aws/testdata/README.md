@@ -47,3 +47,11 @@ What was verified against the authoritative schema or a real plan:
 | `rds-cluster-elsewhere` | an Aurora instance whose cluster, and so whose allow list, is managed outside this plan |
 | `rds-cluster-without-instances` | a cluster with no instance to answer for it |
 | `rds-switch-stated-nowhere` | the sanitized shape: the switch in neither half of the change |
+| `rds-destroyed` | a destroy-only change, where `after` is JSON null and the switch is therefore absent |
+| `rds-replaced` | a replacement, where `after` is a full object because the database is there afterwards |
+
+`rds-destroyed` and `rds-replaced` are genuine `terraform show -json`: Terraform
+1.14.0, hashicorp/aws v6, planned with `-refresh=false` against a hand-written
+state file so no cloud was contacted. Provider credentials were placeholders and
+the arguments were deleted from the plan afterwards; the database password, also
+a placeholder, is redacted in the committed files.

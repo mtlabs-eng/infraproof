@@ -63,6 +63,13 @@ func TestTheMapperAgreesWithARealPlanAboutDatabases(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			found := database(t, "real-databases", "aws_db_instance."+name)
 
+			if found.Removed {
+				// Every case in this table is a create. Reporting one as removed
+				// would make the rule skip it, which is silence on exactly the
+				// change worth reporting.
+				t.Fatal("a database being created is reported as removed")
+			}
+
 			if found.Family != model.FamilyDatabase {
 				t.Fatalf("family = %q, want %q", found.Family, model.FamilyDatabase)
 			}
@@ -526,5 +533,65 @@ func TestAnAuroraClusterIsFoundUnderRepetition(t *testing.T) {
 	if len(capabilities.GatedBy) == 0 {
 		t.Error("the cluster's security groups were not reached, so the two-hop walk failed " +
 			"under repetition")
+	}
+}
+
+// TestARealPlanSaysADestroyedDatabaseHasNoAfterState pins the shape the two
+// fixtures exist to carry, because the distinction they defend is invisible in
+// the attribute the mapper reads.
+//
+// Both plans are genuine `terraform show -json`: Terraform 1.14.0,
+// hashicorp/aws v6, planned against a hand-written state file with
+// `-refresh=false` so no cloud was contacted, provider credentials never set to
+// anything but placeholders and the placeholder arguments deleted afterwards.
+//
+// The measured fact is that a destroy emits `after` as JSON **null** -- a
+// readable value of null kind carrying no attributes at all, not an object whose
+// attributes are unwritten. So `publicly_accessible` is absent for exactly the
+// same reason on a database being deleted and on one whose switch nothing can
+// resolve, and only the action tells them apart. A replacement emits a full
+// `after` object, because the database is there when the change is done.
+func TestARealPlanSaysADestroyedDatabaseHasNoAfterState(t *testing.T) {
+	cases := map[string]struct {
+		fixture string
+		address string
+		removed bool
+		after   terraformplan.Kind
+	}{
+		"a destroy-only change": {"rds-destroyed", "aws_db_instance.going_away", true, terraformplan.KindNull},
+		"a replacement":         {"rds-replaced", "aws_db_instance.replaced", false, terraformplan.KindObject},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			var change terraformplan.ResourceChange
+			for _, candidate := range plan(t, want.fixture).ResourceChanges {
+				if candidate.Address == want.address {
+					change = candidate
+				}
+			}
+			if change.Address == "" {
+				t.Fatalf("fixture %s has no change at %s", want.fixture, want.address)
+			}
+
+			if got := change.After.Kind(); got != want.after {
+				t.Fatalf("After kind = %v on %s, want %v: the fixture no longer "+
+					"carries the shape it exists to pin", got, name, want.after)
+			}
+			if want.after == terraformplan.KindNull &&
+				change.After.Field("publicly_accessible").State() != terraformplan.StateAbsent {
+				t.Fatal("a destroyed database states its endpoint switch, so the " +
+					"mapper could read it and this fixture proves nothing")
+			}
+
+			found := database(t, want.fixture, want.address)
+			if found.Database == nil {
+				t.Fatalf("%s produced no database capabilities, so it is not judged "+
+					"at all and the rule never sees the distinction", name)
+			}
+			if found.Removed != want.removed {
+				t.Fatalf("Removed = %v on %s, want %v", found.Removed, name, want.removed)
+			}
+		})
 	}
 }

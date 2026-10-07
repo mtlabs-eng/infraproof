@@ -517,3 +517,173 @@ func TestAnUnreadableGateIsNamedInTheEvidence(t *testing.T) {
 		t.Error("the gate the plan does not hold is not named, so a reader has nothing to look for")
 	}
 }
+
+// TestAPortLessProtocolReachesNoPortWhateverThePortIs covers the half of that
+// exclusion that was left in the wrong order.
+//
+// A protocol with no ports cannot reach a port. That is exact and it does not
+// need the port: ICMP reaches nothing a database listens on whether this build
+// knows the port or not. The unknown-port branch returned before the port-less
+// filter, so a group admitting ICMP from everywhere in front of a database whose
+// engine the table cannot name produced a BLOCK -- a claim that is untrue, on
+// evidence that is an approximation, which is what a BLOCK may not rest on.
+//
+// The fix is an ordering: the protocol decides first, because it decides without
+// the port.
+func TestAPortLessProtocolReachesNoPortWhateverThePortIs(t *testing.T) {
+	icmp := model.OpenRange{Protocol: model.ProtocolICMP, Sources: []model.Provenance{provenance()}}
+	postgres := model.OpenRange{
+		Protocol: model.ProtocolTCP,
+		Ports:    model.PortRange{From: 5432, To: 5432},
+		Sources:  []model.Provenance{provenance()},
+	}
+
+	for name, port := range map[string]model.Fact[int]{
+		"with the port known":        knownPort(5432),
+		"with the port undetermined": unknownPort(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+				reachable(known(true), unknownBool(), port,
+					group("aws_security_group.pinged", known(true), icmp)))
+
+			if len(result.Findings) != 0 {
+				t.Fatalf("a rule admitting only ICMP produced %d findings: %q",
+					len(result.Findings), result.Findings[0].Claim)
+			}
+		})
+	}
+
+	// And a readable port alongside it still reaches, or the ordering has turned
+	// every mixed rule set into a silence.
+	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+		reachable(known(true), unknownBool(), unknownPort(),
+			group("aws_security_group.both", known(true), icmp, postgres)))
+	if len(result.Findings) != 1 {
+		t.Fatalf("%d findings, want one: a TCP range beside ICMP still reaches", len(result.Findings))
+	}
+}
+
+// TestTheInferredPortIsDisclosedOnlyWhenItDecided covers the other direction of
+// the same disclosure.
+//
+// DATABASE_PORT_INFERRED says a silence rests on a documented default. When a
+// gate is ruled out because its protocol carries no ports, the port decided
+// nothing -- the exclusion is exact -- and saying otherwise is the inverse of the
+// gap that identifier was added to close.
+func TestTheInferredPortIsDisclosedOnlyWhenItDecided(t *testing.T) {
+	icmp := model.OpenRange{Protocol: model.ProtocolICMP, Sources: []model.Provenance{provenance()}}
+	https := model.OpenRange{
+		Protocol: model.ProtocolTCP,
+		Ports:    model.PortRange{From: 443, To: 443},
+		Sources:  []model.Provenance{provenance()},
+	}
+
+	// Ruled out by the protocol: exact, so nothing to disclose.
+	byProtocol := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+		reachable(known(true), unknownBool(), knownPort(5432),
+			group("aws_security_group.pinged", known(true), icmp)))
+	for _, unknown := range byProtocol.Unknowns {
+		if unknown.CheckID == policy.CheckDatabasePortInferred {
+			t.Errorf("the port is reported as deciding what the protocol decided: %q", unknown.Reason)
+		}
+	}
+
+	// Ruled out by the port: the silence rests on the engine table, and that is
+	// the case the identifier exists for.
+	byPort := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+		reachable(known(true), unknownBool(), knownPort(5432),
+			group("aws_security_group.web", known(true), https)))
+	var said bool
+	for _, unknown := range byPort.Unknowns {
+		if unknown.CheckID == policy.CheckDatabasePortInferred {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("a silence resting on the engine table is not disclosed")
+	}
+}
+
+// TestAGateWhoseOwnSetIsUnsettledLeavesTheQuestionOpen covers the one line that
+// keeps the ordinary AWS shape from a false proof of privacy, and that no test
+// held.
+//
+// A security group whose rules are separate resources has `PublicIngress`
+// Unknown -- the network family's own asymmetry, and the common case on that
+// cloud. `Get()` on an Unknown fact is false, so a guard that only asked whether
+// the gate grants would skip it and let the conjunction settle as closed.
+// Deleting `|| !gate.Network.PublicIngress.IsKnown()` changed no test.
+func TestAGateWhoseOwnSetIsUnsettledLeavesTheQuestionOpen(t *testing.T) {
+	unsettled := model.NormalizedResource{
+		Address:     "aws_security_group.separate",
+		Cloud:       model.CloudAWS,
+		Family:      model.FamilyNetwork,
+		Interpreted: true,
+		Network: &model.NetworkCapabilities{
+			// What the network family reports for a group whose rules it cannot
+			// see in full: not a grant, and not a proof of closure either.
+			PublicIngress: unknownBool(),
+		},
+	}
+
+	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+		reachable(known(true), unknownBool(), knownPort(5432), unsettled))
+
+	if len(result.Findings) != 0 {
+		t.Fatalf("%d findings from a gate nobody has settled", len(result.Findings))
+	}
+	var required bool
+	for _, unknown := range result.Unknowns {
+		if unknown.CheckID == policy.CheckDatabaseReachabilityDeterminable {
+			required = unknown.Required
+		}
+	}
+	if !required {
+		t.Fatal("a gate whose own rule set is unsettled was read as a proof that nothing is open")
+	}
+}
+
+// TestADatabaseBeingDestroyedMakesNothingReachable covers a change that creates
+// nothing, which this rule had no notion of.
+//
+// A destroy-only change has no `after`, so every attribute is absent and no
+// configuration entry records it. On two clouds that produced a *required*
+// UNKNOWN with two sentences that were untrue -- "the plan does not state whether
+// it has an endpoint" about a database that is going away, and "written from
+// something the plan cannot resolve" about something nothing writes. On the third
+// it was silent by accident.
+//
+// The rule asserts what a change *permits*, and a change that removes a database
+// permits nothing through it. That is the same reading the family's own claim
+// already has: "the change makes a database reachable", not "this database is
+// reachable".
+func TestADatabaseBeingDestroyedMakesNothingReachable(t *testing.T) {
+	graph := reachable(unknownBool(), unknownBool(), unknownPort())
+	graph.Resources[0].Destructive = true
+	graph.Resources[0].Removed = true
+
+	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate), graph)
+
+	if len(result.Findings) != 0 {
+		t.Errorf("a database being destroyed produced %d findings", len(result.Findings))
+	}
+	for _, unknown := range result.Unknowns {
+		if unknown.CheckID == policy.CheckDatabaseReachabilityDeterminable {
+			t.Errorf("a database being destroyed is reported as undetermined: %q", unknown.Reason)
+		}
+	}
+	// And it is still judged, so coverage does not report it as a resource no
+	// rule looked at.
+	if len(result.Evaluated) != 1 {
+		t.Errorf("the rule judged %d resources, want 1", len(result.Evaluated))
+	}
+
+	// A replacement is not a removal: it creates the database again, and what it
+	// creates is what the verdict is about.
+	replaced := reachable(known(true), known(true), knownPort(5432))
+	replaced.Resources[0].Destructive = true
+	if result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate), replaced); len(result.Findings) != 1 {
+		t.Errorf("a database being replaced produced %d findings, want one", len(result.Findings))
+	}
+}

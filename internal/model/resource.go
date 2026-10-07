@@ -34,6 +34,22 @@ type NormalizedResource struct {
 	// Destructive reports that the change destroys the existing object, which
 	// covers a plain delete and both replace orderings.
 	Destructive bool
+	// Removed reports that the change destroys the object and does not recreate
+	// it, which Destructive alone cannot say: a replacement destroys and the
+	// object is there afterwards.
+	//
+	// It matters because every rule in this build asserts what a change
+	// *permits*, and a change that removes a resource permits nothing through
+	// it. A destroy-only change states no attributes and records no
+	// configuration, so without this the database rule reported a database
+	// being deleted as one whose reachability could not be determined -- with
+	// two sentences that were untrue of it.
+	//
+	// Set by the mappers that have a rule reading it. The storage and network
+	// families answer the question from their controls and have never needed it;
+	// adding it there would change files this milestone promised not to touch,
+	// for no behaviour.
+	Removed bool
 	// Interpreted reports that a mapper understood this resource type. A
 	// control resource is interpreted but carries no capabilities of its own,
 	// because its meaning belongs to the resource it controls. The distinction

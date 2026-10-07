@@ -159,6 +159,19 @@ func repeatedInPlan(target string, scope []terraformplan.ResourceChange) bool {
 // everything, so the set stays open rather than being answered from the part of
 // it that was readable.
 //
+// That refusal covers a reference naming no instance of a repeated target. It
+// cannot cover a reference the configuration dropped before this saw it -- a
+// variable, a local, a module output -- because those are not references by the
+// time they arrive. `ResourceChange.Opaque` records that loss and the caller asks
+// about it; this function only ever sees resources.
+//
+// A conditional inside a list element names both of its branches on the
+// attribute, and a list literal naming two resources does the same. The
+// configuration does not distinguish them, so both are returned: a gate can only
+// open the question, never close it, so taking both over-reports rather than
+// hiding anything. A caller presenting the set as exact is the thing that would
+// be wrong, which is why the AWS mapper bounds it.
+//
 // Sorted, so a plan's reference order -- which is JSON order -- cannot change a
 // bundle.
 func Targets(change terraformplan.ResourceChange, attribute, targetType string,

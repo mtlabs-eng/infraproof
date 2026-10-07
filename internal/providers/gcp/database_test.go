@@ -68,6 +68,12 @@ func TestReachabilityFromARealPlan(t *testing.T) {
 	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {
 			found := instance(t, "real-databases", name)
+			if found.Removed {
+				// Every case in this table is a create. Reporting one as removed
+				// would make the rule skip it, which is silence on exactly the
+				// change worth reporting.
+				t.Fatal("a database being created is reported as removed")
+			}
 			if found.Family != model.FamilyDatabase {
 				t.Fatalf("family = %q, want %q", found.Family, model.FamilyDatabase)
 			}
@@ -203,10 +209,15 @@ func TestWhatCannotBeReadIsNamedRatherThanAssumed(t *testing.T) {
 			"real-databases-unreadable", "network_unreadable",
 			"GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE",
 			"an address nobody read could be every address"},
-		"a block written from an unresolvable value": {
-			"sql-block-written-unresolvable", "block_unreadable",
+		// A clone, which writes no settings at all. This replaces a fixture that
+		// encoded the block as unknown *and* written: measured against the
+		// provider, a `dynamic "ip_configuration"` records nothing in the
+		// configuration and resolves to a readable list, so that shape is not
+		// one Terraform emits and the fixture was fiction.
+		"an instance whose settings this plan does not describe": {
+			"sql-cloned", "cloned",
 			"GCP_SQL_IP_CONFIGURATION_UNREADABLE",
-			"the author wrote the block, so its unknown is a gap and not the provider's default"},
+			"a clone inherits its configuration from an instance that is not here"},
 	}
 
 	for name, c := range cases {
@@ -237,9 +248,8 @@ func TestWhatCannotBeReadIsNamedRatherThanAssumed(t *testing.T) {
 			t.Errorf("%s settled the allow list as %v with an address nobody read", name, admits.Get())
 		}
 	}
-	if admits := instance(t, "sql-block-written-unresolvable", "block_unreadable").Database.AdmitsAnyAddress; admits.IsKnown() {
-		t.Errorf("a block the author wrote and the plan cannot resolve settled the allow list as %v",
-			admits.Get())
+	if admits := instance(t, "sql-cloned", "cloned").Database.AdmitsAnyAddress; admits.IsKnown() {
+		t.Errorf("a clone's inherited allow list settled as %v", admits.Get())
 	}
 }
 
@@ -324,5 +334,43 @@ func TestTheClonedFixtureWritesNoSettings(t *testing.T) {
 		if change.States("settings.ip_configuration") {
 			t.Error("the implicit instance writes ip_configuration, so it is not the default case")
 		}
+	}
+}
+
+// TestADestroyedInstanceIsDistinguishedFromAReplacedOne pins, on this cloud, the
+// distinction the rule needs: a change that removes a database permits nothing
+// through it, and a replacement creates one whose reachability is the verdict.
+//
+// Both fixtures are genuine `terraform show -json`: Terraform 1.14.0,
+// hashicorp/google v6, planned with `-refresh=false` against a hand-written
+// state file so no cloud was contacted, provider credentials a placeholder and
+// the argument deleted from the plan afterwards.
+//
+// The measured fact is the same one AWS shows: a destroy emits `after` as null,
+// so `ipv4_enabled` is absent for the same reason as on an instance whose
+// settings nothing can resolve. Without the action, the mapper cannot tell them
+// apart -- and reported a database being deleted as one whose reachability could
+// not be determined.
+func TestADestroyedInstanceIsDistinguishedFromAReplacedOne(t *testing.T) {
+	cases := map[string]struct {
+		fixture string
+		name    string
+		removed bool
+	}{
+		"a destroy-only change": {"sql-destroyed", "going_away", true},
+		"a replacement":         {"sql-replaced", "replaced", false},
+	}
+
+	for label, want := range cases {
+		t.Run(label, func(t *testing.T) {
+			found := instance(t, want.fixture, want.name)
+			if found.Database == nil {
+				t.Fatalf("%s produced no database capabilities, so the rule never "+
+					"sees it and coverage reports it unjudged", label)
+			}
+			if found.Removed != want.removed {
+				t.Fatalf("Removed = %v, want %v", found.Removed, want.removed)
+			}
+		})
 	}
 }

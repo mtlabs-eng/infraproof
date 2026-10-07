@@ -53,3 +53,11 @@ Verified against `terraform providers schema -json`:
 | `sql-open-beside-unreadable` | a proven grant beside an unreadable rule: the grant stands |
 | `sql-with-resource-group` | a server referencing something that is not a rule, which must not reach its related set |
 | `pg-reachable` | the other type in scope, and its own port |
+| `sql-server-destroyed` | a destroy-only change on the server itself, which permits nothing through it |
+| `sql-server-replaced` | a replacement of the server, whose reachability is still the verdict |
+
+`sql-server-destroyed` and `sql-server-replaced` are shaped like the rest of this
+cloud's fixtures, but the grammar they turn on is not guessed: `["delete"]` with
+`after` null, and `["delete","create"]` with a full `after`, were both measured on
+genuine `terraform show -json` output for AWS and GCP, where a plan could be
+produced. The actions array is Terraform core rather than provider behaviour.

@@ -102,7 +102,7 @@ func TestEveryMissingControlAnUnsettledSetReportsIsAsserted(t *testing.T) {
 			[]string{"GCP_SQL_DATABASE_VERSION_UNREADABLE"}},
 		{"gcp", "real-databases-unreadable", "google_sql_database_instance.network_unreadable",
 			[]string{"GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE"}},
-		{"gcp", "sql-block-written-unresolvable", "google_sql_database_instance.block_unreadable",
+		{"gcp", "sql-cloned", "google_sql_database_instance.cloned",
 			[]string{"GCP_SQL_IP_CONFIGURATION_UNREADABLE"}},
 	}
 
@@ -360,5 +360,39 @@ func unresolvedOf(found model.NormalizedResource) []model.MissingControl {
 		return found.Database.Unresolved
 	default:
 		return nil
+	}
+}
+
+// TestASubjectCarryingItsOwnVerdictIsNotReadAsDeferring covers a guard whose own
+// comment says "every family is asked" and that asked two.
+//
+// A subject with no capability has deferred to something, and coverage then goes
+// looking for what. A database subject carries its own, so leaving it out of the
+// test made every database look like a resource that deferred -- inert while no
+// binding joins a database to another subject, and a trap for the next one.
+func TestASubjectCarryingItsOwnVerdictIsNotReadAsDeferring(t *testing.T) {
+	cases := map[string]struct{ cloud, fixture, resource string }{
+		"a bucket":         {"aws", "public-acl", "aws_s3_bucket.assets"},
+		"a security group": {"aws", "sg-public-inline", "aws_security_group.web"},
+		"a database":       {"aws", "real-databases", "aws_db_instance.reachable"},
+		"a Cloud SQL instance": {"gcp", "real-databases",
+			"google_sql_database_instance.reachable"},
+		"an Azure server": {"azure", "sql-reachable", "azurerm_mssql_server.db"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			found, ok := normalizeFrom(t, c.cloud, c.fixture).At(c.resource)
+			if !ok {
+				t.Fatalf("fixture %s has no resource at %s", c.fixture, c.resource)
+			}
+			if unresolvedOf(found) == nil && found.ObjectStorage == nil &&
+				found.Network == nil && found.Database == nil {
+				t.Fatal("the subject carries no capability of any family")
+			}
+			if len(found.DefersTo) != 0 {
+				t.Errorf("a subject carrying its own verdict defers to %v", found.DefersTo)
+			}
+		})
 	}
 }

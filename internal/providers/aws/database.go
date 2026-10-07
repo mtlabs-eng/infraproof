@@ -63,6 +63,7 @@ func (m Mapper) database(subject terraformplan.ResourceChange,
 		Cloud:       model.CloudAWS,
 		Family:      model.FamilyDatabase,
 		Destructive: subject.IsDestructive(),
+		Removed:     subject.IsDestructive() && !subject.IsReplace(),
 		Environment: declared.Environment(subject, attrTags, model.CloudAWS),
 		Database:    &capabilities,
 	}

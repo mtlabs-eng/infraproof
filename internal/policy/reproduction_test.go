@@ -80,18 +80,36 @@ func TestR03InferredPortSilenceIsUndisclosed(t *testing.T) {
 // instance whose port IS known blocks, with a claim that is untrue and an unknown
 // whose stated reason is untrue.
 func TestR04ICMPBlocksWithAFalseReason(t *testing.T) {
-	r := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
-		reachable(known(true), unknownBool(), knownPort(5432),
-			group("aws_security_group.ping", known(true), rngR(model.ProtocolICMP, 0, 0))))
-	for _, u := range r.Unknowns {
-		if u.CheckID == policy.CheckDatabasePortUndetermined &&
-			strings.Contains(u.Reason, "its engine does not name one") {
-			t.Errorf("the port is Known(5432) and the unknown says the engine names none:\n  %s",
-				u.Reason)
-		}
-	}
-	for _, f := range r.Findings {
-		t.Logf("disposition=%s claim=%s", f.Disposition, f.Claim)
+	// Strengthened after a second review observed that this asserted nothing the
+	// defect would violate: it checked one reason's wording and logged the
+	// findings, so restoring the old behaviour produced no DATABASE_PORT_UNDETERMINED
+	// at all and the loop body never ran.
+	//
+	// What the defect actually did was produce a BLOCK whose claim was untrue.
+	// That is what is asserted now, in both the port-known and port-unknown
+	// shapes, because the exclusion is exact in each: a protocol with no ports
+	// reaches no port.
+	for name, port := range map[string]model.Fact[int]{
+		"port known":        knownPort(5432),
+		"port undetermined": unknownPort(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+				reachable(known(true), unknownBool(), port,
+					group("aws_security_group.ping", known(true), rngR(model.ProtocolICMP, 0, 0))))
+
+			if len(r.Findings) != 0 {
+				t.Errorf("a rule admitting only ICMP produced a finding: %q", r.Findings[0].Claim)
+			}
+			for _, u := range r.Unknowns {
+				if u.CheckID == policy.CheckDatabasePortUndetermined &&
+					strings.Contains(u.Reason, "its engine does not name one") &&
+					port.IsKnown() {
+					t.Errorf("the port is Known and the unknown says the engine names none:\n  %s",
+						u.Reason)
+				}
+			}
+		})
 	}
 }
 

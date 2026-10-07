@@ -62,6 +62,19 @@ func DatabaseExposure(contract intent.Contract, graph model.Graph) Result {
 		capabilities := *resource.Database
 		result.Evaluated = append(result.Evaluated, resource.Address)
 
+		if resource.Removed {
+			// The change removes this database, so it permits nothing through
+			// it. Judged, so coverage does not report it as a resource no rule
+			// looked at, and silent, because a destroy-only change states no
+			// attributes and records no configuration -- which read as a
+			// reachability nobody could determine, with two sentences that were
+			// untrue of a database that is going away.
+			//
+			// A replacement is not a removal: it creates the database again, and
+			// what it creates is what the verdict is about.
+			continue
+		}
+
 		admits, how := admitsAnyAddress(capabilities, graph)
 
 		switch {
@@ -171,8 +184,13 @@ func admitsAnyAddress(capabilities model.DatabaseCapabilities,
 			return model.Known(true, referencesTo(gate)...), how
 		}
 		// A gate open to the world that does not reach this database. Whether
-		// that is exact depends on a port nobody wrote down.
-		how.restsOnInferredPort = how.restsOnInferredPort || capabilities.Port.IsKnown()
+		// that rests on an inference depends on what ruled it out: a port from
+		// the engine table did, and a protocol carrying no ports did not --
+		// that exclusion is exact, and reporting it as resting on the table is
+		// the inverse of the gap this disclosure was added to close.
+		if capabilities.Port.IsKnown() && carriesPorts(gate.Network.OpenToAnyAddress) {
+			how.restsOnInferredPort = true
+		}
 	}
 
 	if !settled {
@@ -213,30 +231,40 @@ type approximation struct {
 // that cannot hide a grant -- and the approximation says so, because a BLOCK
 // resting on it is a BLOCK whose claim is wider than the evidence.
 func rangesReach(open []model.OpenRange, port model.Fact[int]) (reaches, wider bool) {
+	// The protocol decides first, because it decides without the port. A
+	// protocol with no ports cannot reach a port, whether this build knows the
+	// port or not -- so a rule admitting only ICMP reaches nothing a database
+	// listens on, exactly.
+	//
+	// Testing the port first returned on the unknown-port branch before this
+	// was reached, so a group admitting only ICMP in front of a database whose
+	// engine the table cannot name produced a BLOCK: a claim that is untrue, on
+	// evidence that is an approximation, which is what a BLOCK may not rest on.
+	var ported []model.OpenRange
+	for _, admitted := range open {
+		if admitted.Protocol.HasPorts() {
+			ported = append(ported, admitted)
+		}
+	}
+	if len(ported) == 0 {
+		return false, false
+	}
+
 	if !port.IsKnown() || port.Get() <= 0 {
 		// No port to compare against, or a value that is not a port -- zero is
-		// not one. Any range admitted at all is treated as reaching it.
-		return len(open) > 0, len(open) > 0
+		// not one. Every range that could carry the database's port is treated
+		// as reaching it, which over-reports and says so.
+		return true, true
 	}
 
 	wanted := model.PortRange{From: port.Get(), To: port.Get()}
-	for _, admitted := range open {
-		// A protocol with no ports cannot reach a port. The port is known here,
-		// which means it came from the engine table -- and every engine in that
-		// table speaks TCP, so a rule admitting ICMP from everywhere reaches
-		// nothing this database listens on. That is exact, not approximate.
-		//
-		// Reporting it as reaching produced a BLOCK whose claim was untrue and an
-		// unknown whose reason was untrue with it. The network family refuses to
-		// decide a port-less protocol for its own reasons; this one can decide
-		// it, because it knows the port.
-		if !admitted.Protocol.HasPorts() {
-			continue
-		}
+	for _, admitted := range ported {
 		if admitted.Ports.Contains(wanted) {
 			return true, false
 		}
 	}
+	// Ruled out by the port, which came from the engine rather than the plan.
+	// That is the silence the caller discloses.
 	return false, false
 }
 
@@ -374,4 +402,15 @@ func portInferred(resource model.NormalizedResource,
 		ResourceAddress: &address,
 		Evidence:        referencesOf(capabilities.Port),
 	}
+}
+
+// carriesPorts reports that a rule set admits anything on a protocol that has
+// ports, which is what makes a port comparison the thing that decided.
+func carriesPorts(open []model.OpenRange) bool {
+	for _, admitted := range open {
+		if admitted.Protocol.HasPorts() {
+			return true
+		}
+	}
+	return false
 }

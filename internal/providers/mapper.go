@@ -255,6 +255,16 @@ func withhold(resource *model.NormalizedResource, subject terraformplan.Resource
 	withheld []terraformplan.ResourceChange, cited map[string]terraformplan.ResourceChange,
 	mapper Mapper) {
 
+	// Object storage only, and that is a limitation rather than a decision: the
+	// network and database families do not participate in admissibility
+	// withholding, so their Withdrawn field is never set and the rules' branches
+	// for it are reachable only from a unit test.
+	//
+	// Wiring them would mean deciding, per family, which of its controls may be
+	// read from a data source and which may not -- the question Roles answers
+	// for storage. Neither milestone asked it, so neither answers it, and the
+	// honest thing is to say so here rather than leave a reader to infer from a
+	// guard that the other families were considered.
 	if resource.ObjectStorage == nil || resource.ReadOnly || len(withheld) == 0 {
 		return
 	}
@@ -529,7 +539,7 @@ func normalizeOne(change terraformplan.ResourceChange,
 		resource := mapper.Map(change, edges[change.Address], scope)
 		resource.Interpreted = true
 		resource.UnrecognizedAction = change.HasUnrecognizedAction()
-		if resource.ObjectStorage == nil && resource.Network == nil {
+		if resource.ObjectStorage == nil && resource.Network == nil && resource.Database == nil {
 			// A subject that reached no verdict of its own has deferred to
 			// something. An Azure account with a container in the plan is the
 			// case: the container carries the verdict and the account defers.

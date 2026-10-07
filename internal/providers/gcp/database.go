@@ -65,6 +65,7 @@ func (m Mapper) database(subject terraformplan.ResourceChange) model.NormalizedR
 		Cloud:       model.CloudGCP,
 		Family:      model.FamilyDatabase,
 		Destructive: subject.IsDestructive(),
+		Removed:     subject.IsDestructive() && !subject.IsReplace(),
 		Environment: declared.Environment(subject, attrLabels, model.CloudGCP),
 		Database:    &capabilities,
 	}
@@ -142,10 +143,21 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 		if wroteSettings(subject) && declared.Unwritten(subject, pathIPConfig) {
 			return model.Known(false, cited), nil
 		}
+		// The block is unreadable and the silence is not the author's. The
+		// reason says which cause it is, because they are different things to
+		// go and fix -- and because a `dynamic` block, measured, resolves to a
+		// readable list and records nothing in the configuration, so "written
+		// from something unresolvable" was a sentence about a shape no plan
+		// emits.
+		reason := "This instance takes its settings from somewhere this plan does not describe, so " +
+			"nothing here can show which addresses are authorized to reach it."
+		if !subject.Configured {
+			reason = "This plan does not record what was written for this instance, so nothing " +
+				"here can show which addresses are authorized to reach it."
+		}
 		return model.Unknown[bool](cited), []model.MissingControl{{
 			CheckID: checkIPConfigUnread,
-			Reason: "This instance's IP configuration is written from something the plan cannot " +
-				"resolve, so nothing here can show which addresses are authorized to reach it.",
+			Reason:  reason,
 			Sources: []model.Provenance{cited},
 			Cloud:   model.CloudGCP,
 		}}

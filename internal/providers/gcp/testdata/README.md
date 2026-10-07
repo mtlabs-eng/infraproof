@@ -41,4 +41,18 @@ refusal is covered where the table lives.
 | --- | --- |
 | `real-databases` | every shape of the conjunction, including the two unknowns that need opposite answers |
 | `real-databases-unreadable` | a version and an authorized address each written from something the plan cannot resolve |
-| `sql-block-written-unresolvable` | the block itself written from an unresolvable value, where its unknown is a gap and not a default |
+| `sql-cloned` | an instance created from a clone, which writes no `settings` and inherits the source's authorized networks |
+| `sql-destroyed` | a destroy-only change, where `after` is JSON null so `ipv4_enabled` is absent for a reason that is not a gap |
+| `sql-replaced` | a replacement, whose `after` is complete because the instance exists when the change is done |
+
+A fixture encoding the `ip_configuration` block as unknown **and** written was
+removed rather than kept as a guard. Measured against the provider, a
+`dynamic "ip_configuration"` records nothing in the configuration and resolves to
+a readable list, and the attribute form is refused outright -- so that shape is
+not one Terraform emits, and the identifier it covered is reached by the clone
+instead.
+
+`sql-destroyed` and `sql-replaced` are genuine `terraform show -json`: Terraform
+1.14.0, hashicorp/google v6, planned with `-refresh=false` against a hand-written
+state file so no cloud was contacted. The provider's `credentials` argument was a
+placeholder and was deleted from the plan afterwards.
