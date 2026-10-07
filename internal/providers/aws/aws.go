@@ -36,7 +36,8 @@ func (Mapper) Interprets(resourceType string) bool {
 	switch resourceType {
 	case typeBucket, typePublicAccessBlock, typeBucketPolicy,
 		typeBucketACL, typeOwnershipControls, typeAccountBlock,
-		typeSecurityGroup, typeIngressRule:
+		typeSecurityGroup, typeIngressRule,
+		typeDBInstance, typeRDSCluster, typeClusterInstance:
 		return true
 	}
 	return false
@@ -46,7 +47,14 @@ func (Mapper) Interprets(resourceType string) bool {
 // security group. Everything else this mapper interprets is a control over one of
 // them.
 func (Mapper) IsSubject(resourceType string) bool {
-	return resourceType == typeBucket || resourceType == typeSecurityGroup
+	switch resourceType {
+	case typeBucket, typeSecurityGroup, typeDBInstance, typeClusterInstance:
+		return true
+	}
+	// A cluster is interpreted and is not a subject: it carries no endpoint
+	// switch at all, so it cannot be reachable in its own right, and its meaning
+	// belongs to the instances that can.
+	return false
 }
 
 // FamilyOf names the family a resource type belongs to.
@@ -60,6 +68,8 @@ func (Mapper) FamilyOf(resourceType string) model.Family {
 	switch resourceType {
 	case typeSecurityGroup, typeIngressRule:
 		return model.FamilyNetwork
+	case typeDBInstance, typeRDSCluster, typeClusterInstance:
+		return model.FamilyDatabase
 	case typeBucket, typePublicAccessBlock, typeBucketPolicy,
 		typeBucketACL, typeOwnershipControls, typeAccountBlock:
 		return model.FamilyObjectStorage
@@ -126,6 +136,9 @@ const attrTags = "tags"
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	if subject.Type == typeSecurityGroup {
 		return m.securityGroup(subject, related)
+	}
+	if subject.Type == typeDBInstance || subject.Type == typeClusterInstance {
+		return m.database(subject, scope)
 	}
 
 	capabilities := model.ObjectStorageCapabilities{
@@ -693,8 +706,23 @@ func (Mapper) Bindings() []declared.Binding {
 	// it by is the provider's own: a rule written against a group the plan does
 	// not contain reaches nothing, which is the honest answer rather than a rule
 	// attached to whichever group happened to be nearby.
-	return append(relations, declared.Binding{
+	relations = append(relations, declared.Binding{
 		From: typeIngressRule, Attribute: "security_group_id", To: typeSecurityGroup})
+
+	// An Aurora instance names the cluster it belongs to, and the cluster is
+	// what carries the security groups -- the schema puts the endpoint switch on
+	// the instance and the allow list on the cluster. This is the edge that lets
+	// a cluster defer to the instances that answer for it.
+	//
+	// No binding is declared from a database to its security groups, and that is
+	// deliberate. An edge there would make a group's own verdict defer to the
+	// databases in front of it, so an Aurora cluster with no instance in the
+	// plan would read as answered-for by a judged security group when nothing
+	// answered. The database mapper reaches its groups through the references
+	// the configuration records, which exist whether or not a binding does, so
+	// the correlation is kept and the spurious deferral is not.
+	return append(relations, declared.Binding{
+		From: typeClusterInstance, Attribute: attrClusterIdentifier, To: typeRDSCluster})
 }
 
 // Environment reads a resource's declared environment with this provider's

@@ -130,3 +130,113 @@ func TestTheZeroCorrelationIsUndecidable(t *testing.T) {
 		t.Fatalf("the zero value is %v", state)
 	}
 }
+
+// A list-valued reference names several instances, and that is not an ambiguity.
+//
+// Target answers for an attribute holding one reference and calls two
+// undecidable, which is right for a network or a cluster: a conditional naming
+// both branches is a question the plan left open. It is wrong for
+// `vpc_security_group_ids`, where naming three groups is three correlations and
+// the database is gated by all of them.
+//
+// The distinction is the attribute's arity, which the caller knows and this
+// cannot, so it is two functions rather than one with a flag.
+func TestAListValuedAttributeNamesEveryInstanceItRefers(t *testing.T) {
+	group := func(target string, keys ...string) terraformplan.ExpressionReference {
+		return terraformplan.ExpressionReference{
+			Attribute: "vpc_security_group_ids", Target: target, TargetKeys: keys,
+		}
+	}
+	single := func(address string) terraformplan.ResourceChange {
+		return terraformplan.ResourceChange{Address: address, Type: "aws_security_group"}
+	}
+	repeated := func(address string) terraformplan.ResourceChange {
+		return terraformplan.ResourceChange{
+			Address: address, Type: "aws_security_group", DeclaredRepeated: true,
+		}
+	}
+
+	cases := map[string]struct {
+		references []terraformplan.ExpressionReference
+		scope      []terraformplan.ResourceChange
+		identities []string
+		state      declared.Correlation
+		why        string
+	}{
+		"one group": {
+			[]terraformplan.ExpressionReference{group("aws_security_group.db")},
+			[]terraformplan.ResourceChange{single("aws_security_group.db")},
+			[]string{"aws_security_group.db"}, declared.CorrelationNamed,
+			"the ordinary case"},
+		"three groups": {
+			[]terraformplan.ExpressionReference{
+				group("aws_security_group.a"), group("aws_security_group.b"), group("aws_security_group.c"),
+			},
+			[]terraformplan.ResourceChange{
+				single("aws_security_group.a"), single("aws_security_group.b"), single("aws_security_group.c"),
+			},
+			[]string{"aws_security_group.a", "aws_security_group.b", "aws_security_group.c"},
+			declared.CorrelationNamed,
+			"a list naming three groups is three correlations, not an ambiguity"},
+		"two instances of one repeated group": {
+			[]terraformplan.ExpressionReference{
+				group("aws_security_group.db", "a"), group("aws_security_group.db", "b"),
+			},
+			[]terraformplan.ResourceChange{
+				repeated(`aws_security_group.db["a"]`), repeated(`aws_security_group.db["b"]`),
+			},
+			[]string{`aws_security_group.db["a"]`, `aws_security_group.db["b"]`},
+			declared.CorrelationNamed,
+			"the keys say which instances, and both are named"},
+		"a reference naming no instance of a repeated group": {
+			[]terraformplan.ExpressionReference{group("aws_security_group.db")},
+			[]terraformplan.ResourceChange{
+				repeated("aws_security_group.db[0]"), repeated("aws_security_group.db[1]"),
+			},
+			nil, declared.CorrelationUndecidable,
+			"a splat over a repeated group reaches no one instance, so which gate applies is open"},
+		"no reference on that attribute": {
+			[]terraformplan.ExpressionReference{
+				{Attribute: "db_subnet_group_name", Target: "aws_db_subnet_group.main"},
+			},
+			[]terraformplan.ResourceChange{single("aws_security_group.db")},
+			nil, declared.CorrelationAbsent,
+			"the caller falls back to whatever it does for an unnamed allow list"},
+		"one decidable group beside one that is not": {
+			[]terraformplan.ExpressionReference{
+				group("aws_security_group.ok"), group("aws_security_group.db"),
+			},
+			[]terraformplan.ResourceChange{
+				single("aws_security_group.ok"),
+				repeated("aws_security_group.db[0]"), repeated("aws_security_group.db[1]"),
+			},
+			nil, declared.CorrelationUndecidable,
+			"one gate nobody can place leaves the set open; a partial allow list is not an allow list"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := terraformplan.ResourceChange{
+				Address: "aws_db_instance.main", References: c.references,
+			}
+			identities, state := declared.Targets(change, "vpc_security_group_ids",
+				"aws_security_group", c.scope)
+
+			if state != c.state {
+				t.Fatalf("state = %v, want %v: %s", state, c.state, c.why)
+			}
+			if state != declared.CorrelationNamed {
+				return
+			}
+			if len(identities) != len(c.identities) {
+				t.Fatalf("named %v, want %v: %s", identities, c.identities, c.why)
+			}
+			for i := range identities {
+				if identities[i] != c.identities[i] {
+					t.Fatalf("named %v, want %v (sorted, so a plan's key order cannot change a bundle)",
+						identities, c.identities)
+				}
+			}
+		})
+	}
+}

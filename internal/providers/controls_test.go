@@ -82,6 +82,14 @@ func TestEveryMissingControlAnUnsettledSetReportsIsAsserted(t *testing.T) {
 		// against anything.
 		{"gcp", "fw-unknown-network", "google_compute_firewall.web",
 			[]string{"GCP_FIREWALL_NETWORK_UNDETERMINED"}},
+
+		// The database family. Its allow list is another subject's verdict, so
+		// what it leaves unresolved is which subject, or that there is none this
+		// plan can name.
+		{"aws", "real-databases", "aws_db_instance.no_group",
+			[]string{"AWS_DATABASE_SECURITY_GROUPS_UNKNOWN"}},
+		{"aws", "real-databases", "aws_db_instance.unnameable_engine",
+			[]string{"AWS_DATABASE_ENGINE_UNREADABLE"}},
 	}
 
 	for _, c := range cases {
@@ -90,12 +98,13 @@ func TestEveryMissingControlAnUnsettledSetReportsIsAsserted(t *testing.T) {
 			if !ok {
 				t.Fatalf("fixture %s has no resource at %s", c.fixture, c.resource)
 			}
-			if found.Network == nil {
-				t.Fatal("the resource carries no network capabilities")
+			unresolved := unresolvedOf(found)
+			if unresolved == nil {
+				t.Fatalf("the resource carries no capabilities of any family")
 			}
 
-			reported := make([]string, 0, len(found.Network.Unresolved))
-			for _, control := range found.Network.Unresolved {
+			reported := make([]string, 0, len(unresolved))
+			for _, control := range unresolved {
 				if control.CheckID == "" || control.Reason == "" {
 					t.Fatalf("a missing control says nothing: %+v", control)
 				}
@@ -317,5 +326,25 @@ func TestATypeNoMapperInterpretsHasNoFamily(t *testing.T) {
 					mapper.Cloud(), resourceType, family)
 			}
 		}
+	}
+}
+
+// unresolvedOf returns the missing controls a resource reports, whichever family
+// it belongs to.
+//
+// The table above read Network directly, which was right while only the network
+// family reported controls and became a reason to skip a third family's
+// identifiers the moment one existed. Exactly one capability is set on a subject
+// this build understands, so there is nothing to choose between.
+func unresolvedOf(found model.NormalizedResource) []model.MissingControl {
+	switch {
+	case found.Network != nil:
+		return found.Network.Unresolved
+	case found.ObjectStorage != nil:
+		return found.ObjectStorage.Unresolved
+	case found.Database != nil:
+		return found.Database.Unresolved
+	default:
+		return nil
 	}
 }

@@ -1,6 +1,7 @@
 package declared
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
@@ -64,8 +65,7 @@ func Target(change terraformplan.ResourceChange, attribute, targetType string,
 		if reference.Attribute != attribute {
 			continue
 		}
-		if !strings.HasPrefix(reference.Target, targetType+".") &&
-			!strings.Contains(reference.Target, "."+targetType+".") {
+		if !namesType(reference.Target, targetType) {
 			// Another type on the same attribute answers a different question.
 			continue
 		}
@@ -97,6 +97,13 @@ func Target(change terraformplan.ResourceChange, attribute, targetType string,
 		return "", CorrelationUndecidable
 	}
 	return reference.Target, CorrelationNamed
+}
+
+// namesType reports that an address is of a resource type, at the root or inside
+// a module. Written once because Target and Targets must agree about it.
+func namesType(target, resourceType string) bool {
+	return strings.HasPrefix(target, resourceType+".") ||
+		strings.Contains(target, "."+resourceType+".")
 }
 
 // oneTarget reports that several references all name the same instance, which
@@ -137,4 +144,47 @@ func repeatedInPlan(target string, scope []terraformplan.ResourceChange) bool {
 		}
 	}
 	return false
+}
+
+// Targets names every resource instance a list-valued attribute refers to.
+//
+// Target's plural. The difference is the attribute's arity, which the caller
+// knows and this cannot: two references on `network` are a conditional the plan
+// left open, and two on `vpc_security_group_ids` are two security groups that
+// both gate the database. Reading a list through Target reported every database
+// with more than one group as undecidable.
+//
+// Undecidable if *any* reference cannot be placed, because a partial allow list
+// is not an allow list: a gate nobody can name could be the one that admits
+// everything, so the set stays open rather than being answered from the part of
+// it that was readable.
+//
+// Sorted, so a plan's reference order -- which is JSON order -- cannot change a
+// bundle.
+func Targets(change terraformplan.ResourceChange, attribute, targetType string,
+	scope []terraformplan.ResourceChange) ([]string, Correlation) {
+
+	var named []string
+	var found bool
+	for _, reference := range change.References {
+		if reference.Attribute != attribute || !namesType(reference.Target, targetType) {
+			continue
+		}
+		found = true
+		if len(reference.TargetKeys) > 0 {
+			named = append(named, keyed(reference.Target, reference.TargetKeys))
+			continue
+		}
+		if repeatedInPlan(reference.Target, scope) {
+			// A splat over a repeated target reaches no one instance.
+			return nil, CorrelationUndecidable
+		}
+		named = append(named, reference.Target)
+	}
+	if !found {
+		return nil, CorrelationAbsent
+	}
+
+	slices.Sort(named)
+	return slices.Compact(named), CorrelationNamed
 }
