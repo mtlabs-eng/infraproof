@@ -270,12 +270,60 @@ func statedArguments(fields map[string]any) []string {
 	if len(body) == 0 {
 		return nil
 	}
-	names := make([]string, 0, len(body))
-	for name := range body {
-		names = append(names, name)
+	names := map[string]bool{}
+	collectArguments("", body, names)
+	if len(names) == 0 {
+		return nil
 	}
-	slices.Sort(names)
-	return names
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// collectArguments records an argument's name and descends into nested blocks,
+// naming each by the path the configuration nests it at.
+//
+// An attribute inside a nested block has the same two meanings for an unknown
+// value as a top-level one: the author omitted it and a provider default
+// applies, or the author wrote it from something unresolvable and nothing does.
+// Cloud SQL puts the switch deciding whether a database has a public IP three
+// levels down, and recording only the top level made an instance that writes it
+// and one that does not identical -- which is the shape milestone 08's worst
+// defect had.
+//
+// The index is deliberately not part of the path. The configuration nests blocks
+// as arrays, and an argument written in the second `ingress` block is the same
+// argument as one written in the first; a caller asking whether the author wrote
+// it should not have to know how many blocks there were. The consequence is that
+// an argument written in *any* instance of a repeated block counts as written,
+// which is the conservative reading: it withholds a default rather than applying
+// one on the strength of a silence that was not total.
+func collectArguments(prefix string, body map[string]any, into map[string]bool) {
+	for name, entry := range body {
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		into[path] = true
+
+		elements, nested := entry.([]any)
+		if !nested {
+			continue
+		}
+		for _, element := range elements {
+			block, ok := element.(map[string]any)
+			if !ok {
+				// parseExpressions reports the malformed shape; naming the
+				// arguments of something that is not a block is not this
+				// function's to invent.
+				continue
+			}
+			collectArguments(path, block, into)
+		}
+	}
 }
 
 // parseExpressions reads every reference a resource's configuration makes:

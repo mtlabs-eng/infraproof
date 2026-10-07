@@ -51,10 +51,17 @@ three defects that came from reading docs instead of plans.
   `publicly_accessible` at all; `aws_rds_cluster_instance` does. An Aurora
   cluster is reachable through its instances, so the subject is the instance and
   a cluster with no instance in the plan settles nothing.
-- **GCP repeats milestone 08's worst trap.** An instance that writes no
-  `ip_configuration` emits the whole block as *unknown*, and Google's documented
-  default for `ipv4_enabled` is a public IP. `declared.Unwritten` is exactly the
-  question this needs, and it already exists.
+- **GCP repeats milestone 08's worst trap, one level deeper than the machinery
+  reached.** An instance that writes no `ip_configuration` emits the whole block
+  as *unknown*, and Google's documented default for `ipv4_enabled` is a public IP.
+  `declared.Unwritten` is the question this needs -- but the switch sits at
+  `settings.ip_configuration.ipv4_enabled`, three levels down, and `Stated`
+  recorded only top-level arguments. Measured on a real plan, an instance writing
+  no `ip_configuration` and one writing `ipv4_enabled` from an unresolvable value
+  produced the identical `[database_version name settings]`, so the default and
+  the gap were indistinguishable. `Stated` records nested arguments by their path
+  now; the configuration walker already built those paths for the references it
+  finds, so only the recording had stopped at the top.
 - **Azure's allow list is not CIDR.** A firewall rule is `start_ip_address` and
   `end_ip_address`, both Required. `0.0.0.0` to `255.255.255.255` is the whole
   internet, and the well-known `0.0.0.0`–`0.0.0.0` rule means "Azure services"
