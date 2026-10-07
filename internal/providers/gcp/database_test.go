@@ -508,3 +508,63 @@ func TestAnAuthorizedNetworkListThatIsNotAListIsNotAnEmptyList(t *testing.T) {
 			found.Database.AdmitsAnyAddress)
 	}
 }
+
+// TestTheTwoWaysAnAllowListCannotBeReadAreBothDefended covers this cloud's only
+// two "I could not read this" exits, neither of which had a test. Both fell
+// through to a determined false -- a proof that the instance admits nobody.
+//
+// Both shapes are from one real plan, hashicorp/google v6:
+//
+//   - `typo` writes `value = "0.0.0./0"`, which is a readable string and not a
+//     parseable prefix. `declared.SetReach` answers ReachUnreadable, and that is
+//     the only shape that reaches the arm. Measured: disabling the arm turned
+//     exit 4 into exit 0 with every unknown gone.
+//   - `setunknown` writes `authorized_networks` as a `dynamic` block over an
+//     unresolvable `for_each`, so the plan emits the whole set as unknown while
+//     `ip_configuration` stays readable and `ipv4_enabled` is a determined true.
+//     That is a different shape from the one the block-level guard covers, and
+//     the plan records it as `after_unknown…authorized_networks: true`.
+//
+// An address nobody could read could be every address, and a set nobody could
+// read could hold one.
+func TestTheTwoWaysAnAllowListCannotBeReadAreBothDefended(t *testing.T) {
+	cases := map[string]struct {
+		name, control, why string
+	}{
+		"an address that is not a prefix": {"typo", "GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE",
+			"the provider accepts it and this build cannot parse it"},
+		"a set the plan does not state": {"setunknown", "GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE",
+			"a dynamic block over an unresolvable for_each leaves the whole set unknown"},
+	}
+
+	for label, c := range cases {
+		t.Run(label, func(t *testing.T) {
+			found := instance(t, "sql-unreadable-and-unknown-networks", c.name)
+			if found.Database == nil {
+				t.Fatal("the mapper produced no database capabilities")
+			}
+			capabilities := *found.Database
+
+			if !capabilities.PublicEndpoint.IsKnown() || !capabilities.PublicEndpoint.Get() {
+				t.Fatalf("endpoint = %v, want a known true: the fixture exists to "+
+					"carry an unreadable allow list in front of a public IP",
+					capabilities.PublicEndpoint)
+			}
+			if capabilities.AdmitsAnyAddress.IsKnown() {
+				t.Fatalf("admits any address = %v, want undetermined: %s",
+					capabilities.AdmitsAnyAddress, c.why)
+			}
+
+			var said bool
+			for _, control := range capabilities.Unresolved {
+				if control.CheckID == c.control {
+					said = true
+				}
+			}
+			if !said {
+				t.Fatalf("the admission is undetermined and no %s names what would "+
+					"settle it", c.control)
+			}
+		})
+	}
+}

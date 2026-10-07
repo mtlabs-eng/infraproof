@@ -396,3 +396,52 @@ func TestASubjectCarryingItsOwnVerdictIsNotReadAsDeferring(t *testing.T) {
 		})
 	}
 }
+
+// TestEachMapperSaysWhereItsPortCameFrom is the other end of
+// model.DatabaseCapabilities.PortInferred, across all three clouds at once.
+//
+// One disclosure turns on it, and the rule cannot ask the question itself. A
+// mapper that forgets to set it claims its port is a fact from the plan, and the
+// disclosure then goes missing from the PASS it exists to annotate.
+//
+// Azure is the interesting one: it has no engine attribute at all, because the
+// engine *is* the resource type, so its port is read from the type with certainty
+// rather than from a table of defaults. That is not an inference and is the one
+// case here that answers false while reading no port from the plan.
+func TestEachMapperSaysWhereItsPortCameFrom(t *testing.T) {
+	cases := map[string]struct {
+		cloud, fixture, address string
+		inferred                bool
+		why                     string
+	}{
+		"AWS reads a stated port": {"aws", "rds-port-written", "aws_db_instance.offport",
+			false, "the plan states it, so the exclusion it makes is exact"},
+		"AWS falls back to the engine table": {"aws", "real-databases", "aws_db_instance.reachable",
+			true, "port is Optional and Computed and nobody wrote it, so the engine answers"},
+		"GCP reads the database version": {"gcp", "real-databases",
+			"google_sql_database_instance.reachable", true,
+			"Cloud SQL states a version and not a port, so the table answers"},
+		"Azure reads the resource type": {"azure", "sql-reachable", "azurerm_mssql_server.db",
+			false, "the engine is the type, so the port is certain rather than inferred"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			found, ok := normalizeFrom(t, c.cloud, c.fixture).At(c.address)
+			if !ok {
+				t.Fatalf("fixture %s has no resource at %s", c.fixture, c.address)
+			}
+			if found.Database == nil {
+				t.Fatalf("%s produced no database capabilities", c.address)
+			}
+			if !found.Database.Port.IsKnown() {
+				t.Fatalf("port is undetermined, and this case is about where a "+
+					"determined one came from: %s", c.why)
+			}
+			if found.Database.PortInferred != c.inferred {
+				t.Fatalf("PortInferred = %v, want %v: %s",
+					found.Database.PortInferred, c.inferred, c.why)
+			}
+		})
+	}
+}

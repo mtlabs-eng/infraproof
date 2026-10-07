@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers/azure"
 )
 
 // databaseAt returns the normalized database of a fixture.
@@ -456,5 +457,107 @@ func TestTheAzureServicesRuleJoinsTheUnionItBelongsTo(t *testing.T) {
 	if !disclosed {
 		t.Fatal("the sentinel joined the union but the reader is no longer told " +
 			"this build reads it as one address")
+	}
+}
+
+// TestAnUncorrelatedRuleIsNotCalledAbsent holds a requirement CLAUDE.md states
+// about every finding: it carries observed facts.
+//
+// When the correlator cannot place a rule -- a server under `count` named as
+// `db[count.index]`, so the reference names no instance -- the server's related
+// set is empty, and the reason said "none of them is in this plan" about a rule
+// the plan contains and that admits every address. The verdict was right, because
+// closure is never provable on this cloud, but the sentence explaining it was the
+// opposite of the fact.
+//
+// The two causes are different things to go and fix: a rule declared in another
+// module is somewhere else, and a rule the plan holds but nobody could attach is
+// right here and needs its instance named outright.
+func TestAnUncorrelatedRuleIsNotCalledAbsent(t *testing.T) {
+	const address = "azurerm_mssql_server.db[0]"
+
+	found := databaseAt(t, "sql-server-repeated", address)
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	if found.Database.AdmitsAnyAddress.IsKnown() {
+		t.Fatalf("admits any address = %v, want undetermined: a rule nobody could "+
+			"attach could be the one that admits everything",
+			found.Database.AdmitsAnyAddress)
+	}
+
+	var said string
+	for _, control := range found.Database.Unresolved {
+		if control.CheckID == "AZURE_DATABASE_FIREWALL_RULES_INCOMPLETE" {
+			said = control.Reason
+		}
+	}
+	if said == "" {
+		t.Fatal("the admission is undetermined and nothing names what would settle it")
+	}
+	if strings.Contains(said, "none of them is in") {
+		t.Fatalf("the reason says the plan holds no rule, and it holds one that "+
+			"admits every address: %q", said)
+	}
+	if !strings.Contains(said, "This plan holds a firewall rule") {
+		t.Fatalf("the reason does not say the rule is here and could not be "+
+			"attached, which is the thing to go and fix: %q", said)
+	}
+}
+
+// TestARuleBeingReplacedIsStillARule is the distinction `sql-rule-being-removed`
+// does not carry, and the one nothing defended.
+//
+// A rule being destroyed is skipped, because its addresses are absent from
+// `after` for a reason that is not unreadability and a plan closing a hole should
+// not report the hole as reopened. A rule being *replaced* is destroyed and
+// created, and what it creates is what the verdict is about -- its `after` is a
+// full object stating the addresses it will admit.
+//
+// Measured: dropping the replace half of that filter left the suite green and
+// turned a server whose firewall rule is being replaced onto `0.0.0.0` through
+// `255.255.255.255` from BLOCK into UNKNOWN. The rule the change is putting in
+// place admits the whole internet.
+func TestARuleBeingReplacedIsStillARule(t *testing.T) {
+	found := databaseAt(t, "sql-rule-being-replaced", "azurerm_mssql_server.db")
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	if !found.Database.AdmitsAnyAddress.IsKnown() || !found.Database.AdmitsAnyAddress.Get() {
+		t.Fatalf("admits any address = %v, want a known true: the rule being put "+
+			"in place spans the whole of IPv4", found.Database.AdmitsAnyAddress)
+	}
+}
+
+// TestAServerTypeThisBuildDoesNotNameHasNoPort guards the refusal portOf makes.
+//
+// The port comes from the resource type on this cloud, and the switch used to
+// answer the MSSQL port by default -- so a third server type added to Interprets
+// without touching portOf would have inherited 1433 in silence. A wrong port
+// makes a reachable database read as closed, which is the direction that hides a
+// grant. `ruleTypeFor` next door already refuses the same way.
+//
+// Unreachable through the registry today, because Interprets names two types and
+// portOf names the same two. The guard is for the next type, and this test is
+// what makes the two lists stay in step.
+func TestAServerTypeThisBuildDoesNotNameHasNoPort(t *testing.T) {
+	for _, serverType := range []string{"azurerm_mysql_flexible_server", "azurerm_mssql_managed_instance"} {
+		if (azure.Mapper{}).Interprets(serverType) {
+			t.Fatalf("%s is interpreted now, so portOf must name it and this test "+
+				"must take a type that is still outside the set", serverType)
+		}
+	}
+
+	found := databaseAt(t, "sql-reachable", "azurerm_mssql_server.db")
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	if !found.Database.Port.IsKnown() || found.Database.Port.Get() != 1433 {
+		t.Fatalf("port = %v, want 1433: a type this build does name reads its own "+
+			"port", found.Database.Port)
+	}
+	if found.Database.PortInferred {
+		t.Fatal("the engine is the resource type on this cloud, so the port is " +
+			"certain rather than read from a table of defaults")
 	}
 }

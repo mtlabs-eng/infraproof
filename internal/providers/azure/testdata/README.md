@@ -56,6 +56,8 @@ Verified against `terraform providers schema -json`:
 | `sql-server-destroyed` | a destroy-only change on the server itself, which permits nothing through it |
 | `sql-server-replaced` | a replacement of the server, whose reachability is still the verdict |
 | `sql-services-plus-rest` | the Azure-services sentinel beside `0.0.0.1`-`255.255.255.255`, which together are every IPv4 address |
+| `sql-rule-being-replaced` | a firewall rule being replaced onto the whole internet, which is not a rule being removed |
+| `sql-server-repeated` | a server under `count`, so the plan holds a rule that admits every address and that nothing could attach |
 
 `sql-server-destroyed` and `sql-server-replaced` are shaped like the rest of this
 cloud's fixtures, but the grammar they turn on is not guessed: `["delete"]` with
@@ -71,3 +73,10 @@ a shape no real plan carries. If that turns out to be so, the fixture defends a
 path nothing reaches and this build's `UNKNOWN` is over-reporting rather than
 hiding anything. Measuring it needs a tenant, which is the one thing this project
 will not acquire to answer a question.
+
+`sql-rule-being-replaced` and `sql-server-repeated` are derived from
+`sql-reachable` -- a rule's actions set to `["delete","create"]` with a full
+`after`, and a server split into two `count` instances. Both turn on Terraform
+core rather than provider behaviour: the actions grammar was measured on AWS and
+GCP, and a reference naming no instance is the correlator's own shape, pinned by
+tests in `internal/providers/declared`.

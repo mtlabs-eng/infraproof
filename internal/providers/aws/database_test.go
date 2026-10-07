@@ -684,3 +684,167 @@ func TestAChangeThatStatesNothingProvesNothingAboutTheEndpoint(t *testing.T) {
 			found.Database.PublicEndpoint)
 	}
 }
+
+// TestABoundOnTheAllowListIsNotReportedWhereItCannotMatter keeps a disclosure
+// from firing on every database in a plan.
+//
+// `AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL` says a group named by identifier
+// rather than by reference leaves nothing to correlate, so the list may be short.
+// It is the whole story for a database whose named groups are all closed. It is
+// noise on a database the plan proves has no endpoint outside the private
+// network, because what the allow list says cannot make that database reachable
+// -- which is the rule's own second arm.
+//
+// A disclosure that fires whatever the facts are tells a reader nothing about the
+// one case where it matters.
+func TestABoundOnTheAllowListIsNotReportedWhereItCannotMatter(t *testing.T) {
+	bound := func(address string) bool {
+		found := database(t, "real-databases", address)
+		if found.Database == nil {
+			t.Fatalf("%s produced no database capabilities", address)
+		}
+		for _, control := range found.Database.Unresolved {
+			if control.CheckID == "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if bound("aws_db_instance.private") {
+		t.Fatal("a database the plan proves has no public endpoint carries a bound " +
+			"on its allow list, which cannot change whether it is reachable")
+	}
+	if !bound("aws_db_instance.endpoint_closed_group") {
+		t.Fatal("a database with a public endpoint behind groups the plan can read " +
+			"carries no bound, so a reader is not told the list may be short")
+	}
+}
+
+// TestAClusterThePlanHoldsIsNotCalledAbsent is the other spelling of repetition,
+// and the one the fixture above does not carry.
+//
+// `rds-aurora-repeated` writes `aws_rds_cluster.each["eu"].id`, with the key as a
+// literal, so the configuration records an address `declared.Target` can place.
+// Writing `aws_rds_cluster.each[each.key].id` records a reference with no key at
+// all, which names no instance -- so the correlation is undecidable, which is the
+// right verdict, and the control said the cluster is "not part of this plan"
+// about a cluster the plan contains.
+//
+// CLAUDE.md requires a finding to carry observed facts, and the two causes are
+// different things to go and fix: a cluster in another module is somewhere else,
+// and a cluster right here that nobody could attach needs its instance named
+// outright. This is PRODUCT.md's documented repeated-resource limitation, and it
+// needs its own identifier rather than borrowing one that means something else.
+func TestAClusterThePlanHoldsIsNotCalledAbsent(t *testing.T) {
+	capabilities := database(t, "rds-aurora-keyed-expression",
+		`aws_rds_cluster_instance.each["eu"]`).Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	var said string
+	for _, control := range capabilities.Unresolved {
+		switch control.CheckID {
+		case "AWS_DATABASE_CLUSTER_NOT_IN_PLAN":
+			t.Errorf("the cluster is in the plan and is reported as absent: %q", control.Reason)
+		case "AWS_DATABASE_CLUSTER_NOT_CORRELATED":
+			said = control.Reason
+		}
+	}
+	if said == "" {
+		t.Fatal("the allow list is unreachable and nothing names what would settle it")
+	}
+	if !strings.Contains(said, "this plan holds") {
+		t.Fatalf("the reason does not say the cluster is here and could not be "+
+			"attached, which is the thing to go and fix: %q", said)
+	}
+}
+
+// TestAPortOutsideTheRangeIsNotAPort defends the bound the port reader claims to
+// apply, which nothing exercised.
+//
+// `lastPort` is there because a stated port outranks the engine table, so a
+// number the plan states is read in preference to a documented default -- and the
+// provider does not validate it at plan time. Measured on a real plan:
+// `port = 70000` arrives verbatim.
+//
+// Without the bound, 70000 became the database's port, no range in a group open
+// to the whole internet on tcp/0-65535 could hold it, and the finding vanished:
+// exit 3 became exit 2. Removing the bound left the whole suite green.
+func TestAPortOutsideTheRangeIsNotAPort(t *testing.T) {
+	capabilities := database(t, "rds-port-out-of-range", "aws_db_instance.outofrange").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if capabilities.Port.IsKnown() && capabilities.Port.Get() == 70000 {
+		t.Fatal("70000 was read as a port, so no rule set can hold it and a " +
+			"database open to the whole internet reports as unreachable")
+	}
+	if !capabilities.Port.IsKnown() || capabilities.Port.Get() != 5432 {
+		t.Fatalf("port = %v, want 5432: a stated number that is not a port is not "+
+			"a statement, so the engine table answers", capabilities.Port)
+	}
+}
+
+// TestAGroupNamedByAnExpressionThatPinsNoInstanceSettlesNothing reaches the one
+// allow-list arm no fixture did.
+//
+// `vpc_security_group_ids = [aws_security_group.each[each.key].id]` with the
+// group under `for_each` records a reference carrying no key, so it names no
+// instance and the correlation is undecidable. Measured on a real plan: the
+// configuration records `["aws_security_group.each", "each.key"]`.
+//
+// The arm is near-equivalent to silence on this cloud, because the mapper never
+// answers the admission itself and the verdict stays undetermined either way --
+// but replacing it with `return nil, nil` was green, and it deleted the only
+// sentence telling a reader why. PRODUCT.md records this as the repeated-resource
+// limitation, and the reason has to say the groups could not be pinned down
+// rather than that none was named: those are different things to go and fix.
+func TestAGroupNamedByAnExpressionThatPinsNoInstanceSettlesNothing(t *testing.T) {
+	// Two spellings, reaching two different arms, which is why both are here.
+	// `aws_security_group.each[each.key].id` records `each.key` as a reference,
+	// so the list draws on something the plan does not describe and the opaque
+	// guard answers. `values(aws_security_group.each)[*].id` records only
+	// `aws_security_group.each` -- a repeated type with no key at all, nothing
+	// opaque -- which is the only shape that reaches the undecidable arm.
+	for fixture, address := range map[string]string{
+		"rds-group-keyed-expression": `aws_db_instance.each["eu"]`,
+		"rds-group-splat":            `aws_db_instance.each["eu"]`,
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			assertNoGateIsPinned(t, fixture, address)
+		})
+	}
+}
+
+// assertNoGateIsPinned is the body both spellings share.
+func assertNoGateIsPinned(t *testing.T, fixture, address string) {
+	t.Helper()
+
+	capabilities := database(t, fixture, address).Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if len(capabilities.GatedBy) > 0 {
+		t.Fatalf("gated by %v: a reference naming no instance was resolved to one, "+
+			"and a deny on one instance would prove a grant on another closed",
+			capabilities.GatedBy)
+	}
+
+	var said string
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN" {
+			said = control.Reason
+		}
+	}
+	if said == "" {
+		t.Fatal("the allow list could not be pinned down and nothing says so")
+	}
+	if strings.Contains(said, "none was named") {
+		t.Fatalf("the reason says no group was named, and one was named in a way "+
+			"that pins no instance: %q", said)
+	}
+}

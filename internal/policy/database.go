@@ -102,12 +102,45 @@ func DatabaseExposure(contract intent.Contract, graph model.Graph) Result {
 			if how.restsOnInferredPort {
 				result.Unknowns = append(result.Unknowns, portInferred(resource, capabilities))
 			}
+		case capabilities.PublicEndpoint.IsKnown() && admits.IsKnown() && how.widerThanReality:
+			// Both halves are answered and one of them rests on not knowing the
+			// port: a gate open to every address on *some* ports, in front of a
+			// database whose port this build could not name. CLAUDE.md states
+			// without exception that a BLOCK must be supported by deterministic
+			// evidence and that insufficient evidence is UNKNOWN, and this
+			// rule's own comment says a BLOCK resting on an approximation is a
+			// BLOCK whose claim is wider than the evidence. It was raising one
+			// anyway, with an observed fact reading `KNOWN true` beside a
+			// non-required unknown admitting the answer is wider than reality.
+			//
+			// The milestone's decision to over-report rather than go silent
+			// stands; this is what the over-report is called. A required unknown
+			// stops a human just as a finding does, and does not assert a fact
+			// the build knows it cannot prove.
+			//
+			// A gate admitting every port is not this case: rangesReach reports
+			// it as determined, because what the database listens on cannot
+			// matter when everything is admitted.
+			result.Unknowns = append(result.Unknowns,
+				portUndetermined(resource, capabilities), undeterminedReachability(
+					resource, capabilities, admits, how, declared == intent.ExposurePrivate))
 		case capabilities.PublicEndpoint.IsKnown() && admits.IsKnown():
 			if declared != intent.ExposurePublic {
 				result.Findings = append(result.Findings,
 					reachableFinding(resource, capabilities, admits, declared))
 			}
-			if how.widerThanReality {
+			if len(capabilities.GatedBy) > 0 && !portUsable(capabilities.Port) {
+				// The verdict did not need the port -- a gate admitting every
+				// usable port reaches the database whatever it listens on -- and
+				// a reader is still told the port was not readable. The
+				// disclosure says what the evidence did not include; it is not a
+				// claim that the answer rests on it.
+				//
+				// Only where a gate was consulted. On a cloud where the mapper
+				// answers the admission from inside the subject, nothing
+				// compares a port, and saying the answer is wider than reality
+				// there was a sentence about an approximation that cloud never
+				// makes.
 				result.Unknowns = append(result.Unknowns, portUndetermined(resource, capabilities))
 			}
 		default:
@@ -198,7 +231,13 @@ func admitsAnyAddress(capabilities model.DatabaseCapabilities,
 		// the engine table did, and a protocol carrying no ports did not --
 		// that exclusion is exact, and reporting it as resting on the table is
 		// the inverse of the gap this disclosure was added to close.
-		if capabilities.Port.IsKnown() && carriesPorts(gate.Network.OpenToAnyAddress) {
+		if capabilities.PortInferred && capabilities.Port.IsKnown() &&
+			carriesPorts(gate.Network.OpenToAnyAddress) {
+			// Only a port that came from the table. A port the plan states rules
+			// a gate out exactly, and disclosing that as resting on a documented
+			// default said the opposite of the fact -- and left a reader unable
+			// to tell an exact silence from an inferred one, which is the only
+			// thing this disclosure is for.
 			how.restsOnInferredPort = true
 		}
 	}
@@ -262,7 +301,23 @@ func rangesReach(open []model.OpenRange, port model.Fact[int]) (reaches, wider b
 
 	if !port.IsKnown() || port.Get() <= 0 {
 		// No port to compare against, or a value that is not a port -- zero is
-		// not one. Every range that could carry the database's port is treated
+		// not one.
+		//
+		// A gate admitting every port a database could listen on reaches it
+		// whatever that port is, so the reachability is determined even though
+		// the port is not. Reporting that as an approximation would send a
+		// determined BLOCK to the caller as a required unknown.
+		//
+		// Every *usable* port, 1 through 65535, and not EveryPort's 0-65535:
+		// zero is not a port anything listens on, and a group written as
+		// `from_port = 1` admits everything a database could be on. Requiring
+		// zero made the most open rule set there is read as an approximation.
+		for _, admitted := range ported {
+			if admitted.Ports.Contains(model.PortRange{From: 1, To: 65535}) {
+				return true, false
+			}
+		}
+		// Otherwise every range that could carry the database's port is treated
 		// as reaching it, which over-reports and says so.
 		return true, true
 	}
@@ -423,4 +478,11 @@ func carriesPorts(open []model.OpenRange) bool {
 		}
 	}
 	return false
+}
+
+// portUsable reports that the port is a number this build can compare a rule set
+// against. Zero is not a port anything listens on, and an engine outside the
+// table leaves no number at all.
+func portUsable(port model.Fact[int]) bool {
+	return port.IsKnown() && port.Get() > 0
 }

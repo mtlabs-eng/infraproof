@@ -52,6 +52,10 @@ What was verified against the authoritative schema or a real plan:
 | `rds-destroyed` is not the only change that states nothing: | |
 | `rds-forgotten` | a `removed` block with `lifecycle { destroy = false }`, which Terraform emits as `actions: ["forget"]` with `after` null -- the database stays up, stays publicly accessible, and leaves Terraform's management |
 | `rds-delete-contradicted` | a plan claiming to delete while still stating a public endpoint, which is not a shape Terraform emits and is not one this build resolves in the permissive direction |
+| `rds-port-out-of-range` | `port = 70000`, which the provider accepts and no port is |
+| `rds-group-keyed-expression` | a group named `aws_security_group.each[each.key].id`, which records `each.key` and so draws on something the plan does not describe |
+| `rds-group-splat` | a group named `values(aws_security_group.each)[*].id`, which records a repeated type with no key and nothing opaque -- the only shape that reaches the undecidable arm |
+| `rds-aurora-keyed-expression` | an Aurora instance naming its cluster through `each.key`, beside one whose cluster is genuinely in another module |
 
 `rds-destroyed` and `rds-replaced` are genuine `terraform show -json`: Terraform
 1.14.0, hashicorp/aws v6, planned with `-refresh=false` against a hand-written
@@ -65,3 +69,11 @@ database's actions to `["delete"]` while leaving its `after` intact: Terraform
 does not emit that, and the fixture exists precisely because a plan is input and a
 plan whose action list contradicts its own state must not be read as the half that
 reports less.
+
+`rds-port-out-of-range`, `rds-group-keyed-expression`, `rds-group-splat` and
+`rds-aurora-keyed-expression` are genuine `terraform show -json`, planned the same
+way as the rest: Terraform 1.14.0, hashicorp/aws v6, `terraform plan` only,
+placeholder credentials, and the provider's credential arguments and the database
+password removed from the committed files. Each exists because a review found a
+decision nothing exercised, and each was generated rather than written so the
+shape it turns on is the provider's rather than this project's.

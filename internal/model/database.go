@@ -48,6 +48,26 @@ type DatabaseCapabilities struct {
 	// port, so any address admitted at all is reported as possibly reaching it --
 	// wider than reality, and recorded as such.
 	Port Fact[int]
+	// PortInferred reports that Port was read from a documented default rather
+	// than stated by the plan.
+	//
+	// It exists because one disclosure turns on it. A database that reads as
+	// unreachable *because* of its port carries DATABASE_PORT_INFERRED, so a
+	// reader of a PASS learns the verdict rests on a table this build keeps
+	// rather than on the change. When the plan states the port, the exclusion is
+	// exact and that sentence is untrue -- and raising it anyway cost the
+	// disclosure its meaning, because a reader could no longer tell the two
+	// cases apart.
+	//
+	// The rule cannot ask where the port came from itself: it names no cloud, no
+	// resource type and no attribute, and the answer lives in a provenance path.
+	// So the mapper that read the port says.
+	//
+	// False is the safe default here, unusually: it suppresses a disclosure
+	// rather than a verdict, and a mapper that does not set it is claiming its
+	// port is a fact from the plan -- which is what a mapper reading only the
+	// plan would be doing.
+	PortInferred bool
 	// Withdrawn reports that a determination was reached and then unset, because
 	// it rested on a source this build may not use. ObjectStorageCapabilities
 	// carries this for the same reason, and the reason is in its comment.

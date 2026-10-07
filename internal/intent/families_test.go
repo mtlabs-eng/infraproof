@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -257,20 +256,50 @@ func declaredFamilies(t *testing.T) map[string]string {
 // can ever read is a promise this build cannot keep, and it should fail at build
 // time.
 //
-// Read from the policy package's source, by the family constant each rule asks
-// the graph for. A rule that judges a family calls graph.OfFamily with it.
+// Read from the policy package by parsing it, not by searching its text. A rule
+// that judges a family calls graph.OfFamily with that family's constant, and a
+// call is a call: a review satisfied the earlier text search with a single
+// comment line --
+//
+//	// A note for a future milestone: a queue rule would call
+//	// graph.OfFamily(model.FamilyQueue) here.
+//
+// -- and the guard went green on a family nothing judged. The same review found
+// a strings.Replace(constant, "Family", "Family", 1) in the old version, which
+// looked like a translation between the two packages' spellings and was a no-op.
+// Both are gone. The check-identifier backstop in internal/providers was walked
+// into an AST for the same reason and after the same kind of review.
 func TestEveryKnownFamilyIsJudgedBySomeRule(t *testing.T) {
+	constants := declaredFamilies(t)
 	judged := map[string]bool{}
+
+	set := token.NewFileSet()
 	for _, path := range packageFiles(t, filepath.Join("..", "policy")) {
-		raw, err := os.ReadFile(path)
+		file, err := parser.ParseFile(set, path, nil, 0)
 		if err != nil {
-			t.Fatalf("reading %s: %v", path, err)
+			t.Fatalf("parsing %s: %v", path, err)
 		}
-		for constant, value := range declaredFamilies(t) {
-			if strings.Contains(string(raw), "OfFamily(model."+strings.Replace(constant, "Family", "Family", 1)+")") {
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			method, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || method.Sel.Name != "OfFamily" || len(call.Args) != 1 {
+				return true
+			}
+			argument, ok := call.Args[0].(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if pkg, ok := argument.X.(*ast.Ident); !ok || pkg.Name != "model" {
+				return true
+			}
+			if value, named := constants[argument.Sel.Name]; named {
 				judged[value] = true
 			}
-		}
+			return true
+		})
 	}
 	if len(judged) == 0 {
 		t.Fatal("no rule asks the graph for a family, so this guard reads nothing")

@@ -42,7 +42,13 @@ func reachable(endpoint, admits model.Fact[bool], port model.Fact[int],
 			PublicEndpoint:   endpoint,
 			AdmitsAnyAddress: admits,
 			Port:             port,
-			GatedBy:          gates,
+			// The helper stands for the AWS shape, where a determined port
+			// almost always came from the engine table: `port` is Optional and
+			// Computed, so it is unknown unless somebody wrote it. A test about
+			// a port the plan states sets this false and says so -- see
+			// TestTheInferredPortDisclosureIsNotMadeAboutAStatedPort.
+			PortInferred: true,
+			GatedBy:      gates,
 		},
 	}}}
 	graph.Resources = append(graph.Resources, gatedBy...)
@@ -293,6 +299,19 @@ func TestAGateTheGraphDoesNotHoldSettlesNothing(t *testing.T) {
 // address admitted at all is reported as possibly reaching the database. That
 // over-reports, which is the safe direction, and the approximation is recorded so
 // a reader is not told an exact thing.
+//
+// What the over-report is *called* changed. It used to be a finding, so a gate
+// open on 443 in front of a database whose engine the table cannot name produced
+// a BLOCK whose observed fact read `KNOWN true`. CLAUDE.md states without
+// exception that a BLOCK must be supported by deterministic evidence and that
+// insufficient evidence is UNKNOWN, and this rule's own comment says a BLOCK
+// resting on an approximation is one whose claim is wider than the evidence. It
+// is a required unknown now: still not silent, which is the whole of the
+// milestone's decision, and no longer asserting a fact the build cannot prove.
+//
+// See TestABlockNeverRestsOnAPortNobodyKnows for the boundary -- a gate admitting
+// every usable port is determined, because what the database listens on cannot
+// matter.
 func TestAnUndeterminedPortReportsWiderThanRealityAndSaysSo(t *testing.T) {
 	https := model.OpenRange{
 		Protocol: model.ProtocolTCP,
@@ -304,8 +323,17 @@ func TestAnUndeterminedPortReportsWiderThanRealityAndSaysSo(t *testing.T) {
 		reachable(known(true), unknownBool(), unknownPort(),
 			group("aws_security_group.web", known(true), https)))
 
-	if len(result.Findings) != 1 {
-		t.Fatalf("%d findings, want one: an unknown port cannot rule the group out", len(result.Findings))
+	if len(result.Findings) != 0 {
+		t.Fatalf("%d findings: an approximation is not a BLOCK", len(result.Findings))
+	}
+	var stopped bool
+	for _, unknown := range result.Unknowns {
+		if unknown.Required {
+			stopped = true
+		}
+	}
+	if !stopped {
+		t.Fatal("an unknown port ruled the group out in silence")
 	}
 	var said bool
 	for _, unknown := range result.Unknowns {
@@ -555,12 +583,24 @@ func TestAPortLessProtocolReachesNoPortWhateverThePortIs(t *testing.T) {
 	}
 
 	// And a readable port alongside it still reaches, or the ordering has turned
-	// every mixed rule set into a silence.
+	// every mixed rule set into a silence. Asserted as "not silent" rather than
+	// as a finding: this gate is open on one port and the database's port is
+	// unknown, so the reachability is an approximation and the rule reports it as
+	// a required unknown. What this test is about is the ordering -- that ICMP
+	// first does not swallow the TCP range -- and silence is the failure it
+	// guards against.
 	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
 		reachable(known(true), unknownBool(), unknownPort(),
 			group("aws_security_group.both", known(true), icmp, postgres)))
-	if len(result.Findings) != 1 {
-		t.Fatalf("%d findings, want one: a TCP range beside ICMP still reaches", len(result.Findings))
+	var reported bool
+	for _, unknown := range result.Unknowns {
+		if unknown.Required {
+			reported = true
+		}
+	}
+	if len(result.Findings) == 0 && !reported {
+		t.Fatal("a TCP range beside ICMP reached nothing at all, so the ordering " +
+			"has turned every mixed rule set into a silence")
 	}
 }
 
@@ -788,6 +828,190 @@ func TestAGateWhoseRangeSetIsPartialCannotProveItDoesNotReach(t *testing.T) {
 			if len(result.Findings) > 0 {
 				t.Fatalf("raised a finding on a gate that holds no database port: %v",
 					result.Findings[0].RuleID)
+			}
+		})
+	}
+}
+
+// TestTheDatabaseRuleRunsInTheEngine keeps the rule wired in, which the network
+// family has had since milestone 08 and this one did not.
+//
+// Every test in this file and in the cross-cloud one calls DatabaseExposure
+// directly. Measured: deleting the rule from Evaluate's list left the whole suite
+// green and turned a real plan's BLOCK into UNKNOWN with the finding gone. A rule
+// nobody calls is a rule whose tests pass and whose verdict never reaches a
+// reader.
+//
+// It also asserts the other end of the same wire: a bound the mapper attached to
+// its capabilities has to arrive in the bundle. Replacing that one append with a
+// discard was green too, and it deleted every cloud-specific disclosure from
+// every bundle -- including Azure's "closure is never provable here", which is
+// the only thing telling a reader that a clean Azure verdict is not a proof.
+func TestTheDatabaseRuleRunsInTheEngine(t *testing.T) {
+	graph := reachable(known(true), known(true), knownPort(5432))
+	graph.Resources[0].Database.Unresolved = []model.MissingControl{{
+		CheckID: "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL",
+		Reason:  "a bound the mapper attached, which a reader has to be given",
+		Cloud:   model.CloudAWS,
+	}}
+
+	bundle := policy.Evaluate(declaringExposure(intent.ExposurePrivate), graph,
+		policy.Subject{PlanFormatVersion: "1.2", PlanDigest: "sha256:" + strings.Repeat("0", 64)})
+
+	if bundle.Decision != evidence.DecisionBlock {
+		t.Fatalf("decision = %q, want BLOCK", bundle.Decision)
+	}
+	var judged bool
+	for _, finding := range bundle.Findings {
+		if finding.RuleID == policy.RuleDatabasePublicReachable {
+			judged = true
+		}
+	}
+	if !judged {
+		t.Fatalf("the engine produced no database finding: %+v", bundle.Findings)
+	}
+	var bounded bool
+	for _, unknown := range bundle.Unknowns {
+		if unknown.CheckID == "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL" {
+			bounded = true
+		}
+	}
+	if !bounded {
+		t.Fatal("the mapper's bound never reached the bundle, so a reader is not " +
+			"told how far the evidence goes")
+	}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("the bundle does not satisfy its own contract: %v", err)
+	}
+}
+
+// TestABlockNeverRestsOnAPortNobodyKnows holds a rule CLAUDE.md states without
+// exception: a BLOCK decision must be supported by deterministic evidence, and
+// where the evidence is insufficient the answer is UNKNOWN.
+//
+// The milestone decided that an undetermined port should over-report rather than
+// go silent, and that decision stands -- the question is what the over-report is
+// called. It was a BLOCK whose claim read "the change makes a database reachable
+// from any address" and whose observed fact read `state: KNOWN, value: true`,
+// beside a non-required unknown admitting the answer is wider than reality. The
+// rule's own comment says "a BLOCK resting on it is a BLOCK whose claim is wider
+// than the evidence".
+//
+// So an approximation is a required UNKNOWN: it still stops a human, which is the
+// safe direction the milestone wanted, and it does not assert a fact the build
+// knows it cannot prove.
+//
+// The exception is a gate that admits every port. Then the database's port does
+// not matter -- whatever it listens on is admitted -- so the reachability is
+// determined even though the port is not, and the finding is a finding.
+func TestABlockNeverRestsOnAPortNobodyKnows(t *testing.T) {
+	gate := func(ports model.PortRange) model.NormalizedResource {
+		return group("aws_security_group.db", known(true),
+			model.OpenRange{Protocol: model.ProtocolTCP, Ports: ports})
+	}
+
+	cases := map[string]struct {
+		ports   model.PortRange
+		finding bool
+		why     string
+	}{
+		"a gate open on one port": {model.PortRange{From: 443, To: 443}, false,
+			"whether 443 reaches the database depends on a port nobody stated"},
+		"a gate open on every port": {model.EveryPort(), true,
+			"every port is admitted, so what the database listens on cannot matter"},
+		// The boundary the exception is written at: every *usable* port, which
+		// is what a rule set written `from_port = 1` admits. Zero is not a port
+		// anything listens on, so requiring EveryPort's 0 would have made the
+		// most open rule set there is read as an approximation.
+		"a gate open on every usable port": {model.PortRange{From: 1, To: 65535}, true,
+			"1 through 65535 is everything a database could be on"},
+		// And the exception is not "the range starts at 1". A gate admitting
+		// only port 1 admits almost nothing, and a database on 5432 may or may
+		// not be behind it.
+		"a gate open on port one alone": {model.PortRange{From: 1, To: 1}, false,
+			"admitting port 1 says nothing about a database whose port is unknown"},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			graph := reachable(known(true), unknownBool(), unknownPort(), gate(want.ports))
+			result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate), graph)
+
+			var raised bool
+			for _, finding := range result.Findings {
+				if finding.RuleID == policy.RuleDatabasePublicReachable {
+					raised = true
+				}
+			}
+			if raised != want.finding {
+				t.Fatalf("finding = %v, want %v: %s", raised, want.finding, want.why)
+			}
+
+			var stopped bool
+			for _, unknown := range result.Unknowns {
+				if unknown.Required {
+					stopped = true
+				}
+			}
+			if !want.finding && !stopped {
+				t.Fatal("no finding and no required unknown, so an approximation " +
+					"that could be a reachable database reads as a clean verdict")
+			}
+		})
+	}
+}
+
+// TestTheInferredPortDisclosureIsNotMadeAboutAStatedPort keeps the one
+// disclosure guarding the permissive direction from firing on every silence.
+//
+// DATABASE_PORT_INFERRED tells a reader that a PASS rests on a documented
+// default: the gate is open to every address, the database's port is not in it,
+// and the port came from a table rather than from the plan. Its own reason says
+// "the plan does not state the port".
+//
+// It was raised on `Port.IsKnown()` alone, with no test of where the port came
+// from -- while the AWS mapper reads a stated `port` in preference to the table.
+// So a Postgres instance deliberately moved to 5433, behind a group open on 5432,
+// got the disclosure, which said the opposite of the fact and cited `port` as its
+// own evidence while denying the plan states it. Worse, a reader could no longer
+// tell "this silence rests on a table" from "this silence rests on the plan",
+// which is the whole purpose of the thing.
+func TestTheInferredPortDisclosureIsNotMadeAboutAStatedPort(t *testing.T) {
+	cases := map[string]struct {
+		inferred  bool
+		disclosed bool
+	}{
+		"a port the engine table named": {true, true},
+		"a port the plan stated":        {false, false},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			// Open to every address on 5432, database on 5433: ruled out by the
+			// port, and whether that is worth disclosing depends on where the
+			// port came from.
+			graph := reachable(known(true), unknownBool(), knownPort(5433),
+				group("aws_security_group.db", known(true), model.OpenRange{
+					Protocol: model.ProtocolTCP,
+					Ports:    model.PortRange{From: 5432, To: 5432},
+				}))
+			graph.Resources[0].Database.PortInferred = want.inferred
+
+			result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate), graph)
+
+			if len(result.Findings) != 0 {
+				t.Fatalf("%d findings: 5432 does not reach a database on 5433",
+					len(result.Findings))
+			}
+			var disclosed bool
+			for _, unknown := range result.Unknowns {
+				if unknown.CheckID == policy.CheckDatabasePortInferred {
+					disclosed = true
+				}
+			}
+			if disclosed != want.disclosed {
+				t.Fatalf("disclosed = %v, want %v: the disclosure is about a port "+
+					"the plan does not state", disclosed, want.disclosed)
 			}
 		})
 	}

@@ -46,6 +46,9 @@ func (m Mapper) database(subject terraformplan.ResourceChange) model.NormalizedR
 	capabilities := model.DatabaseCapabilities{
 		PublicEndpoint: publicEndpoint(subject, config),
 		Port:           listeningPort(subject),
+		// Cloud SQL states a version and never a port, so every determined port
+		// on this cloud came from the table.
+		PortInferred: true,
 	}
 	capabilities.AdmitsAnyAddress, capabilities.Unresolved = authorizedNetworks(subject, config)
 	if !capabilities.Port.IsKnown() {

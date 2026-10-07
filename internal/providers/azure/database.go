@@ -37,13 +37,13 @@ const (
 // A rule is a start and an end address rather than a prefix, which is the only
 // grammar this field has, so the arithmetic goes through declared.RangeReach.
 func (m Mapper) database(subject terraformplan.ResourceChange,
-	related []terraformplan.ResourceChange) model.NormalizedResource {
+	related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 
 	capabilities := model.DatabaseCapabilities{
 		PublicEndpoint: m.publicEndpoint(subject),
-		Port:           model.Known(portOf(subject.Type), portCitation(subject)),
+		Port:           listeningPort(subject),
 	}
-	capabilities.AdmitsAnyAddress, capabilities.Unresolved = m.allowList(subject, related)
+	capabilities.AdmitsAnyAddress, capabilities.Unresolved = m.allowList(subject, related, scope)
 	if !capabilities.PublicEndpoint.IsKnown() {
 		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
 			CheckID: checkEndpointUnknown,
@@ -96,7 +96,7 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 // plan holding none of them holds none of the set, and one that admits everything
 // settles the question whatever else is missing.
 func (m Mapper) allowList(subject terraformplan.ResourceChange,
-	related []terraformplan.ResourceChange) (model.Fact[bool], []model.MissingControl) {
+	related, scope []terraformplan.ResourceChange) (model.Fact[bool], []model.MissingControl) {
 
 	var cited []model.Provenance
 	var unread []model.MissingControl
@@ -193,8 +193,23 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	reason := "This server's firewall rules are separate resources, so a rule declared outside " +
 		"this plan could admit every address and nothing here can show that none does."
 	if rules == 0 {
+		// Two causes, and they are different things to go and fix. A rule
+		// declared in another module is somewhere else. A rule this plan holds
+		// that nobody could attach -- a server under count or for_each, named by
+		// an expression that resolves to no instance -- is right here, and what
+		// settles it is naming the instance outright.
+		//
+		// Saying the first about the second stated the opposite of the fact, on
+		// a plan whose uncorrelated rule admitted every address. CLAUDE.md
+		// requires a finding to carry observed facts.
 		reason = "This server's firewall rules are separate resources and none of them is in " +
 			"this plan, so nothing here can show that no rule admits every address."
+		if uncorrelated(subject, scope) {
+			reason = "This plan holds a firewall rule of this server's type that could not be " +
+				"attached to any server in it, so nothing here can show that no rule admits " +
+				"every address. Naming the server instance outright, rather than through an " +
+				"expression, is what would settle it."
+		}
 	}
 	return model.Unknown[bool](cited...), append(unread, model.MissingControl{
 		CheckID: checkRulesIncomplete,
@@ -239,12 +254,20 @@ func ruleTypeFor(serverType string) string {
 // This cloud has no engine attribute: the engine is the resource type, which is
 // readable with certainty rather than inferred from a value. AWS and GCP both
 // write an engine and need a table; here the type is the table.
+// A type this build does not name answers zero, which the caller reports as an
+// undetermined port. The default used to be the MSSQL port, so a third server
+// type added to Interprets without touching this function would have inherited
+// 1433 in silence -- and a wrong port makes a reachable database read as closed,
+// which is the direction that hides a grant. ruleTypeFor next door already
+// refuses the same way.
 func portOf(serverType string) int {
 	switch serverType {
 	case typePostgresServer:
 		return portPostgres
-	default:
+	case typeSQLServer:
 		return portSQLServer
+	default:
+		return 0
 	}
 }
 
@@ -256,4 +279,45 @@ func portCitation(subject terraformplan.ResourceChange) model.Provenance {
 		AttributePath:   "type",
 		Cloud:           model.CloudAzure,
 	}
+}
+
+// uncorrelated reports that the plan holds a firewall rule of the subject's own
+// type that reached no server's related set.
+//
+// It separates a rule declared somewhere else from one declared right here that
+// the correlator could not place, which is what a reader needs in order to know
+// where to go. The count is deliberately crude: any rule of the type, anywhere in
+// the plan, while this server was handed none. A rule correlated to a *different*
+// server would also match, which over-states the problem rather than under-stating
+// it -- and a reader sent to look at a rule that turns out to belong elsewhere has
+// lost a minute, where a reader told the plan is empty has been told something
+// untrue.
+func uncorrelated(subject terraformplan.ResourceChange,
+	scope []terraformplan.ResourceChange) bool {
+
+	for _, candidate := range scope {
+		if candidate.Type != ruleTypeFor(subject.Type) {
+			continue
+		}
+		if slices.Contains(candidate.Actions, terraformplan.ActionDelete) && !candidate.IsReplace() {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// listeningPort reads the port from the resource type, because on this cloud the
+// engine *is* the type: there is no engine attribute and no `port` attribute
+// either, so the port is certain rather than inferred from a table of defaults.
+// That is why PortInferred stays false here.
+//
+// A type portOf does not name leaves the port undetermined rather than taking
+// another type's, which the rule then reports as an approximation.
+func listeningPort(subject terraformplan.ResourceChange) model.Fact[int] {
+	port := portOf(subject.Type)
+	if port == 0 {
+		return model.Unknown[int](portCitation(subject))
+	}
+	return model.Known(port, portCitation(subject))
 }

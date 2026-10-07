@@ -23,6 +23,7 @@ const (
 	checkDatabaseGroupsUnknown = "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN"
 	checkDatabaseEngineUnknown = "AWS_DATABASE_ENGINE_UNREADABLE"
 	checkClusterNotInPlan      = "AWS_DATABASE_CLUSTER_NOT_IN_PLAN"
+	checkClusterNotCorrelated  = "AWS_DATABASE_CLUSTER_NOT_CORRELATED"
 	checkAllowListMayBePartial = "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL"
 )
 
@@ -41,11 +42,23 @@ const (
 func (m Mapper) database(subject terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange) model.NormalizedResource {
 
+	port, inferred := m.listeningPort(subject, scope)
 	capabilities := model.DatabaseCapabilities{
 		PublicEndpoint: m.publicEndpoint(subject),
-		Port:           m.listeningPort(subject, scope),
+		Port:           port,
+		PortInferred:   inferred,
 	}
 	capabilities.GatedBy, capabilities.Unresolved = m.allowList(subject, scope)
+	if capabilities.PublicEndpoint.IsKnown() && !capabilities.PublicEndpoint.Get() {
+		// The plan proves this database has no endpoint outside the private
+		// network, which is the rule's own second arm: what the allow list says
+		// cannot make it reachable. Bounds on the allow list are the whole story
+		// for a database with a public endpoint behind groups that read as
+		// closed, and noise on one that can never be reached -- and a disclosure
+		// firing on every database in a plan tells a reader nothing about the
+		// one where it matters.
+		capabilities.Unresolved = nil
+	}
 	if !capabilities.Port.IsKnown() {
 		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
 			CheckID: checkDatabaseEngineUnknown,
@@ -137,14 +150,34 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	if subject.Type == typeClusterInstance {
 		cluster, found := m.clusterOf(subject, scope)
 		if !found {
-			return nil, []model.MissingControl{{
+			// Two causes, and a reader needs to know which. A cluster declared
+			// in another module is somewhere else and this plan cannot see its
+			// groups. A cluster this plan holds that nobody could attach --
+			// `aws_rds_cluster.each[each.key].id`, where the reference carries no
+			// key and so names no instance -- is right here, and naming the
+			// instance outright is what settles it.
+			//
+			// Saying the first about the second stated the opposite of the fact.
+			// CLAUDE.md requires a finding to carry observed facts, and this is
+			// PRODUCT.md's documented repeated-resource limitation rather than an
+			// absent cluster, so it gets its own identifier instead of borrowing
+			// one that means something else.
+			control := model.MissingControl{
 				CheckID: checkClusterNotInPlan,
 				Reason: "This database instance belongs to a cluster that is not part of this plan, " +
 					"and the cluster is what names the security groups that decide who may reach it.",
 				Sources: []model.Provenance{declared.Source(model.CloudAWS, subject.Address,
 					attrClusterIdentifier, subject.After.Field(attrClusterIdentifier))},
 				Cloud: model.CloudAWS,
-			}}
+			}
+			if clusterUncorrelated(subject, scope) {
+				control.CheckID = checkClusterNotCorrelated
+				control.Reason = "This database instance names its cluster through an expression " +
+					"that resolves to no instance, and this plan holds clusters it could belong " +
+					"to. The cluster is what names the security groups that decide who may reach " +
+					"this database, so naming the cluster instance outright is what would settle it."
+			}
+			return nil, []model.MissingControl{control}
 		}
 		holder = cluster
 	}
@@ -271,7 +304,7 @@ func (Mapper) clusterOf(subject terraformplan.ResourceChange,
 // engine is the only readable source. An Aurora instance takes its engine from
 // its cluster, which is the same two hops the allow list takes.
 func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
-	scope []terraformplan.ResourceChange) model.Fact[int] {
+	scope []terraformplan.ResourceChange) (model.Fact[int], bool) {
 
 	// The plan's own port first, because it is the plan. `port` is Optional and
 	// Computed, so it is unknown when nobody writes it -- the common case, and
@@ -284,7 +317,7 @@ func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 		stated.Kind() == terraformplan.KindNumber {
 		if value, err := stated.Number().Int64(); err == nil && value > 0 && value <= lastPort {
 			return model.Known(int(value),
-				declared.Source(model.CloudAWS, subject.Address, attrPort, stated))
+				declared.Source(model.CloudAWS, subject.Address, attrPort, stated)), false
 		}
 	}
 
@@ -299,11 +332,39 @@ func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	cited := declared.Source(model.CloudAWS, holder.Address, attrEngine, engine)
 
 	if engine.Kind() != terraformplan.KindString {
-		return model.Unknown[int](cited)
+		return model.Unknown[int](cited), true
 	}
 	port, named := declared.DatabasePort(engine.Text())
 	if !named {
-		return model.Unknown[int](cited)
+		return model.Unknown[int](cited), true
 	}
-	return model.Known(port, cited)
+	return model.Known(port, cited), true
+}
+
+// clusterUncorrelated reports that the plan holds an Aurora cluster the subject
+// could belong to, while the subject's own reference named none of them.
+//
+// It separates a cluster declared somewhere else from one declared right here
+// that the correlator could not place. The count is deliberately crude: any
+// cluster anywhere in the plan, while this instance reached none. A cluster
+// belonging to a different instance would also match, which over-states the
+// problem rather than under-stating it -- and a reader sent to look at a cluster
+// that turns out to be another one has lost a minute, where a reader told the
+// plan is empty has been told something untrue.
+func clusterUncorrelated(subject terraformplan.ResourceChange,
+	scope []terraformplan.ResourceChange) bool {
+
+	if !subject.After.Field(attrClusterIdentifier).Sensitive() &&
+		subject.After.Field(attrClusterIdentifier).Kind() == terraformplan.KindString {
+		// The identifier is a readable literal, so nothing was interpolated and
+		// a cluster this plan held would have been found by name. Whatever it
+		// names is genuinely not here.
+		return false
+	}
+	for _, candidate := range scope {
+		if candidate.Type == typeRDSCluster {
+			return true
+		}
+	}
+	return false
 }

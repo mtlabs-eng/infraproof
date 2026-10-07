@@ -45,6 +45,7 @@ refusal is covered where the table lives.
 | `sql-destroyed` | a destroy-only change, where `after` is JSON null so `ipv4_enabled` is absent for a reason that is not a gap |
 | `sql-replaced` | a replacement, whose `after` is complete because the instance exists when the change is done |
 | `sql-dynamic-unresolvable` | a `dynamic "ip_configuration"` whose `for_each` nobody can resolve, which the plan records identically to an instance writing no `ip_configuration` at all |
+| `sql-unreadable-and-unknown-networks` | the two ways an allow list cannot be read: an address the provider accepts and this build cannot parse, and a `dynamic "authorized_networks"` leaving the whole set unknown while the block stays readable |
 
 A fixture encoding the `ip_configuration` block as unknown **and** written was
 removed rather than kept as a guard. Measured against the provider, a
@@ -65,3 +66,10 @@ Measured against a real plan of an instance writing `settings` with no
 `configuration` -- the plan records nothing about a `dynamic` block, not even its
 `for_each` reference -- and one of them admits every address. So this build no
 longer proves an empty allow list from the block's absence.
+
+`sql-unreadable-and-unknown-networks` is genuine `terraform show -json`. Both
+shapes in it were measured rather than imagined: the provider accepts
+`value = "0.0.0./0"` and the plan carries it verbatim as a readable string, and a
+`dynamic "authorized_networks"` over an unresolvable `for_each` emits
+`after_unknown…authorized_networks: true` while `ip_configuration` itself stays
+readable -- which is a different shape from the block being unknown.

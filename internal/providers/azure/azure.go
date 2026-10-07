@@ -106,7 +106,7 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 		return m.securityGroup(subject, related)
 	}
 	if subject.Type == typeSQLServer || subject.Type == typePostgresServer {
-		return m.database(subject, related)
+		return m.database(subject, related, scope)
 	}
 
 	resource := model.NormalizedResource{
