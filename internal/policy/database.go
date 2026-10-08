@@ -125,10 +125,13 @@ func DatabaseExposure(contract intent.Contract, graph model.Graph) Result {
 				portUndetermined(resource, capabilities), undeterminedReachability(
 					resource, capabilities, admits, how, declared == intent.ExposurePrivate))
 		case capabilities.PublicEndpoint.IsKnown() && admits.IsKnown():
-			if declared != intent.ExposurePublic {
-				result.Findings = append(result.Findings,
-					reachableFinding(resource, capabilities, admits, declared))
-			}
+			// Reported whatever was declared, for the reason StorageExposure
+			// states: an entry constrains every resource of its family and the
+			// contract cannot scope one, so skipping the finding let a
+			// declaration written for an intentionally public replica silence an
+			// accidentally public database beside it.
+			result.Findings = append(result.Findings,
+				reachableFinding(resource, capabilities, admits, declared))
 			if len(capabilities.GatedBy) > 0 && !portUsable(capabilities.Port) {
 				// The verdict did not need the port -- a gate admitting every
 				// usable port reaches the database whatever it listens on -- and
@@ -353,6 +356,14 @@ func referencesTo(gate model.NormalizedResource) []model.Provenance {
 // already uses. Public object storage is CRITICAL because it exposes the data
 // itself to anyone. Severity communicates impact and may not depend on what
 // anyone wrote down.
+//
+// Disposition does depend on it, in three steps rather than two. Private is a
+// BLOCK. Nothing declared is a WARN, because "I have not decided" is not "go
+// ahead". Public is INFO, which affects no decision -- the author asked for this
+// -- and exists because a declaration covers every database in the plan and the
+// contract cannot scope one. Skipping the finding there let an entry written for
+// an intentionally public replica silence an accidentally public database beside
+// it, which is criterion 9 of this milestone read the way it was written.
 func reachableFinding(resource model.NormalizedResource, capabilities model.DatabaseCapabilities,
 	admits model.Fact[bool], declared intent.Exposure) evidence.Finding {
 
@@ -361,12 +372,20 @@ func reachableFinding(resource model.NormalizedResource, capabilities model.Data
 		"not declare that exposure."
 	remediation := "Declare the exposure in the intent contract, or close the public endpoint or the " +
 		"rule that admits every address."
-	if declared == intent.ExposurePrivate {
+	switch declared {
+	case intent.ExposurePrivate:
 		disposition = evidence.DispositionBlock
 		claim = "The change makes a database reachable from any address, which the intent contract " +
 			"requires to be private."
 		remediation = "Close the public endpoint or the rule that admits every address, or record the " +
 			"exposure as intended in the intent contract."
+	case intent.ExposurePublic:
+		disposition = evidence.DispositionInfo
+		claim = "The change makes a database reachable from any address, which the intent contract " +
+			"declares as intended."
+		remediation = "None required. The declaration covers every database in the plan, so check " +
+			"that reachability is intended for this one and not only for the database the " +
+			"declaration was written for."
 	}
 
 	return evidence.Finding{

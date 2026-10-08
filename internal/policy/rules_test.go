@@ -333,8 +333,24 @@ func TestPublicIntentAcceptsPublicStorage(t *testing.T) {
 		c.Resources = []intent.ResourceIntent{{Family: "object_storage", Exposure: intent.ExposurePublic}}
 	}), graph)
 
-	if len(findingsFor(result, policy.RuleStoragePublic)) != 0 {
-		t.Fatalf("findings = %v; declared public exposure is not a violation", result.Findings)
+	// Reported, and at INFO, which by construction affects no decision -- so
+	// declared public exposure is still not a violation, which is what this test
+	// is named for. It used to assert the finding away entirely, and a review
+	// found what that costs: an entry constrains every resource of its family,
+	// so a declaration written for one intentionally public bucket silenced every
+	// accidentally public one beside it.
+	found := findingsFor(result, policy.RuleStoragePublic)
+	if len(found) != 1 {
+		t.Fatalf("%d findings, want one at INFO: the declaration changes the "+
+			"disposition and not whether the change is reported", len(found))
+	}
+	if found[0].Disposition != evidence.DispositionInfo {
+		t.Fatalf("disposition = %q, want INFO: the author asked for this",
+			found[0].Disposition)
+	}
+	if result.Findings[0].Severity != evidence.SeverityCritical {
+		t.Fatalf("severity = %q, want CRITICAL: impact does not depend on the contract",
+			result.Findings[0].Severity)
 	}
 }
 
@@ -973,5 +989,66 @@ func TestAContractValueCannotBreakTheBundleItIsComparedWith(t *testing.T) {
 	})
 	if err := bundle.Validate(); err != nil {
 		t.Errorf("a loadable contract produced a bundle the renderer refuses: %v", err)
+	}
+}
+
+// TestDeclaredPublicExposureChangesTheDispositionAndNotTheFinding is the claim
+// milestone 09's criterion 9 makes and that no family kept.
+//
+// `exposure: public` skipped the finding entirely, so a plan with two publicly
+// readable buckets -- one intentional and one not -- produced exit 0 with nothing
+// in the bundle saying either is open. A resource entry constrains every resource
+// of its family in the plan and the contract cannot scope one, so the declaration
+// written for the intentional bucket silences the accidental one. A review found
+// it on the database family; the behaviour was inherited from this one.
+//
+// The finding stays and the disposition becomes INFO, which by construction does
+// not affect the decision: exit 0 is still exit 0 for an author who said public,
+// and a reader of that bundle can now see what "public" turned out to cover.
+// Severity is unchanged, because severity communicates impact and may not depend
+// on the contract -- which is the rule this family has stated since milestone 03.
+//
+// Fixed in both families, on the user's decision, rather than in the active
+// milestone's one. A round-1 finding on that branch was that the two families had
+// diverged on how a declaration is read; diverging again on the same field would
+// have been the same mistake twice.
+func TestDeclaredPublicExposureChangesTheDispositionAndNotTheFinding(t *testing.T) {
+	graph := model.Graph{Resources: []model.NormalizedResource{
+		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
+			ObjectStorage: &model.ObjectStorageCapabilities{
+				PublicAccess: model.Known(true,
+					model.Provenance{ResourceAddress: "aws_s3_bucket_acl.b", AttributePath: "acl"})}},
+	}}
+
+	cases := map[string]struct {
+		exposure    intent.Exposure
+		disposition evidence.Disposition
+	}{
+		"declared private":     {intent.ExposurePrivate, evidence.DispositionBlock},
+		"declared unspecified": {intent.ExposureUnspecified, evidence.DispositionWarn},
+		"declared public":      {intent.ExposurePublic, evidence.DispositionInfo},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			declaring := contract(func(c *intent.Contract) {
+				c.Resources = []intent.ResourceIntent{
+					{Family: "object_storage", Exposure: want.exposure},
+				}
+			})
+
+			found := findingsFor(policy.StorageExposure(declaring, graph), policy.RuleStoragePublic)
+			if len(found) != 1 {
+				t.Fatalf("%d findings, want one: the declaration changes the "+
+					"disposition and not whether the change is reported", len(found))
+			}
+			if found[0].Disposition != want.disposition {
+				t.Fatalf("disposition = %q, want %q", found[0].Disposition, want.disposition)
+			}
+			if found[0].Severity != evidence.SeverityCritical {
+				t.Fatalf("severity = %q, want CRITICAL: severity is about impact and "+
+					"may not depend on what the contract said", found[0].Severity)
+			}
+		})
 	}
 }

@@ -813,9 +813,22 @@ func TestOneRuleCoversThreeCloudsForDatabases(t *testing.T) {
 			if len(blocked.Findings) == 0 {
 				t.Fatalf("%s: the private contract produced no finding", cloud)
 			}
-			if len(allowed.Findings) != 0 {
-				t.Errorf("%s: declaring the exposure public still produced %d findings",
-					cloud, len(allowed.Findings))
+			// Reported, at a disposition that affects no decision. This
+			// asserted zero findings, which is the milestone's criterion 9 read
+			// backwards: the declaration changes the disposition and not whether
+			// the change is reported. A declaration covers every database in the
+			// plan and cannot be scoped, so an entry written for one
+			// intentionally public database silenced the rest.
+			if len(allowed.Findings) != len(blocked.Findings) {
+				t.Errorf("%s: declaring the exposure public changed the findings "+
+					"from %d to %d, and it may change only their disposition",
+					cloud, len(blocked.Findings), len(allowed.Findings))
+			}
+			for _, finding := range allowed.Findings {
+				if finding.Disposition != evidence.DispositionInfo {
+					t.Errorf("%s: disposition = %q under a public declaration, want INFO",
+						cloud, finding.Disposition)
+				}
 			}
 			for _, finding := range blocked.Findings {
 				if finding.Severity != evidence.SeverityHigh {

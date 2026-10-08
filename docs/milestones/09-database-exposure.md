@@ -189,7 +189,11 @@ choice most likely to be wrong in practice.
    arithmetic `declared.SetReach` already uses.
 8. An Aurora cluster whose instances are not in the plan settles nothing, and
    says so.
-9. The declared exposure changes the disposition and not the finding.
+9. The declared exposure changes the disposition and not the finding. (Held as
+   written only after review round 3: `exposure: public` had been skipping the
+   finding entirely in this family and in object storage, so one declaration
+   written for an intentionally public resource silenced every accidental one
+   beside it. Both families report it at `INFO` now, which affects no decision.)
 10. Object-storage and network verdicts are unchanged: every committed fixture
     produces the bundle it produced before this milestone, proven by comparing
     binaries built at both ends.

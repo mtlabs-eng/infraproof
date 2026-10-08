@@ -181,6 +181,19 @@ func TestAHalfThePlanDoesNotHoldIsUnknownAndSaysWhichHalf(t *testing.T) {
 // TestTheDeclaredExposureChangesTheDispositionAndNotTheFinding is the milestone's
 // criterion 9, and the doctrine severity follows: impact does not depend on what
 // anyone wrote down.
+//
+// This test used to assert the opposite of its own name for one case: `public`
+// declared produced zero findings. A review found what that costs. A contract
+// entry constrains every resource of its family in the plan and the contract
+// cannot scope one, so a declaration written for an intentionally public
+// reporting replica silenced an accidentally public customer database beside it
+// -- two reachable databases, exit 0, nothing in the bundle naming either.
+//
+// INFO affects no decision, so an author who declared public still gets exit 0.
+// What changes is that the bundle says which databases that one declaration
+// turned out to cover. The storage family took the same correction in the same
+// commit, because a round-1 finding on this branch was that the two had diverged
+// on how a declaration is read.
 func TestTheDeclaredExposureChangesTheDispositionAndNotTheFinding(t *testing.T) {
 	cases := map[string]struct {
 		declared    intent.Exposure
@@ -190,7 +203,7 @@ func TestTheDeclaredExposureChangesTheDispositionAndNotTheFinding(t *testing.T) 
 		"private declared":     {intent.ExposurePrivate, 1, evidence.DispositionBlock},
 		"unspecified declared": {intent.ExposureUnspecified, 1, evidence.DispositionWarn},
 		"nothing declared":     {"", 1, evidence.DispositionWarn},
-		"public declared":      {intent.ExposurePublic, 0, ""},
+		"public declared":      {intent.ExposurePublic, 1, evidence.DispositionInfo},
 	}
 
 	for name, c := range cases {

@@ -88,6 +88,7 @@ An entry is also a requirement to be exercised, not only a constraint to be sati
 
 - A plan affecting a cloud outside `allowed_clouds` is a blocking mismatch.
 - A provably public object-storage resource contradicting `exposure: private` is blocking.
+- A provably public resource is **reported whatever the contract declared**, and the declaration changes only the disposition: blocking under `private`, needing a human under `unspecified` or under no entry at all, and informational under `public`. An informational finding affects no decision, so an author who declared public exposure still gets a `PASS` — what they also get is a list of which resources that declaration turned out to cover. A resource entry carries no address, so one entry written for an intentionally public resource applies to every resource of its family in the plan; without the finding, that entry silently covered the accidental ones too.
 - An unknown exposure for a required private resource produces `UNKNOWN`.
 - A change permitting ingress from any address on a port `public_ports` does not cover is blocking. The claim is about the change, not about reachability: whether anything becomes reachable depends on an attachment that is usually not in the plan, and that limit is reported beside the finding rather than folded into it.
 - A change permitting such ingress where the contract declares no `network` entry needs a human, because silence is not permission.
