@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:a87766bb62f2c452c4a054080f42dc5f181451c18de09732cf7a3afcefdbf3d7"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "azurerm_network_security_group.web",
+        "provider": "registry.terraform.io/hashicorp/azurerm",
+        "cloud": "azure"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[0].access",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[0].priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[0].protocol",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[0].source_address_prefix",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[0].source_address_prefixes",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[1].access",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[1].priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[1].protocol",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[1].source_address_prefix",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule[1].source_address_prefixes",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "AZURE_NSG_ASSOCIATION_UNKNOWN",
+      "required": false,
+      "reason": "A network security group applies to the subnets and interfaces associated with it, and an association is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "azurerm_network_security_group.web",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "security_rule",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_network_security_group.web",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_network_security_group.web",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

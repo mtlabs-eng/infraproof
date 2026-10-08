@@ -39,7 +39,7 @@ type resourcePresence struct {
 var knownClouds = []string{"aws", "azure", "gcp"}
 
 // knownFamilies is closed for the same reason.
-var knownFamilies = []string{FamilyObjectStorage, FamilyNetwork}
+var knownFamilies = []string{FamilyObjectStorage, FamilyNetwork, FamilyDatabase}
 
 func (c Contract) validate() error {
 	var errs []error
@@ -267,7 +267,12 @@ func validateFamilyFields(i int, resource ResourceIntent, present resourcePresen
 			}
 			accepted = append(accepted, parsed)
 		}
-	default:
+	case FamilyObjectStorage, FamilyDatabase:
+		// Named rather than reached through default. Object storage was the
+		// fallthrough, which was invisible while there were two families and
+		// becomes a silent wrong answer with a third: a family added to
+		// knownFamilies and forgotten here would inherit these rules, and an
+		// author constraining something no rule reads would be told nothing.
 		if present.publicPorts {
 			errs = append(errs, fmt.Errorf(
 				"resources[%d].public_ports does not apply to family %q, which declares an exposure",
@@ -281,6 +286,16 @@ func validateFamilyFields(i int, resource ResourceIntent, present resourcePresen
 			errs = append(errs, fmt.Errorf("resources[%d].exposure is %q, want %q, %q or %q",
 				i, quotable(string(resource.Exposure)), ExposurePrivate, ExposurePublic, ExposureUnspecified))
 		}
+	default:
+		// A family knownFamilies admits and this function has no arm for. A
+		// guard test refuses that combination, and this refuses the contract if
+		// one ever reaches here anyway: a family nobody wrote validation for is
+		// a family whose fields nobody checked, and accepting it unvalidated is
+		// the one answer that cannot be right.
+		errs = append(errs, fmt.Errorf(
+			"resources[%d].family is %q, which this build accepts and has no field rules for; "+
+				"this is a defect in the verifier rather than in the contract",
+			i, quotable(resource.Family)))
 	}
 	return errs
 }

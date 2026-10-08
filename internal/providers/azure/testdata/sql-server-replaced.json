@@ -1,0 +1,107 @@
+{
+  "configuration": {
+    "provider_config": {
+      "azurerm": {
+        "full_name": "registry.terraform.io/hashicorp/azurerm",
+        "name": "azurerm"
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "azurerm_mssql_server.db",
+          "expressions": {
+            "name": {
+              "constant_value": "db"
+            },
+            "public_network_access_enabled": {
+              "constant_value": true
+            }
+          },
+          "mode": "managed",
+          "name": "db",
+          "provider_config_key": "azurerm",
+          "type": "azurerm_mssql_server"
+        },
+        {
+          "address": "azurerm_mssql_firewall_rule.open",
+          "expressions": {
+            "end_ip_address": {
+              "constant_value": "255.255.255.255"
+            },
+            "name": {
+              "constant_value": "open"
+            },
+            "server_id": {
+              "references": [
+                "azurerm_mssql_server.db.id",
+                "azurerm_mssql_server.db"
+              ]
+            },
+            "start_ip_address": {
+              "constant_value": "0.0.0.0"
+            }
+          },
+          "mode": "managed",
+          "name": "open",
+          "provider_config_key": "azurerm",
+          "type": "azurerm_mssql_firewall_rule"
+        }
+      ]
+    }
+  },
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "azurerm_mssql_server.db",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "after": {
+          "location": "westeurope",
+          "name": "db",
+          "public_network_access_enabled": true,
+          "resource_group_name": "rg"
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before": {
+          "location": "westeurope",
+          "name": "db",
+          "public_network_access_enabled": true,
+          "resource_group_name": "rg"
+        }
+      },
+      "mode": "managed",
+      "name": "db",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "type": "azurerm_mssql_server"
+    },
+    {
+      "address": "azurerm_mssql_firewall_rule.open",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "after": {
+          "end_ip_address": "255.255.255.255",
+          "name": "open",
+          "start_ip_address": "0.0.0.0"
+        },
+        "after_unknown": {
+          "id": true,
+          "server_id": true
+        },
+        "before": null
+      },
+      "mode": "managed",
+      "name": "open",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "type": "azurerm_mssql_firewall_rule"
+    }
+  ],
+  "terraform_version": "1.14.0"
+}

@@ -13,15 +13,22 @@ import (
 
 func normalize(t *testing.T, fixture string) model.Graph {
 	t.Helper()
+	return providers.Normalize(plan(t, fixture), providers.Default())
+}
+
+// plan parses a fixture, for the tests that ask what the plan itself says rather
+// than what the mapper made of it.
+func plan(t *testing.T, fixture string) terraformplan.Plan {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", fixture+".json"))
 	if err != nil {
 		t.Fatalf("reading fixture: %v", err)
 	}
-	plan, err := terraformplan.Parse(raw)
+	parsed, err := terraformplan.Parse(raw)
 	if err != nil {
 		t.Fatalf("parsing fixture: %v", err)
 	}
-	return providers.Normalize(plan, providers.Default())
+	return parsed
 }
 
 func bucket(t *testing.T, fixture string) model.NormalizedResource {

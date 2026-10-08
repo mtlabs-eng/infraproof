@@ -644,3 +644,223 @@ var citable = map[string]map[string]bool{
 		"labels": true,
 	},
 }
+
+// evaluateDatabase runs the database rule over a cloud's fixture, so the three
+// are compared against one declared intent.
+func evaluateDatabase(t *testing.T, cloud, fixture string, declared intent.Contract) policy.Result {
+	t.Helper()
+
+	path := filepath.Join("..", "providers", cloud, "testdata", fixture+".json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+	return policy.DatabaseExposure(declared, providers.Normalize(plan, providers.Default()))
+}
+
+// requiringPrivate is the contract the database cases are judged against: one
+// that asks for private databases, stated once so every cloud is compared
+// against the same intent.
+func requiringPrivate() intent.Contract {
+	return intent.Contract{
+		SchemaVersion:      "1.2",
+		ChangeID:           "contract-test",
+		Environment:        "test",
+		AllowedClouds:      []string{"aws", "azure", "gcp"},
+		DestructiveChanges: intent.DestructiveForbidden,
+		Resources: []intent.ResourceIntent{
+			{Family: intent.FamilyDatabase, Exposure: intent.ExposurePrivate},
+		},
+	}
+}
+
+// TestOneRuleCoversThreeCloudsForDatabases is this milestone's claim, and the
+// harder version of the one milestone 08 made.
+//
+// There the three clouds disagreed about the machinery of a single question --
+// an ordered rule set, resolved in the mapper. Here they disagree about *where
+// the answer lives*: AWS keeps the allow list in a security group that another
+// family judges, Azure keeps it in the server's own control resources, GCP keeps
+// it in an attribute. Three shapes, and one rule that names none of them.
+//
+// The scenarios are equivalent, not identical: each cloud's fixture is the
+// idiomatic way to write that scenario in that cloud, which is the only
+// comparison worth making.
+func TestOneRuleCoversThreeCloudsForDatabases(t *testing.T) {
+	t.Run("reachable everywhere produces one finding", func(t *testing.T) {
+		fixtures := map[string]struct{ fixture, resource string }{
+			"aws":   {"real-databases", "aws_db_instance.reachable"},
+			"azure": {"sql-reachable", "azurerm_mssql_server.db"},
+			"gcp":   {"real-databases", "google_sql_database_instance.reachable"},
+		}
+
+		for cloud, where := range fixtures {
+			result := evaluateDatabase(t, cloud, where.fixture, requiringPrivate())
+
+			var found *evidence.Finding
+			for i := range result.Findings {
+				if result.Findings[i].Resource != nil &&
+					result.Findings[i].Resource.Address == where.resource {
+					found = &result.Findings[i]
+				}
+			}
+			if found == nil {
+				t.Fatalf("%s: no finding about %s; the rule did not see a reachable database",
+					cloud, where.resource)
+			}
+			if found.RuleID != policy.RuleDatabasePublicReachable {
+				t.Errorf("%s: rule = %q, want %q", cloud, found.RuleID,
+					policy.RuleDatabasePublicReachable)
+			}
+			if found.Severity != evidence.SeverityHigh {
+				t.Errorf("%s: severity = %q, want %q; impact does not depend on the cloud",
+					cloud, found.Severity, evidence.SeverityHigh)
+			}
+			if found.Disposition != evidence.DispositionBlock {
+				t.Errorf("%s: disposition = %q, want %q", cloud, found.Disposition,
+					evidence.DispositionBlock)
+			}
+			if found.Observed == nil || found.Observed.Value.Display() != "true" {
+				t.Errorf("%s: observed = %v, want the same fact in every cloud", cloud, found.Observed)
+			}
+			// The evidence is the one thing that must differ: it names this
+			// cloud's own attributes, which is how the rule stays ignorant of
+			// them.
+			if len(found.Evidence) == 0 {
+				t.Errorf("%s: the finding cites nothing", cloud)
+			}
+			for _, ref := range found.Evidence {
+				if ref.ResourceAddress == "" || ref.Path == "" {
+					t.Errorf("%s: a citation names no attribute: %+v", cloud, ref)
+				}
+			}
+		}
+	})
+
+	t.Run("private everywhere produces none", func(t *testing.T) {
+		fixtures := map[string]struct{ fixture, resource string }{
+			"aws":   {"real-databases", "aws_db_instance.private"},
+			"azure": {"sql-no-endpoint", "azurerm_mssql_server.db"},
+			"gcp":   {"real-databases", "google_sql_database_instance.no_endpoint"},
+		}
+
+		for cloud, where := range fixtures {
+			result := evaluateDatabase(t, cloud, where.fixture, requiringPrivate())
+			for _, finding := range result.Findings {
+				if finding.Resource != nil && finding.Resource.Address == where.resource {
+					t.Errorf("%s: a database with no public endpoint produced %q",
+						cloud, finding.Claim)
+				}
+			}
+		}
+	})
+
+	t.Run("an endpoint nobody is admitted to produces none", func(t *testing.T) {
+		// Each cloud's own way of writing "a public endpoint that nothing
+		// reaches": a closed security group, a one-office range, an empty
+		// authorized-network list.
+		fixtures := map[string]struct{ fixture, resource string }{
+			"aws":   {"real-databases", "aws_db_instance.endpoint_closed_group"},
+			"azure": {"sql-one-office", "azurerm_mssql_server.db"},
+			"gcp":   {"real-databases", "google_sql_database_instance.endpoint_only"},
+		}
+
+		for cloud, where := range fixtures {
+			result := evaluateDatabase(t, cloud, where.fixture, requiringPrivate())
+			for _, finding := range result.Findings {
+				if finding.Resource != nil && finding.Resource.Address == where.resource {
+					t.Errorf("%s: an endpoint nobody is admitted to produced %q",
+						cloud, finding.Claim)
+				}
+			}
+			// Whether it is *settled* rather than merely unreported differs by
+			// cloud, and the difference is real rather than an inconsistency.
+			// GCP keeps its allow list in an attribute, so a readable instance
+			// has the whole list and closure is provable. Azure's rules are
+			// always separate resources -- there is no inline form -- so the
+			// plan never holds the whole set and closure is never provable.
+			// AWS is in between: the groups are correlated by reference, and a
+			// group named by identifier leaves no trace, so a proven closure is
+			// bounded rather than absolute.
+			var undetermined bool
+			for _, unknown := range result.Unknowns {
+				if unknown.CheckID == policy.CheckDatabaseReachabilityDeterminable &&
+					unknown.ResourceAddress != nil && *unknown.ResourceAddress == where.resource {
+					undetermined = true
+				}
+			}
+			if settles := cloud != "azure"; settles == undetermined {
+				t.Errorf("%s: settled = %v, want %v; the clouds differ in whether this is "+
+					"provable and the test has to say which", cloud, !undetermined, settles)
+			}
+		}
+	})
+
+	t.Run("the declared exposure changes the disposition and not the finding", func(t *testing.T) {
+		public := requiringPrivate()
+		public.Resources[0].Exposure = intent.ExposurePublic
+
+		for cloud, fixture := range map[string]string{
+			"aws": "real-databases", "azure": "sql-reachable", "gcp": "real-databases",
+		} {
+			blocked := evaluateDatabase(t, cloud, fixture, requiringPrivate())
+			allowed := evaluateDatabase(t, cloud, fixture, public)
+
+			if len(blocked.Findings) == 0 {
+				t.Fatalf("%s: the private contract produced no finding", cloud)
+			}
+			// Reported, at a disposition that affects no decision. This
+			// asserted zero findings, which is the milestone's criterion 9 read
+			// backwards: the declaration changes the disposition and not whether
+			// the change is reported. A declaration covers every database in the
+			// plan and cannot be scoped, so an entry written for one
+			// intentionally public database silenced the rest.
+			if len(allowed.Findings) != len(blocked.Findings) {
+				t.Errorf("%s: declaring the exposure public changed the findings "+
+					"from %d to %d, and it may change only their disposition",
+					cloud, len(blocked.Findings), len(allowed.Findings))
+			}
+			for _, finding := range allowed.Findings {
+				if finding.Disposition != evidence.DispositionInfo {
+					t.Errorf("%s: disposition = %q under a public declaration, want INFO",
+						cloud, finding.Disposition)
+				}
+			}
+			for _, finding := range blocked.Findings {
+				if finding.Severity != evidence.SeverityHigh {
+					t.Errorf("%s: severity depends on the contract", cloud)
+				}
+			}
+		}
+	})
+}
+
+// TestAddingADatabaseMapperDoesNotTouchTheRule is criterion 3 of this milestone,
+// and the thing the import boundary cannot prove on its own: the rule reaches a
+// verdict in every cloud without naming one.
+func TestAddingADatabaseMapperDoesNotTouchTheRule(t *testing.T) {
+	judged := map[string]int{}
+	for cloud, fixtures := range map[string][]string{
+		"aws":   {"real-databases", "real-aurora-defaults"},
+		"azure": {"sql-reachable", "sql-no-rules", "pg-reachable"},
+		"gcp":   {"real-databases", "real-databases-unreadable"},
+	} {
+		for _, fixture := range fixtures {
+			result := evaluateDatabase(t, cloud, fixture, requiringPrivate())
+			if len(result.Evaluated) == 0 {
+				t.Errorf("%s/%s: the rule judged nothing, so coverage would report it unjudged",
+					cloud, fixture)
+			}
+			judged[cloud] += len(result.Evaluated)
+		}
+	}
+	for _, cloud := range []string{"aws", "azure", "gcp"} {
+		if judged[cloud] == 0 {
+			t.Errorf("the rule reached no verdict in %s", cloud)
+		}
+	}
+}

@@ -82,6 +82,28 @@ func TestEveryMissingControlAnUnsettledSetReportsIsAsserted(t *testing.T) {
 		// against anything.
 		{"gcp", "fw-unknown-network", "google_compute_firewall.web",
 			[]string{"GCP_FIREWALL_NETWORK_UNDETERMINED"}},
+
+		// The database family. Its allow list is another subject's verdict, so
+		// what it leaves unresolved is which subject, or that there is none this
+		// plan can name.
+		{"aws", "real-databases", "aws_db_instance.no_group",
+			[]string{"AWS_DATABASE_SECURITY_GROUPS_UNKNOWN"}},
+		{"aws", "real-databases", "aws_db_instance.unnameable_engine",
+			[]string{"AWS_DATABASE_ENGINE_UNREADABLE"}},
+		{"aws", "rds-cluster-elsewhere", "aws_rds_cluster_instance.aurora",
+			[]string{"AWS_DATABASE_CLUSTER_NOT_IN_PLAN"}},
+		{"azure", "sql-no-rules", "azurerm_mssql_server.db",
+			[]string{"AZURE_DATABASE_FIREWALL_RULES_INCOMPLETE"}},
+		{"azure", "sql-unreadable-range", "azurerm_mssql_server.db",
+			[]string{"AZURE_DATABASE_FIREWALL_RANGE_UNREADABLE"}},
+		{"azure", "sql-switch-absent", "azurerm_mssql_server.db",
+			[]string{"AZURE_DATABASE_PUBLIC_ACCESS_UNDETERMINED"}},
+		{"gcp", "real-databases-unreadable", "google_sql_database_instance.version_unreadable",
+			[]string{"GCP_SQL_DATABASE_VERSION_UNREADABLE"}},
+		{"gcp", "real-databases-unreadable", "google_sql_database_instance.network_unreadable",
+			[]string{"GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE"}},
+		{"gcp", "sql-cloned", "google_sql_database_instance.cloned",
+			[]string{"GCP_SQL_IP_CONFIGURATION_UNREADABLE"}},
 	}
 
 	for _, c := range cases {
@@ -90,12 +112,13 @@ func TestEveryMissingControlAnUnsettledSetReportsIsAsserted(t *testing.T) {
 			if !ok {
 				t.Fatalf("fixture %s has no resource at %s", c.fixture, c.resource)
 			}
-			if found.Network == nil {
-				t.Fatal("the resource carries no network capabilities")
+			unresolved := unresolvedOf(found)
+			if unresolved == nil {
+				t.Fatalf("the resource carries no capabilities of any family")
 			}
 
-			reported := make([]string, 0, len(found.Network.Unresolved))
-			for _, control := range found.Network.Unresolved {
+			reported := make([]string, 0, len(unresolved))
+			for _, control := range unresolved {
 				if control.CheckID == "" || control.Reason == "" {
 					t.Fatalf("a missing control says nothing: %+v", control)
 				}
@@ -317,5 +340,121 @@ func TestATypeNoMapperInterpretsHasNoFamily(t *testing.T) {
 					mapper.Cloud(), resourceType, family)
 			}
 		}
+	}
+}
+
+// unresolvedOf returns the missing controls a resource reports, whichever family
+// it belongs to.
+//
+// The table above read Network directly, which was right while only the network
+// family reported controls and became a reason to skip a third family's
+// identifiers the moment one existed. Exactly one capability is set on a subject
+// this build understands, so there is nothing to choose between.
+func unresolvedOf(found model.NormalizedResource) []model.MissingControl {
+	switch {
+	case found.Network != nil:
+		return found.Network.Unresolved
+	case found.ObjectStorage != nil:
+		return found.ObjectStorage.Unresolved
+	case found.Database != nil:
+		return found.Database.Unresolved
+	default:
+		return nil
+	}
+}
+
+// TestASubjectCarryingItsOwnVerdictIsNotReadAsDeferring covers a guard whose own
+// comment says "every family is asked" and that asked two.
+//
+// A subject with no capability has deferred to something, and coverage then goes
+// looking for what. A database subject carries its own, so a guard listing only
+// two families would read every database as a resource that deferred.
+//
+// What this test does *not* do is exercise that guard, and the sentence here used
+// to say it did. A review measured it: reverting the guard to milestone 08's
+// two-family form passes this test, passes the whole suite, and changes zero
+// bytes on all 31 database fixtures. The reason is `defersTo`, which only
+// collects candidates the mapper calls subjects -- and no committed shape puts a
+// subject in a database's related set, because the AWS mapper declares no
+// database-to-security-group binding, `aws_rds_cluster` is not a subject, and
+// Azure firewall rules are not subjects either.
+//
+// So the guard is correct and defensive, this test passes for a second reason,
+// and the next binding that joins a database to a subject is what would make the
+// two diverge. Saying that is worth more than a claim of coverage that
+// measurement disproves.
+func TestASubjectCarryingItsOwnVerdictIsNotReadAsDeferring(t *testing.T) {
+	cases := map[string]struct{ cloud, fixture, resource string }{
+		"a bucket":         {"aws", "public-acl", "aws_s3_bucket.assets"},
+		"a security group": {"aws", "sg-public-inline", "aws_security_group.web"},
+		"a database":       {"aws", "real-databases", "aws_db_instance.reachable"},
+		"a Cloud SQL instance": {"gcp", "real-databases",
+			"google_sql_database_instance.reachable"},
+		"an Azure server": {"azure", "sql-reachable", "azurerm_mssql_server.db"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			found, ok := normalizeFrom(t, c.cloud, c.fixture).At(c.resource)
+			if !ok {
+				t.Fatalf("fixture %s has no resource at %s", c.fixture, c.resource)
+			}
+			if unresolvedOf(found) == nil && found.ObjectStorage == nil &&
+				found.Network == nil && found.Database == nil {
+				t.Fatal("the subject carries no capability of any family")
+			}
+			if len(found.DefersTo) != 0 {
+				t.Errorf("a subject carrying its own verdict defers to %v", found.DefersTo)
+			}
+		})
+	}
+}
+
+// TestEachMapperSaysWhereItsPortCameFrom is the other end of
+// model.DatabaseCapabilities.PortInferred, across all three clouds at once.
+//
+// One disclosure turns on it, and the rule cannot ask the question itself. A
+// mapper that forgets to set it claims its port is a fact from the plan, and the
+// disclosure then goes missing from the PASS it exists to annotate.
+//
+// Azure is the interesting one: it has no engine attribute at all, because the
+// engine *is* the resource type, so its port is read from the type with certainty
+// rather than from a table of defaults. That is not an inference and is the one
+// case here that answers false while reading no port from the plan.
+func TestEachMapperSaysWhereItsPortCameFrom(t *testing.T) {
+	cases := map[string]struct {
+		cloud, fixture, address string
+		inferred                bool
+		why                     string
+	}{
+		"AWS reads a stated port": {"aws", "rds-port-written", "aws_db_instance.offport",
+			false, "the plan states it, so the exclusion it makes is exact"},
+		"AWS falls back to the engine table": {"aws", "real-databases", "aws_db_instance.reachable",
+			true, "port is Optional and Computed and nobody wrote it, so the engine answers"},
+		"GCP reads the database version": {"gcp", "real-databases",
+			"google_sql_database_instance.reachable", true,
+			"Cloud SQL states a version and not a port, so the table answers"},
+		"Azure reads the resource type": {"azure", "sql-reachable", "azurerm_mssql_server.db",
+			false, "the engine is the type, so the port is certain rather than inferred"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			found, ok := normalizeFrom(t, c.cloud, c.fixture).At(c.address)
+			if !ok {
+				t.Fatalf("fixture %s has no resource at %s", c.fixture, c.address)
+			}
+			if found.Database == nil {
+				t.Fatalf("%s produced no database capabilities", c.address)
+			}
+			if !found.Database.Port.IsKnown() {
+				t.Fatalf("port is undetermined, and this case is about where a "+
+					"determined one came from: %s", c.why)
+			}
+			if found.Database.PortInferred != c.inferred {
+				t.Fatalf("PortInferred = %v, want %v: %s",
+					found.Database.PortInferred, c.inferred, c.why)
+			}
+		})
 	}
 }

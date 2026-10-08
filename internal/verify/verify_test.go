@@ -309,6 +309,17 @@ func planFixtures(t *testing.T) []string {
 			if entry.Name() == ".git" {
 				return fs.SkipDir
 			}
+			if entry.Name() == ".claude" {
+				// Review worktrees live here. Each one is a full checkout, so
+				// every fixture appeared four times while three reviews were
+				// running -- and the set this function claims to return became a
+				// function of what happened to be on disk. No golden matched the
+				// copies, because baselineKey keeps the path, so nothing was
+				// miscompared; what broke was every count taken from this set.
+				// Three commit messages disagree about how many plan fixtures
+				// this repository ships, and this is why.
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if filepath.Ext(path) != ".json" || !strings.Contains(path, "testdata") {
@@ -331,6 +342,14 @@ func planFixtures(t *testing.T) []string {
 	}
 	if len(found) < 20 {
 		t.Fatalf("found only %d plan fixtures, which is too few to be the set", len(found))
+	}
+	for _, path := range found {
+		// The set is what this repository ships. A path through an ignored
+		// directory is a checkout that happens to be here.
+		if strings.Contains(filepath.ToSlash(path), "/.claude/") {
+			t.Fatalf("%s is inside an ignored directory, so this set depends on "+
+				"what is on disk rather than on what is committed", path)
+		}
 	}
 	return found
 }
@@ -406,8 +425,26 @@ func baselineKey(fixture string) string {
 // this one contract never reaches -- it declares object storage private, so the
 // disposition for an undeclared exposure is never taken here. That branch is held
 // by internal/policy's own tests, and mutating it fails two of them. Recording a
-// second contract to reach it would double 63 goldens to catch what is already
+// second contract to reach it would double the goldens to catch what is already
 // caught where it belongs.
+//
+// The set was 63 and is 226. A review measured that no network-family and no
+// database-family fixture had a baseline at all, so two of the three families
+// this build decides were outside the only regression net that turns a verdict
+// change into a diff rather than an argument. The 163 added here were recorded
+// after three independent adversarial review rounds on milestone 09 and after
+// every finding from them was fixed -- which is the moment a baseline is worth
+// taking, because what it pins is a reviewed answer rather than whatever the code
+// happened to say.
+//
+// They still answer against the one shipped contract, which declares object
+// storage private and nothing else. For a network or database fixture that
+// contract mostly produces a required unexercised-declaration unknown, so what
+// these goldens pin is the mapper and normalizer output reaching the bundle --
+// provenance, controls, coverage, redaction -- rather than the two families'
+// dispositions. Those are held by internal/policy. A change to how a security
+// group or a database is described is a diff here; a change to what the contract
+// says about one is not.
 func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 	intent := filepath.Join("testdata", "baseline", "intent.json")
 
@@ -476,7 +513,7 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 	// equality fall together. Raise it when a baseline is deliberately added;
 	// never lower it. This is the guard the version constant has, for the same
 	// reason.
-	const recorded = 63
+	const recorded = 226
 	if len(goldens) < recorded {
 		t.Fatalf("found %d baselines and %d are recorded; a verdict nobody compares is a "+
 			"verdict that can change in silence", len(goldens), recorded)

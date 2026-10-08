@@ -1,0 +1,107 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:6ce80afce08a9acdbdda04b561ad4c6d2cac37d8cb76a3c949cb22db0e73dbde"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: it has an endpoint outside the private network, and the plan does not state whether anything admits every address to it.",
+      "resource_address": "google_sql_database_instance.pg",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.pg",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.pg",
+          "path": "settings.ip_configuration.ipv4_enabled",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_sql_database_instance.pg",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.pg",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_sql_database_instance.src",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.src",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_SQL_IP_CONFIGURATION_UNREADABLE",
+      "required": false,
+      "reason": "This instance writes no ip_configuration block that this plan records, which is both what an instance using the provider's defaults looks like and what a dynamic block nobody can resolve looks like. The two are identical here, so which addresses may reach it is undetermined.",
+      "resource_address": "google_sql_database_instance.pg",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.pg",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

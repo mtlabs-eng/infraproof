@@ -230,8 +230,8 @@ func TestTheNetworkFamilyIsKnown(t *testing.T) {
 // contract document makes: the major version is the boundary, and a 1.0 contract
 // is one this build still reads.
 func TestAnEarlierMinorVersionStillLoads(t *testing.T) {
-	if intent.SchemaVersion != "1.1" {
-		t.Fatalf("this build writes contract version %q, want 1.1", intent.SchemaVersion)
+	if intent.SchemaVersion != "1.2" {
+		t.Fatalf("this build writes contract version %q, want 1.2", intent.SchemaVersion)
 	}
 	if _, err := contractWith(t, `{
   "schema_version": "1.0", "change_id": "c", "environment": "staging",

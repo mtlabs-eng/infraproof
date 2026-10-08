@@ -1,0 +1,900 @@
+package aws_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
+)
+
+// database returns the normalized database of a fixture.
+func database(t *testing.T, fixture, address string) model.NormalizedResource {
+	t.Helper()
+	found, ok := normalize(t, fixture).At(address)
+	if !ok {
+		t.Fatalf("fixture %s has no resource at %s", fixture, address)
+	}
+	return found
+}
+
+// TestTheMapperAgreesWithARealPlanAboutDatabases is the authority for this
+// family on this cloud, written before the mapper existed and from what AWS does rather than
+// from what the mapper says.
+//
+// real-databases.json is genuine `terraform show -json` output: Terraform 1.14.0,
+// hashicorp/aws v6, `terraform plan` only -- never applied, no cloud contacted,
+// `skip_*` flags and placeholder strings, with the two placeholder credential
+// arguments deleted from the provider block afterwards.
+//
+// Every expectation is the conjunction: a public endpoint and something admitting
+// every address to it. The mapper answers the first half and names where the
+// second half is; the rule resolves it.
+func TestTheMapperAgreesWithARealPlanAboutDatabases(t *testing.T) {
+	cases := map[string]struct {
+		endpoint model.FactState
+		public   bool
+		gatedBy  []string
+		port     int
+		why      string
+	}{
+		// Written public, behind a group open to the world on the Postgres port.
+		"reachable": {model.FactKnown, true, []string{"aws_security_group.postgres_open"}, 5432,
+			"the switch is written and the group it names is in the plan"},
+		// The shared-group shape: open to the world, but not on a database port.
+		"shared_group": {model.FactKnown, true, []string{"aws_security_group.https_open"}, 5432,
+			"the mapper names the group; whether 443 reaches 5432 is the rule's question"},
+		"endpoint_closed_group": {model.FactKnown, true, []string{"aws_security_group.closed"}, 5432,
+			"a group the network family will prove closed"},
+		// Unwritten `publicly_accessible` on a plain instance: the provider
+		// emits false, which is both its default and the safe answer.
+		"private": {model.FactKnown, false, []string{"aws_security_group.postgres_open"}, 5432,
+			"Optional and not Computed, so an unwritten switch is a determined false"},
+		// No group written at all. AWS assigns the default VPC security group,
+		// which is not in the plan, so there is nothing to name.
+		"no_group": {model.FactKnown, true, nil, 5432,
+			"the author named no group, so the allow list is not in the plan"},
+		// An engine the port table cannot name leaves the port undetermined.
+		"unnameable_engine": {model.FactKnown, true, []string{"aws_security_group.https_open"}, 0,
+			"db2-se is a real engine whose port this build does not claim to know"},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			found := database(t, "real-databases", "aws_db_instance."+name)
+
+			if found.Removed {
+				// Every case in this table is a create. Reporting one as removed
+				// would make the rule skip it, which is silence on exactly the
+				// change worth reporting.
+				t.Fatal("a database being created is reported as removed")
+			}
+
+			if found.Family != model.FamilyDatabase {
+				t.Fatalf("family = %q, want %q", found.Family, model.FamilyDatabase)
+			}
+			if found.Database == nil {
+				t.Fatal("the mapper produced no database capabilities")
+			}
+			capabilities := *found.Database
+
+			if got := capabilities.PublicEndpoint.State; got != want.endpoint {
+				t.Fatalf("endpoint state = %q, want %q: %s", got, want.endpoint, want.why)
+			}
+			if want.endpoint == model.FactKnown && capabilities.PublicEndpoint.Get() != want.public {
+				t.Fatalf("public endpoint = %v, want %v: %s",
+					capabilities.PublicEndpoint.Get(), want.public, want.why)
+			}
+			if got := strings.Join(capabilities.GatedBy, ","); got != strings.Join(want.gatedBy, ",") {
+				t.Fatalf("gated by %q, want %q: %s", got, strings.Join(want.gatedBy, ","), want.why)
+			}
+			switch {
+			case want.port == 0 && capabilities.Port.IsKnown():
+				t.Fatalf("port = %d, want undetermined: %s", capabilities.Port.Get(), want.why)
+			case want.port != 0 && !capabilities.Port.IsKnown():
+				t.Fatalf("port is undetermined, want %d: %s", want.port, want.why)
+			case want.port != 0 && capabilities.Port.Get() != want.port:
+				t.Fatalf("port = %d, want %d", capabilities.Port.Get(), want.port)
+			}
+			// The mapper never answers the admission itself on this cloud: the
+			// allow list is a security group, which is a subject the network
+			// family judges in its own right.
+			if capabilities.AdmitsAnyAddress.IsKnown() {
+				t.Errorf("the mapper settled the allow list itself, which belongs to the group")
+			}
+		})
+	}
+}
+
+// TestAnAuroraInstanceCarriesTheSwitchAndTheClusterCarriesTheAllowList covers the
+// shape the design did not have and a real plan showed.
+//
+// The schema splits the conjunction across two resources:
+// aws_rds_cluster_instance has `publicly_accessible` and no
+// `vpc_security_group_ids`, and aws_rds_cluster has the reverse. So the mapper
+// has to walk instance to cluster to security group -- two hops, where a
+// subject's `related` carries one.
+func TestAnAuroraInstanceCarriesTheSwitchAndTheClusterCarriesTheAllowList(t *testing.T) {
+	found := database(t, "real-databases", "aws_rds_cluster_instance.aurora")
+
+	if found.Family != model.FamilyDatabase || found.Database == nil {
+		t.Fatalf("family = %q, database = %v", found.Family, found.Database)
+	}
+	capabilities := *found.Database
+
+	if !capabilities.PublicEndpoint.IsKnown() || !capabilities.PublicEndpoint.Get() {
+		t.Fatalf("the instance's own switch was not read: %v", capabilities.PublicEndpoint.State)
+	}
+	if got := strings.Join(capabilities.GatedBy, ","); got != "aws_security_group.postgres_open" {
+		t.Fatalf("gated by %q; the allow list is on the cluster and takes two hops to reach", got)
+	}
+	if !capabilities.Port.IsKnown() || capabilities.Port.Get() != 5432 {
+		t.Errorf("port = %v, want 5432 from aurora-postgresql", capabilities.Port)
+	}
+}
+
+// TestAnAuroraClusterDefersToItsInstances covers the resource that carries half
+// the question and no verdict of its own.
+//
+// A cluster has no `publicly_accessible` at all, so it cannot be reachable in its
+// own right. It is interpreted -- otherwise it reads as a resource nothing
+// understood -- and it defers, so coverage can check that something answered for
+// it rather than believe it.
+func TestAnAuroraClusterDefersToItsInstances(t *testing.T) {
+	found := database(t, "real-databases", "aws_rds_cluster.aurora")
+
+	if !found.Interpreted {
+		t.Error("an Aurora cluster reads as a resource nothing understood")
+	}
+	if found.Family != model.FamilyDatabase {
+		t.Errorf("family = %q, want %q", found.Family, model.FamilyDatabase)
+	}
+	if found.Database != nil {
+		t.Error("a cluster carries a reachability verdict of its own, and it has no endpoint switch")
+	}
+	if len(found.DefersTo) != 1 || found.DefersTo[0] != "aws_rds_cluster_instance.aurora" {
+		t.Errorf("defers to %v, want the instance that carries the switch", found.DefersTo)
+	}
+}
+
+// TestObjectStorageAndNetworkAreUntouched is acceptance criterion 5 made
+// mechanical in this package: adding a third family must not disturb the two
+// that were here.
+func TestObjectStorageAndNetworkAreUntouched(t *testing.T) {
+	if assets := bucket(t, "public-acl"); assets.Family != model.FamilyObjectStorage ||
+		assets.Database != nil {
+		t.Errorf("a bucket is %q with database = %v", assets.Family, assets.Database)
+	}
+	group := securityGroup(t, "sg-public-inline")
+	if group.Family != model.FamilyNetwork || group.Database != nil {
+		t.Errorf("a security group is %q with database = %v", group.Family, group.Database)
+	}
+	if group.Network == nil || !group.Network.PublicIngress.Get() {
+		t.Error("the network family's verdict changed")
+	}
+}
+
+// TestAnAuroraInstanceWhoseClusterIsElsewhereSettlesNothing covers the half of
+// the two-hop walk that a plan commonly does not contain.
+//
+// The allow list is on the cluster. A cluster managed in another module is not an
+// absence of security groups -- the groups exist and this plan cannot see them --
+// so the answer is that the allow list is unreadable, and the reason says the
+// cluster is what would have named it.
+func TestAnAuroraInstanceWhoseClusterIsElsewhereSettlesNothing(t *testing.T) {
+	capabilities := database(t, "rds-cluster-elsewhere",
+		"aws_rds_cluster_instance.aurora").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	// The instance's own switch is still readable: it is on the instance.
+	if !capabilities.PublicEndpoint.IsKnown() || !capabilities.PublicEndpoint.Get() {
+		t.Errorf("the instance's own switch was lost with its cluster: %v",
+			capabilities.PublicEndpoint.State)
+	}
+	if len(capabilities.GatedBy) != 0 {
+		t.Errorf("gated by %v, and the cluster that names the groups is not in the plan",
+			capabilities.GatedBy)
+	}
+	var said bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_CLUSTER_NOT_IN_PLAN" {
+			said = true
+			if !strings.Contains(control.Reason, "cluster") {
+				t.Errorf("the reason does not name the cluster: %q", control.Reason)
+			}
+		}
+	}
+	if !said {
+		t.Error("a cluster the plan does not hold is not reported, so the unknown has no reason")
+	}
+}
+
+// TestAnAuroraClusterWithNoInstanceIsJudgedByNothing is the milestone's criterion
+// 8: a cluster carries half the question and no verdict, so a plan holding only
+// the cluster settles nothing -- and coverage is what has to say so, because the
+// cluster deferred to an instance that is not here.
+func TestAnAuroraClusterWithNoInstanceIsJudgedByNothing(t *testing.T) {
+	found := database(t, "rds-cluster-without-instances", "aws_rds_cluster.aurora")
+
+	if found.Database != nil {
+		t.Error("a cluster with no instance produced a reachability verdict of its own")
+	}
+	if len(found.DefersTo) != 0 {
+		t.Errorf("defers to %v, and no instance is in the plan", found.DefersTo)
+	}
+	if !found.Interpreted {
+		t.Error("the cluster reads as a resource nothing understood")
+	}
+}
+
+// TestAnAuroraInstanceThatWritesNoSwitchTakesTheProvidersDefault covers the trap
+// the milestone first recorded the wrong way round, and the only one on this
+// cloud.
+//
+// `publicly_accessible` is Optional and not Computed on `aws_db_instance`, where
+// a real plan emits false when unwritten. On `aws_rds_cluster_instance` it is
+// Optional **and Computed** and comes back unknown -- milestone 08's trap again,
+// where reading an unknown as unreadable makes the idiomatic resource
+// undeterminable.
+//
+// real-aurora-defaults.json carries the three shapes side by side from one real
+// plan: the switch written true, written false, and not written at all.
+func TestAnAuroraInstanceThatWritesNoSwitchTakesTheProvidersDefault(t *testing.T) {
+	cases := map[string]struct {
+		state  model.FactState
+		public bool
+		why    string
+	}{
+		"aurora":   {model.FactKnown, true, "written true"},
+		"ax_false": {model.FactKnown, false, "written false"},
+		"ax": {model.FactKnown, false,
+			"Computed and unwritten, so the provider's default applies: not publicly accessible"},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			capabilities := database(t, "real-aurora-defaults",
+				"aws_rds_cluster_instance."+name).Database
+			if capabilities == nil {
+				t.Fatal("the mapper produced no database capabilities")
+			}
+			if got := capabilities.PublicEndpoint.State; got != want.state {
+				t.Fatalf("state = %q, want %q: %s", got, want.state, want.why)
+			}
+			if capabilities.PublicEndpoint.Get() != want.public {
+				t.Fatalf("public endpoint = %v, want %v: %s",
+					capabilities.PublicEndpoint.Get(), want.public, want.why)
+			}
+		})
+	}
+}
+
+// TestTheAuroraFixtureCarriesAnUnwrittenSwitch guards that fixture's premise. If
+// a regeneration started writing the switch everywhere, the test above would pass
+// while proving nothing about the case it exists for.
+func TestTheAuroraFixtureCarriesAnUnwrittenSwitch(t *testing.T) {
+	plan := plan(t, "real-aurora-defaults")
+
+	var found bool
+	for _, change := range plan.ResourceChanges {
+		if change.Address != "aws_rds_cluster_instance.ax" {
+			continue
+		}
+		found = true
+		if !change.Configured {
+			t.Fatal("the fixture records no arguments, so the silence is not the author's")
+		}
+		if change.States("publicly_accessible") {
+			t.Error("the instance writes the switch, so the fixture lost the shape it exists for")
+		}
+		if change.After.Field("publicly_accessible").State() != terraformplan.StateUnknown {
+			t.Error("the switch is determined, which a real plan does not emit for this resource")
+		}
+	}
+	if !found {
+		t.Fatal("the fixture holds no Aurora instance that writes no switch")
+	}
+}
+
+// TestASwitchStatedNowhereIsTheProvidersDefaultToo covers the sanitized shape:
+// the attribute in neither half of the change. The provider's default is a
+// private endpoint, and an absent attribute is that default rather than a gap.
+func TestASwitchStatedNowhereIsTheProvidersDefaultToo(t *testing.T) {
+	capabilities := database(t, "rds-switch-stated-nowhere",
+		"aws_rds_cluster_instance.ax").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if !capabilities.PublicEndpoint.IsKnown() {
+		t.Fatalf("a switch stated nowhere left the endpoint undetermined: %v",
+			capabilities.PublicEndpoint.State)
+	}
+	if capabilities.PublicEndpoint.Get() {
+		t.Error("a switch stated nowhere was read as a public endpoint")
+	}
+}
+
+// TestAnInterpolatedSwitchIsAGapAndNotADefault is the other half of the Aurora
+// fix, and the half that keeps it honest.
+//
+// An unknown nobody wrote is the provider's documented default. An unknown
+// somebody did write is a value nothing can resolve yet, and applying a default
+// to it invents the one fact the plan withheld. Both shapes are real `terraform
+// plan` output; the fix is only sound if the second answers UNKNOWN.
+func TestAnInterpolatedSwitchIsAGapAndNotADefault(t *testing.T) {
+	capabilities := database(t, "real-aurora-interpolated",
+		"aws_rds_cluster_instance.interpolated").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if capabilities.PublicEndpoint.IsKnown() {
+		t.Fatalf("a switch the author wrote and the plan cannot resolve was settled as %v",
+			capabilities.PublicEndpoint.Get())
+	}
+
+	// And the fixture carries the shape, or the assertion above proves nothing.
+	parsed := plan(t, "real-aurora-interpolated")
+	var found bool
+	for _, change := range parsed.ResourceChanges {
+		if change.Address != "aws_rds_cluster_instance.interpolated" {
+			continue
+		}
+		found = true
+		if !change.States("publicly_accessible") {
+			t.Error("the instance does not write the switch, so its unknown is a default")
+		}
+		if change.After.Field("publicly_accessible").State() != terraformplan.StateUnknown {
+			t.Error("the switch is determined, so the fixture lost its shape")
+		}
+	}
+	if !found {
+		t.Fatal("the fixture holds no instance writing an unresolvable switch")
+	}
+}
+
+// TestThePlansOwnPortBeatsTheEngineTable covers the authority this mapper threw
+// away.
+//
+// `port` is Optional and Computed, so it comes back unknown when nobody writes
+// it -- which is the common case and the reason the engine table exists. It is
+// **known when somebody does** write it, and then it is the authoritative value:
+// the engine table is a documented default and the plan is the plan.
+//
+// Reading the table anyway is the one direction `declared.DatabasePort`'s own
+// comment calls dangerous: a wrong port makes a reachable database report as
+// closed. A Postgres instance moved to 1433 behind a group open to the world on
+// 1433 was ruled out against 5432, leaving only a non-required unknown.
+func TestThePlansOwnPortBeatsTheEngineTable(t *testing.T) {
+	capabilities := database(t, "rds-port-written", "aws_db_instance.offport").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if !capabilities.Port.IsKnown() {
+		t.Fatal("the port the plan states was not read")
+	}
+	if got := capabilities.Port.Get(); got != 1433 {
+		t.Fatalf("port = %d, want 1433: the plan states it and the engine table says 5432", got)
+	}
+
+	// And the engine table still answers when the plan does not, or the fix has
+	// traded one authority for the other rather than ordering them.
+	if port := database(t, "real-databases", "aws_db_instance.reachable").Database.Port; !port.IsKnown() ||
+		port.Get() != 5432 {
+		t.Errorf("port = %v, want 5432 from the engine when the plan states none", port)
+	}
+}
+
+// TestAnAllowListThePlanDescribesOnlyPartOfIsNotAnAllowList covers the
+// confidence this mapper had no right to.
+//
+// `vpc_security_group_ids` is a list, and a list can hold a reference beside a
+// variable, a local, a module output or a literal id. The configuration records
+// the reference and the variable; `References` keeps only the reference, because
+// correlation is about resources. Reading what survives as the whole list made a
+// publicly accessible Postgres instance behind one closed group and one unknown
+// group report PASS, exit 0, with nothing said about it.
+//
+// Two different gaps, and only one is detectable. A variable or a module output
+// leaves a trace the plan records, and that trace is now read. A literal id
+// leaves none at all -- `["sg-0aaa"]` and a one-reference list are
+// indistinguishable -- so closure here is never fully provable and every proven
+// closure carries a bound, the way the network family already bounds its own.
+func TestAnAllowListThePlanDescribesOnlyPartOfIsNotAnAllowList(t *testing.T) {
+	capabilities := database(t, "rds-partial-allow-list", "aws_db_instance.partial").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if len(capabilities.GatedBy) != 0 {
+		t.Errorf("gated by %v: the plan describes only part of this list, so naming part of it "+
+			"as the whole gate is the mistake", capabilities.GatedBy)
+	}
+	var said bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN" {
+			said = true
+			if !strings.Contains(control.Reason, "part") && !strings.Contains(control.Reason, "not in this plan") {
+				t.Errorf("the reason does not say the list is incomplete: %q", control.Reason)
+			}
+		}
+	}
+	if !said {
+		t.Error("a half-described allow list reports no missing control")
+	}
+}
+
+// TestAProvenClosureIsAlwaysBounded covers the gap no plan can show.
+//
+// A security group id written as a literal leaves no reference at all, so a list
+// holding one reference and one literal is byte-identical to a list holding one
+// reference. Closure on this cloud is therefore never fully provable, and saying
+// so is the difference between a verdict a reader can act on and one they have to
+// take on trust. The network family attaches exactly this bound to its own
+// closure.
+func TestAProvenClosureIsAlwaysBounded(t *testing.T) {
+	capabilities := database(t, "real-databases", "aws_db_instance.endpoint_closed_group").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if len(capabilities.GatedBy) == 0 {
+		t.Fatal("the gate is not named, so this test is about something else now")
+	}
+	var bounded bool
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL" {
+			bounded = true
+		}
+	}
+	if !bounded {
+		t.Error("a named allow list is presented as complete, and a literal group id leaves no " +
+			"trace for this build to find")
+	}
+}
+
+// TestAGateIsFoundWhereverThePlanSpellsIt covers the gap between how a reference
+// names a resource and how the plan does.
+//
+// A reference carries the configuration's spelling: module instance keys absent,
+// and every key it does carry quoted. The graph holds the plan's spelling. The
+// two differ in exactly the shapes people write most -- a module per database,
+// and a `count`ed group -- so each of these was a database whose gate was lost,
+// reported as undetermined with evidence citing an address that appears nowhere
+// in the plan.
+//
+// All four fixtures are real `terraform plan` output.
+func TestAGateIsFoundWhereverThePlanSpellsIt(t *testing.T) {
+	cases := map[string]struct {
+		fixture, address, gate string
+		why                    string
+	}{
+		"a count-indexed group": {
+			"rds-group-shapes", "aws_db_instance.counted_group",
+			"aws_security_group.counted[0]",
+			"a plan writes a count index bare and an identity quotes every key"},
+		"a for_each group": {
+			"rds-group-shapes", "aws_db_instance.keyed_group",
+			`aws_security_group.keyed["a"]`,
+			"this half already worked, and has to keep working"},
+		"a module per database": {
+			"rds-repeated-shapes", `module.perdb["eu"].aws_db_instance.db`,
+			`module.perdb["eu"].aws_security_group.open`,
+			"the module instance key is in the plan address and not in the reference"},
+		"the sibling module instance": {
+			"rds-repeated-shapes", `module.perdb["us"].aws_db_instance.db`,
+			`module.perdb["us"].aws_security_group.open`,
+			"each instance has its own group, and taking the wrong one gates the wrong database"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			capabilities := database(t, c.fixture, c.address).Database
+			if capabilities == nil {
+				t.Fatal("the mapper produced no database capabilities")
+			}
+
+			var found bool
+			for _, gate := range capabilities.GatedBy {
+				if gate == c.gate {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("gated by %v, want %s among them: %s",
+					capabilities.GatedBy, c.gate, c.why)
+			}
+		})
+	}
+}
+
+// TestAnAuroraClusterIsFoundUnderRepetition covers the same gap on the other hop.
+//
+// `clusterOf` compared an identity against a key-stripped configuration address,
+// so an Aurora instance written with `for_each` reported its cluster as not part
+// of a plan that contained it -- and the identifier written for a genuinely
+// absent cluster fired for a shape it was not about.
+func TestAnAuroraClusterIsFoundUnderRepetition(t *testing.T) {
+	capabilities := database(t, "rds-aurora-repeated",
+		`aws_rds_cluster_instance.each["eu"]`).Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_CLUSTER_NOT_IN_PLAN" {
+			t.Errorf("the cluster is in the plan and is reported as absent: %q", control.Reason)
+		}
+	}
+	if len(capabilities.GatedBy) == 0 {
+		t.Error("the cluster's security groups were not reached, so the two-hop walk failed " +
+			"under repetition")
+	}
+}
+
+// TestARealPlanSaysADestroyedDatabaseHasNoAfterState pins the shape the two
+// fixtures exist to carry, because the distinction they defend is invisible in
+// the attribute the mapper reads.
+//
+// Both plans are genuine `terraform show -json`: Terraform 1.14.0,
+// hashicorp/aws v6, planned against a hand-written state file with
+// `-refresh=false` so no cloud was contacted, provider credentials never set to
+// anything but placeholders and the placeholder arguments deleted afterwards.
+//
+// The measured fact is that a destroy emits `after` as JSON **null** -- a
+// readable value of null kind carrying no attributes at all, not an object whose
+// attributes are unwritten. So `publicly_accessible` is absent for exactly the
+// same reason on a database being deleted and on one whose switch nothing can
+// resolve, and only the action tells them apart. A replacement emits a full
+// `after` object, because the database is there when the change is done.
+func TestARealPlanSaysADestroyedDatabaseHasNoAfterState(t *testing.T) {
+	cases := map[string]struct {
+		fixture string
+		address string
+		removed bool
+		after   terraformplan.Kind
+	}{
+		"a destroy-only change": {"rds-destroyed", "aws_db_instance.going_away", true, terraformplan.KindNull},
+		"a replacement":         {"rds-replaced", "aws_db_instance.replaced", false, terraformplan.KindObject},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			var change terraformplan.ResourceChange
+			for _, candidate := range plan(t, want.fixture).ResourceChanges {
+				if candidate.Address == want.address {
+					change = candidate
+				}
+			}
+			if change.Address == "" {
+				t.Fatalf("fixture %s has no change at %s", want.fixture, want.address)
+			}
+
+			if got := change.After.Kind(); got != want.after {
+				t.Fatalf("After kind = %v on %s, want %v: the fixture no longer "+
+					"carries the shape it exists to pin", got, name, want.after)
+			}
+			if want.after == terraformplan.KindNull &&
+				change.After.Field("publicly_accessible").State() != terraformplan.StateAbsent {
+				t.Fatal("a destroyed database states its endpoint switch, so the " +
+					"mapper could read it and this fixture proves nothing")
+			}
+
+			found := database(t, want.fixture, want.address)
+			if found.Database == nil {
+				t.Fatalf("%s produced no database capabilities, so it is not judged "+
+					"at all and the rule never sees the distinction", name)
+			}
+			if found.Removed != want.removed {
+				t.Fatalf("Removed = %v on %s, want %v", found.Removed, name, want.removed)
+			}
+		})
+	}
+}
+
+// TestADeleteThatStatesAPublicEndpointIsNotReadAsARemoval holds the line this
+// build already holds elsewhere: a plan is input, and two declarations inside it
+// that contradict each other are not resolved in the permissive direction.
+//
+// `Removed` suppresses the reachability question, so reading it from the action
+// list alone means one field of a plan can switch the rule off. The fixture says
+// `actions: ["delete"]` and in the same breath states `publicly_accessible: true`
+// in front of a security group open to the world on the database's port. A real
+// destroy states nothing -- `after` is JSON null, which `rds-destroyed` pins --
+// so the two cannot both be true of the same change.
+//
+// Measured before this guard existed: BLOCK became WARN and every database
+// finding and unknown disappeared. The same reasoning produced
+// `HasUnrecognizedAction` and `ModeContradictsActions` in the plan reader: what a
+// contradiction means is Terraform's to say, and this build refuses rather than
+// picking the half that reports less.
+func TestADeleteThatStatesAPublicEndpointIsNotReadAsARemoval(t *testing.T) {
+	const address = "aws_db_instance.reachable"
+
+	found := database(t, "rds-delete-contradicted", address)
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	if found.Removed {
+		t.Fatal("a change that states a public endpoint is read as removing the " +
+			"database, so the rule never asks whether it is reachable")
+	}
+	if !found.Database.PublicEndpoint.IsKnown() || !found.Database.PublicEndpoint.Get() {
+		t.Fatalf("public endpoint = %v, want a known true: the fixture exists to "+
+			"carry a stated endpoint beside a delete",
+			found.Database.PublicEndpoint)
+	}
+}
+
+// TestAChangeThatStatesNothingProvesNothingAboutTheEndpoint holds the one place
+// the AWS endpoint default is not safe to apply.
+//
+// `publicly_accessible` is Optional and not Computed, so on a create an absent
+// value is the provider's default and a determined private endpoint -- measured,
+// and the reason this cloud needs no configuration guard on a plain instance.
+// That reading asks "the author did not write it". It answers the same way to a
+// change with no after-object at all, where nobody wrote *anything*.
+//
+// `removed { lifecycle { destroy = false } }` is exactly that change: Terraform
+// emits `actions: ["forget"]` with `after` null. The database stays up, stays
+// publicly accessible, and leaves Terraform's management -- and the endpoint read
+// as a determined false, so the rule concluded there was no endpoint outside the
+// private network and said nothing. Measured: PASS, exit 0, under a contract
+// declaring the family private.
+//
+// A forget is not a destroy, so the removal guard does not cover it, and it
+// should not: the object survives. What the plan does not state about it cannot
+// be read as a default either.
+func TestAChangeThatStatesNothingProvesNothingAboutTheEndpoint(t *testing.T) {
+	const address = "aws_db_instance.old"
+
+	change := func() terraformplan.ResourceChange {
+		for _, candidate := range plan(t, "rds-forgotten").ResourceChanges {
+			if candidate.Address == address {
+				return candidate
+			}
+		}
+		t.Fatalf("fixture rds-forgotten has no change at %s", address)
+		return terraformplan.ResourceChange{}
+	}()
+
+	if change.After.Kind() != terraformplan.KindNull {
+		t.Fatalf("after kind = %v, want null: the fixture exists to carry a change "+
+			"that states nothing", change.After.Kind())
+	}
+	if change.IsDestructive() {
+		t.Fatal("a forget reads as destructive, so the removal guard covers it and " +
+			"this fixture tests the wrong thing")
+	}
+
+	found := database(t, "rds-forgotten", address)
+	if found.Database == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+	if found.Removed {
+		t.Fatal("a forget is not a removal: the database survives, unmanaged")
+	}
+	if found.Database.PublicEndpoint.IsKnown() {
+		t.Fatalf("endpoint = %v, want undetermined: nothing in this change states "+
+			"anything about it, so the provider's default is not what is being read",
+			found.Database.PublicEndpoint)
+	}
+}
+
+// TestABoundOnTheAllowListIsNotReportedWhereItCannotMatter keeps a disclosure
+// from firing on every database in a plan.
+//
+// `AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL` says a group named by identifier
+// rather than by reference leaves nothing to correlate, so the list may be short.
+// It is the whole story for a database whose named groups are all closed. It is
+// noise on a database the plan proves has no endpoint outside the private
+// network, because what the allow list says cannot make that database reachable
+// -- which is the rule's own second arm.
+//
+// A disclosure that fires whatever the facts are tells a reader nothing about the
+// one case where it matters.
+func TestABoundOnTheAllowListIsNotReportedWhereItCannotMatter(t *testing.T) {
+	bound := func(address string) bool {
+		found := database(t, "real-databases", address)
+		if found.Database == nil {
+			t.Fatalf("%s produced no database capabilities", address)
+		}
+		for _, control := range found.Database.Unresolved {
+			if control.CheckID == "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if bound("aws_db_instance.private") {
+		t.Fatal("a database the plan proves has no public endpoint carries a bound " +
+			"on its allow list, which cannot change whether it is reachable")
+	}
+	if !bound("aws_db_instance.endpoint_closed_group") {
+		t.Fatal("a database with a public endpoint behind groups the plan can read " +
+			"carries no bound, so a reader is not told the list may be short")
+	}
+}
+
+// TestAClusterThePlanHoldsIsNotCalledAbsent is the other spelling of repetition,
+// and the one the fixture above does not carry.
+//
+// `rds-aurora-repeated` writes `aws_rds_cluster.each["eu"].id`, with the key as a
+// literal, so the configuration records an address `declared.Target` can place.
+// Writing `aws_rds_cluster.each[each.key].id` records a reference with no key at
+// all, which names no instance -- so the correlation is undecidable, which is the
+// right verdict, and the control said the cluster is "not part of this plan"
+// about a cluster the plan contains.
+//
+// CLAUDE.md requires a finding to carry observed facts, and the two causes are
+// different things to go and fix: a cluster in another module is somewhere else,
+// and a cluster right here that nobody could attach needs its instance named
+// outright. This is PRODUCT.md's documented repeated-resource limitation, and it
+// needs its own identifier rather than borrowing one that means something else.
+func TestAClusterThePlanHoldsIsNotCalledAbsent(t *testing.T) {
+	capabilities := database(t, "rds-aurora-keyed-expression",
+		`aws_rds_cluster_instance.each["eu"]`).Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	var said string
+	for _, control := range capabilities.Unresolved {
+		switch control.CheckID {
+		case "AWS_DATABASE_CLUSTER_NOT_IN_PLAN":
+			t.Errorf("the cluster is in the plan and is reported as absent: %q", control.Reason)
+		case "AWS_DATABASE_CLUSTER_NOT_CORRELATED":
+			said = control.Reason
+		}
+	}
+	if said == "" {
+		t.Fatal("the allow list is unreachable and nothing names what would settle it")
+	}
+	if !strings.Contains(said, "this plan holds") {
+		t.Fatalf("the reason does not say the cluster is here and could not be "+
+			"attached, which is the thing to go and fix: %q", said)
+	}
+}
+
+// TestAPortOutsideTheRangeIsNotAPort defends the bound the port reader claims to
+// apply, which nothing exercised.
+//
+// `lastPort` is there because a stated port outranks the engine table, so a
+// number the plan states is read in preference to a documented default -- and the
+// provider does not validate it at plan time. Measured on a real plan:
+// `port = 70000` arrives verbatim.
+//
+// Without the bound, 70000 became the database's port, no range in a group open
+// to the whole internet on tcp/0-65535 could hold it, and the finding vanished:
+// exit 3 became exit 2. Removing the bound left the whole suite green.
+func TestAPortOutsideTheRangeIsNotAPort(t *testing.T) {
+	capabilities := database(t, "rds-port-out-of-range", "aws_db_instance.outofrange").Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if capabilities.Port.IsKnown() && capabilities.Port.Get() == 70000 {
+		t.Fatal("70000 was read as a port, so no rule set can hold it and a " +
+			"database open to the whole internet reports as unreachable")
+	}
+	if !capabilities.Port.IsKnown() || capabilities.Port.Get() != 5432 {
+		t.Fatalf("port = %v, want 5432: a stated number that is not a port is not "+
+			"a statement, so the engine table answers", capabilities.Port)
+	}
+}
+
+// TestAGroupNamedByAnExpressionThatPinsNoInstanceSettlesNothing reaches the one
+// allow-list arm no fixture did.
+//
+// `vpc_security_group_ids = [aws_security_group.each[each.key].id]` with the
+// group under `for_each` records a reference carrying no key, so it names no
+// instance and the correlation is undecidable. Measured on a real plan: the
+// configuration records `["aws_security_group.each", "each.key"]`.
+//
+// The arm is near-equivalent to silence on this cloud, because the mapper never
+// answers the admission itself and the verdict stays undetermined either way --
+// but replacing it with `return nil, nil` was green, and it deleted the only
+// sentence telling a reader why. PRODUCT.md records this as the repeated-resource
+// limitation, and the reason has to say the groups could not be pinned down
+// rather than that none was named: those are different things to go and fix.
+func TestAGroupNamedByAnExpressionThatPinsNoInstanceSettlesNothing(t *testing.T) {
+	// Two spellings, reaching two different arms, which is why both are here.
+	// `aws_security_group.each[each.key].id` records `each.key` as a reference,
+	// so the list draws on something the plan does not describe and the opaque
+	// guard answers. `values(aws_security_group.each)[*].id` records only
+	// `aws_security_group.each` -- a repeated type with no key at all, nothing
+	// opaque -- which is the only shape that reaches the undecidable arm.
+	for fixture, address := range map[string]string{
+		"rds-group-keyed-expression": `aws_db_instance.each["eu"]`,
+		"rds-group-splat":            `aws_db_instance.each["eu"]`,
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			assertNoGateIsPinned(t, fixture, address)
+		})
+	}
+}
+
+// assertNoGateIsPinned is the body both spellings share.
+func assertNoGateIsPinned(t *testing.T, fixture, address string) {
+	t.Helper()
+
+	capabilities := database(t, fixture, address).Database
+	if capabilities == nil {
+		t.Fatal("the mapper produced no database capabilities")
+	}
+
+	if len(capabilities.GatedBy) > 0 {
+		t.Fatalf("gated by %v: a reference naming no instance was resolved to one, "+
+			"and a deny on one instance would prove a grant on another closed",
+			capabilities.GatedBy)
+	}
+
+	var said string
+	for _, control := range capabilities.Unresolved {
+		if control.CheckID == "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN" {
+			said = control.Reason
+		}
+	}
+	if said == "" {
+		t.Fatal("the allow list could not be pinned down and nothing says so")
+	}
+	if strings.Contains(said, "none was named") {
+		t.Fatalf("the reason says no group was named, and one was named in a way "+
+			"that pins no instance: %q", said)
+	}
+}
+
+// TestASwitchAbsentFromBothHalvesStillAsksTheConfiguration closes a gap a review
+// found in how the absent case is answered, and in how the fixture that reaches
+// it is described.
+//
+// `StateAbsent` used to mean "the provider's default applies" outright. The arm
+// was reached by exactly one committed fixture, and measured across every other
+// AWS plan this repository ships, no real `terraform show -json` output produces
+// the shape: `publicly_accessible` is stated true in 52 changes, stated false in
+// 8, marked unknown in 3, and null-because-destroyed in 3. Absent from both
+// halves happens only in `rds-switch-stated-nowhere`, which is hand-authored --
+// so a defensive arm was being defended by a shape the provider does not emit,
+// which is the class of mistake that caused three of milestone 08's defects.
+//
+// The arm is kept, because a future provider version could stop emitting the
+// attribute and reading an absence as unreadable would make every database
+// undeterminable. What changed is that it now asks the same question the unknown
+// case asks: the configuration. An absence beside an author who wrote nothing is
+// the documented default; an absence beside an author who wrote something the
+// plan cannot resolve is a gap, and claiming a default there invents the one fact
+// the plan withheld.
+//
+// The two shapes are both in that fixture, which is now what it is for.
+func TestASwitchAbsentFromBothHalvesStillAsksTheConfiguration(t *testing.T) {
+	cases := map[string]struct {
+		address string
+		known   bool
+		why     string
+	}{
+		"nobody wrote it": {"aws_rds_cluster_instance.ax", true,
+			"an absence the author did not cause is the provider's default"},
+		"somebody wrote it": {"aws_rds_cluster_instance.aurora", false,
+			"an absence beside a written argument is a value the plan withheld"},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			capabilities := database(t, "rds-switch-stated-nowhere", want.address).Database
+			if capabilities == nil {
+				t.Fatal("the mapper produced no database capabilities")
+			}
+			if got := capabilities.PublicEndpoint.IsKnown(); got != want.known {
+				t.Fatalf("endpoint known = %v, want %v: %s", got, want.known, want.why)
+			}
+			if want.known && capabilities.PublicEndpoint.Get() {
+				t.Fatal("a switch nobody wrote was read as a public endpoint")
+			}
+		})
+	}
+}

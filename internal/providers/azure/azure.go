@@ -31,7 +31,8 @@ func (Mapper) Cloud() model.Cloud { return model.CloudAzure }
 // Interprets reports the resource types this mapper understands.
 func (Mapper) Interprets(resourceType string) bool {
 	switch resourceType {
-	case typeAccount, typeContainer, typeSecurityGroup, typeSecurityRule:
+	case typeAccount, typeContainer, typeSecurityGroup, typeSecurityRule,
+		typeSQLServer, typeSQLFirewallRule, typePostgresServer, typePostgresRule:
 		return true
 	}
 	return false
@@ -42,9 +43,12 @@ func (Mapper) Interprets(resourceType string) bool {
 // anonymous access would be reported nowhere at all.
 func (Mapper) IsSubject(resourceType string) bool {
 	switch resourceType {
-	case typeContainer, typeAccount, typeSecurityGroup:
+	case typeContainer, typeAccount, typeSecurityGroup,
+		typeSQLServer, typePostgresServer:
 		return true
 	}
+	// A firewall rule is a control: its meaning is the server's, and a rule
+	// written against a server the plan does not contain reaches nothing.
 	return false
 }
 
@@ -60,6 +64,8 @@ func (Mapper) FamilyOf(resourceType string) model.Family {
 		return model.FamilyObjectStorage
 	case typeSecurityGroup, typeSecurityRule:
 		return model.FamilyNetwork
+	case typeSQLServer, typeSQLFirewallRule, typePostgresServer, typePostgresRule:
+		return model.FamilyDatabase
 	default:
 		return model.FamilyUnknown
 	}
@@ -98,6 +104,9 @@ const attrTags = "tags"
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	if subject.Type == typeSecurityGroup {
 		return m.securityGroup(subject, related)
+	}
+	if subject.Type == typeSQLServer || subject.Type == typePostgresServer {
+		return m.database(subject, related, scope)
 	}
 
 	resource := model.NormalizedResource{
@@ -299,6 +308,12 @@ func (Mapper) Bindings() []declared.Binding {
 		// provider writes this relation. A rule written against a group the plan
 		// does not contain reaches nothing, which is the honest answer.
 		{From: typeSecurityRule, Attribute: "network_security_group_name", To: typeSecurityGroup},
+		// A firewall rule names the server it belongs to by id, which is
+		// unknown until apply -- so the configuration reference is the only link
+		// that survives planning. Each server type has its own rule resource,
+		// and a rule of the wrong type names a different server entirely.
+		{From: typeSQLFirewallRule, Attribute: attrServerID, To: typeSQLServer},
+		{From: typePostgresRule, Attribute: attrServerID, To: typePostgresServer},
 	}
 }
 

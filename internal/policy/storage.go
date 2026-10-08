@@ -77,10 +77,15 @@ func StorageExposure(contract intent.Contract, graph model.Graph) Result {
 
 		switch {
 		case capabilities.PublicAccess.IsKnown() && capabilities.PublicAccess.Get():
-			if declared != intent.ExposurePublic {
-				result.Findings = append(result.Findings,
-					publicFinding(resource, capabilities, declared))
-			}
+			// Reported whatever was declared. An author who wrote
+			// `exposure: public` gets INFO, which does not affect the decision,
+			// and the finding is what tells them which resources that
+			// declaration turned out to cover. Skipping it meant a contract
+			// written for one intentionally public bucket silenced every
+			// accidentally public one beside it, because an entry constrains
+			// every resource of its family and the contract cannot scope one.
+			result.Findings = append(result.Findings,
+				publicFinding(resource, capabilities, declared))
 		case capabilities.PublicAccess.IsKnown():
 			// The plan proves prevention. Nothing to report.
 		case capabilities.Withdrawn:
@@ -113,16 +118,24 @@ func StorageExposure(contract intent.Contract, graph model.Graph) Result {
 // private. Where the contract committed to private, the evidence contradicts it
 // and that is a block. Where the author explicitly declined to commit, the
 // change still needs a human, because "I have not decided" is not "go ahead".
+// Where the author declared public, the evidence agrees with them and the
+// finding is INFO: it affects no decision, and it is the only thing in the
+// bundle that says which resources that one declaration covered.
 func publicFinding(resource model.NormalizedResource, capabilities model.ObjectStorageCapabilities,
 	declared intent.Exposure) evidence.Finding {
 
 	disposition := evidence.DispositionWarn
 	claim := "The change grants public access to object storage, and the intent contract does not declare it."
 	remediation := "Declare the exposure in the intent contract, or remove the grant that exposes this storage publicly."
-	if declared == intent.ExposurePrivate {
+	switch declared {
+	case intent.ExposurePrivate:
 		disposition = evidence.DispositionBlock
 		claim = "The change grants public access to object storage the intent contract requires to be private."
 		remediation = "Remove the grant that exposes this storage publicly, or record the exposure as intended in the intent contract."
+	case intent.ExposurePublic:
+		disposition = evidence.DispositionInfo
+		claim = "The change grants public access to object storage, which the intent contract declares as intended."
+		remediation = "None required. The declaration covers every resource of this family in the plan, so check that public access is intended for this one and not only for the resource the declaration was written for."
 	}
 
 	return evidence.Finding{
@@ -241,7 +254,7 @@ func locate(sources []model.Provenance) []evidence.EvidenceRef {
 // it from the fact's own state marked every source of a redacted fact, which
 // told a reader that values the mapper had read in order to conclude were
 // secret.
-func referencesOf(fact model.Fact[bool]) []evidence.EvidenceRef {
+func referencesOf[T any](fact model.Fact[T]) []evidence.EvidenceRef {
 	canonical := fact.Canonical()
 
 	refs := make([]evidence.EvidenceRef, 0, len(canonical.Sources))

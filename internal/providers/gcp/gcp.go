@@ -40,7 +40,8 @@ func (Mapper) Cloud() model.Cloud { return model.CloudGCP }
 // Interprets reports the resource types this mapper understands.
 func (Mapper) Interprets(resourceType string) bool {
 	switch resourceType {
-	case typeBucket, typeIAMMember, typeIAMBinding, typeIAMPolicy, typeFirewall:
+	case typeBucket, typeIAMMember, typeIAMBinding, typeIAMPolicy, typeFirewall,
+		typeSQLInstance:
 		return true
 	}
 	return false
@@ -49,7 +50,11 @@ func (Mapper) Interprets(resourceType string) bool {
 // IsSubject reports the resources normalized in their own right: a bucket, and a
 // firewall, which on this cloud is a rule and a subject at once.
 func (Mapper) IsSubject(resourceType string) bool {
-	return resourceType == typeBucket || resourceType == typeFirewall
+	switch resourceType {
+	case typeBucket, typeFirewall, typeSQLInstance:
+		return true
+	}
+	return false
 }
 
 // FamilyOf names the family a resource type belongs to.
@@ -64,6 +69,8 @@ func (Mapper) FamilyOf(resourceType string) model.Family {
 		return model.FamilyObjectStorage
 	case typeFirewall:
 		return model.FamilyNetwork
+	case typeSQLInstance:
+		return model.FamilyDatabase
 	default:
 		return model.FamilyUnknown
 	}
@@ -96,6 +103,9 @@ const attrLabels = "labels"
 
 // Map normalizes a bucket together with the IAM resources bound to it.
 func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
+	if subject.Type == typeSQLInstance {
+		return m.database(subject)
+	}
 	if subject.Type == typeFirewall {
 		return m.firewall(subject, scope)
 	}

@@ -44,28 +44,66 @@ Measured against `terraform providers schema -json` and against genuine
 `terraform plan` output, not against documentation prose. Milestone 08 shipped
 three defects that came from reading docs instead of plans.
 
-- **AWS is the easy cloud this time.** `publicly_accessible` is `Optional` and
-  *not* `Computed`: a real plan emits `false` when it is unwritten, which is both
-  the provider's default and the safe one. No configuration guard is needed.
+- **AWS is the easy cloud for a plain instance and not for Aurora.** On
+  `aws_db_instance`, `publicly_accessible` is `Optional` and *not* `Computed`: a
+  real plan emits `false` when it is unwritten, which is both the provider's
+  default and the safe one, and no configuration guard is needed there.
+  - On `aws_rds_cluster_instance` it is `Optional` **and `Computed`**, and a real
+    plan emits it **unknown** when unwritten. That is milestone 08's worst trap
+    again, so the Aurora path does need `declared.Unwritten` — a mapper built on
+    the first sentence alone would answer UNKNOWN for every idiomatic Aurora
+    instance. An independent review found this stated the other way round here,
+    and the schema and a real plan both contradicted it.
 - **AWS splits the switch away from the cluster.** `aws_rds_cluster` has no
   `publicly_accessible` at all; `aws_rds_cluster_instance` does. An Aurora
   cluster is reachable through its instances, so the subject is the instance and
   a cluster with no instance in the plan settles nothing.
-- **GCP repeats milestone 08's worst trap.** An instance that writes no
-  `ip_configuration` emits the whole block as *unknown*, and Google's documented
-  default for `ipv4_enabled` is a public IP. `declared.Unwritten` is exactly the
-  question this needs, and it already exists.
+- **GCP repeats milestone 08's worst trap, one level deeper than the machinery
+  reached.** An instance that writes no `ip_configuration` emits the whole block
+  as *unknown*, and Google's documented default for `ipv4_enabled` is a public IP.
+  `declared.Unwritten` is the question this needs -- but the switch sits at
+  `settings.ip_configuration.ipv4_enabled`, three levels down, and `Stated`
+  recorded only top-level arguments. Measured on a real plan, an instance writing
+  no `ip_configuration` and one writing `ipv4_enabled` from an unresolvable value
+  produced the identical `[database_version name settings]`, so the default and
+  the gap were indistinguishable. `Stated` records nested arguments by their path
+  now; the configuration walker already built those paths for the references it
+  finds, so only the recording had stopped at the top.
 - **Azure's allow list is not CIDR.** A firewall rule is `start_ip_address` and
   `end_ip_address`, both Required. `0.0.0.0` to `255.255.255.255` is the whole
   internet, and the well-known `0.0.0.0`–`0.0.0.0` rule means "Azure services"
   rather than one host. `declared.SetReach` is already interval arithmetic
   internally, so a range maps onto it without a second implementation.
-- **`port` is never in the plan.** It is `Optional` and `Computed` on every AWS
-  database resource and comes back unknown on a create even when `engine` is
-  written. Any design that needs the port has to get it from somewhere else.
+- **`port` is usually not in the plan, and "never" was wrong.** `Optional` and
+  `Computed` on `aws_db_instance` and `aws_rds_cluster`, and `Computed` only --
+  not settable at all -- on `aws_rds_cluster_instance`. It comes back unknown on
+  a create *when nobody writes it*, even with `engine` written, so a design that
+  needs the port has to get it from somewhere else. This section originally said
+  the attribute is never in the plan and that the conclusion held for all three;
+  an independent review disproved the first half. An author who writes `port`
+  states it, the plan carries it, and the mapper reads it in preference to the
+  engine table -- a stated fact outranks a documented default, and the earlier
+  reading would have ignored a Postgres instance deliberately moved to 5433. The
+  conclusion survives only where the attribute cannot be written, which is
+  `aws_rds_cluster_instance`.
 - **Azure cannot be planned offline**, as in milestone 08: the provider acquires
   an AAD token before it finishes building. Its fixtures come from the
   authoritative schema and say so.
+- **For Aurora the two halves live on two different resources.** Measured against
+  the schema: `aws_rds_cluster_instance` has `publicly_accessible` and **no**
+  `vpc_security_group_ids`; `aws_rds_cluster` has `vpc_security_group_ids` and
+  **no** `publicly_accessible`. So the endpoint switch is on the instance and the
+  allow list is on the cluster, and reaching one from the other takes two hops --
+  instance to cluster by `cluster_identifier`, cluster to security group by
+  `vpc_security_group_ids`. A subject's `related` carries one hop, so the mapper
+  needs `scope`, which `Map` already receives. This was not in the design and is
+  the kind of thing only a real plan says.
+- **`vpc_security_group_ids` is Optional and Computed, so it is unknown even when
+  unwritten.** The configuration is what separates "the author named no group",
+  where AWS assigns the default VPC security group that is not in the plan, from
+  "the author named one the plan cannot resolve". `declared.Unwritten` answers it,
+  and both answers are the same verdict for different reasons -- which is exactly
+  the distinction milestone 08 learned to keep.
 
 ## Product decisions taken before implementation
 
@@ -80,7 +118,13 @@ three defects that came from reading docs instead of plans.
   question is binary: reachable from the internet, or not. Ports belong to the
   `network` family, where the author is describing a service they chose to
   publish; nobody publishes a database port on purpose and then wants to name it.
-  Intent Contract becomes `1.2`; `1.1` and `1.0` keep loading.
+  Intent Contract becomes `1.2`; `1.1` and `1.0` keep loading. The bump is a
+  statement about what a reader of the contract may expect and **gates nothing**:
+  validation is version-independent, so a `1.0` document declaring a `database`
+  entry is accepted. That is deliberate — the same reading that accepts
+  `public_ports` in a `1.0` contract, recorded in `INTENT-CONTRACT.md` — but it
+  is worth saying beside a sentence that reads as though the minor versions
+  differed in capability.
 - **Severity is `HIGH`, not `CRITICAL`.** Public object storage is `CRITICAL`
   because it exposes the data itself to anyone; a reachable database still
   demands credentials, so it is one layer of several — the same reading network
@@ -145,10 +189,126 @@ choice most likely to be wrong in practice.
    arithmetic `declared.SetReach` already uses.
 8. An Aurora cluster whose instances are not in the plan settles nothing, and
    says so.
-9. The declared exposure changes the disposition and not the finding.
+9. The declared exposure changes the disposition and not the finding. (Held as
+   written only after review round 3: `exposure: public` had been skipping the
+   finding entirely in this family and in object storage, so one declaration
+   written for an intentionally public resource silenced every accidental one
+   beside it. Both families report it at `INFO` now, which affects no decision.)
 10. Object-storage and network verdicts are unchanged: every committed fixture
     produces the bundle it produced before this milestone, proven by comparing
     binaries built at both ends.
+
+## Limitations as built
+
+Written after the implementation, from what the tests and fixtures measure rather
+than from what the design intended.
+
+- **The port is read from the engine where the plan does not state it.** The table
+  is closed and documented, and an engine outside it leaves the port undetermined.
+  An undetermined port makes any public ingress count as possibly reaching the
+  database, which over-reports, and the approximation is recorded beside the
+  verdict. In the other direction, a database that reads as unreachable *because*
+  of an engine-derived port carries a non-required unknown saying so.
+- **The port reaches no decision on Azure or GCP.** It is consulted only when
+  resolving a gate, which walks `GatedBy` -- so on a cloud where the mapper
+  answers the admission from inside the subject, the port is reported and nothing
+  compares it. Both clouds disclose that the port is undetermined where it is;
+  neither claims the verdict rests on it.
+- **Closure is never provable on Azure.** The firewall rules are separate
+  resources, so a set that looks closed may be missing one declared elsewhere.
+  The same asymmetry milestone 08 has, for the same reason.
+- **One Azure fixture's shape is unverified.** `sql-switch-absent` encodes the
+  endpoint switch stated in neither half of the change. The attribute is Optional
+  and not Computed, and the analogous AWS attribute was measured stating a
+  determined `false` when unwritten -- so a real plan may always state it and this
+  shape may not occur. If so, the fixture defends a path nothing reaches and the
+  `UNKNOWN` over-reports. Measuring it needs a tenant.
+- **An AWS allow list is never provably complete, and this build reports it as
+  complete anyway.** `vpc_security_group_ids` is a list, and a security group
+  written as a literal identifier -- `["sg-0abc"]` -- leaves no reference in the
+  plan at all. Measured: a list holding one reference and one literal records
+  exactly what a list holding one reference records, so the two are
+  indistinguishable. A database whose referenced groups all read as closed is
+  therefore reported as not reachable, with a non-required unknown saying a group
+  named by identifier could admit more -- which means a plan where the literal
+  group is open to the world gives `PASS`, exit 0.
+
+  Taken as a decision rather than left as an oversight. It is the same bargain the
+  network family already strikes for a proven closure, and the alternative --
+  never proving closure on this cloud -- would make every AWS database behind
+  closed security groups `UNKNOWN`, including the correctly private ones, which
+  reverses a round-1 fix taken for exactly that reason. The bound is in the
+  bundle and the asymmetry is now in `PRODUCT.md`, where a reader of a `PASS` can
+  find it.
+- **`declared.Targets` cannot tell a conditional inside a list from a list
+  literal.** Both record the same way in the configuration, so both branches are
+  returned. A gate can only open the question, never close it, so the
+  over-reporting is safe -- but the set is not exact and the AWS mapper bounds it
+  rather than presenting it as exact.
+- **A cluster whose instances are not in the plan settles nothing**, and says so.
+  An Aurora cluster is reachable through its instances, and the endpoint switch is
+  on the instance.
+- **Criterion 5 held behaviourally, and not as a claim about files.** The
+  behavioural half was re-measured at every stage and holds: `internal/policy/
+  network.go` is untouched, `NetworkExposure` is untouched, and binaries built at
+  `d6734ec` and at the end of this milestone produce byte-identical JSON for all
+  249 pre-existing plan fixtures. No network verdict changed.
+
+  Three shared files did change, and the accounting took three attempts to get
+  right. `internal/policy/storage.go`, one line, when `referencesOf` was made
+  generic -- an earlier commit claimed storage was untouched and was wrong.
+  `internal/terraformplan/config.go`, +155/−13, which the network family reads
+  through `declared.Unwritten`; it is behaviour-preserving for network because
+  `collectArguments` only ever *adds* dotted paths and every network query is
+  dot-free, which a review proved two independent ways. And
+  `internal/model/network.go` +19 with `internal/providers/aws/network.go` +5,
+  for `RangesPartial` -- the one change that was forced by a defect rather than by
+  convenience.
+
+  That last one is what the criterion was really testing. The AWS network mapper
+  prefers a proven grant over an unread rule, which is sound for the boolean
+  milestone 08 asked for. The database family compares a *port* against the range
+  set, and nothing in the capability could say the set was short -- so a group
+  with one unreadable rule in front of a publicly accessible Postgres instance
+  came out PASS, exit 0. A capability describing a set as a boolean plus a list of
+  ranges has no way to say the list is incomplete, and it took a second family
+  asking a sharper question to find that out.
+- **`model.NormalizedResource.Removed` is set only by the database mappers**, and
+  the justification first written for that was wrong. It said the other two
+  families "have never needed it... for no behaviour". Measured: a delete-only
+  bucket raises a **required** `STORAGE_PUBLIC_DETERMINABLE` and exits 4, while a
+  delete-only database raises nothing. So the behaviour is not the same, and the
+  asymmetry is real rather than absent -- it is simply in the restrictive
+  direction for storage, which is why it is a limitation and not a hole. Nothing
+  reads `Removed` outside the database rule, and there is no mechanical guard
+  against a future rule reading it on a family that never sets it; `false` is the
+  dangerous default there.
+- **The actionable half of `CORRELATION_UNRESOLVED` reaches object storage only.**
+  `internal/providers/mapper.go` injects it for resources carrying object-storage
+  capabilities. Milestone 08 did not extend it to the network family and this one
+  did not extend it to databases, so a subject of either whose correlation the
+  normalizer dropped gets its family's own "cannot be settled" control without the
+  sentence telling the reader to name the instance outright. Extending it means
+  giving each capability a place for a control the normalizer rather than the
+  mapper discovered, which is a change to all three and worth its own milestone
+  rather than a fourth special case.
+- **`nesting_mode: single` blocks are read now and were not.** A block declared
+  single is a bare object rather than an array of one, which this package's
+  grammar comment stated as impossible. `timeouts.create` was reported unwritten
+  although the author wrote it. Measured across the three providers, every single-
+  nested block is `timeouts` and none can hold a reference, so the half of the fix
+  that recovers references is defensive; the half that records arguments is live.
+- **No finding carries a verification method.** CLAUDE.md's definition of
+  trustworthy output requires one of every finding, and no family has ever emitted
+  one -- the `d6734ec` binary behaves the same way, so this predates the branch.
+  Adding the field is a change to a public, versioned format and belongs to a
+  milestone that decides what the values are, not to this one.
+- **`google_sql_database_instance.unnameable_version` is nameable.** The fixture
+  resource's address is a leftover from a shape that turned out not to exist:
+  every Cloud SQL version family is one the port table names, and its
+  `database_version` is `SQLSERVER_2022_EXPRESS`, which maps to 1433. The test and
+  the cloud's README both say so; the address does not, and renaming a resource
+  inside committed real plan output would make it no longer the provider's bytes.
 
 ## Out of scope
 
@@ -162,8 +322,35 @@ until the shape is proven on the three above.
 
 ## Prerequisites
 
-Milestones 03, 04 and 08. This milestone adds no new machinery of its own: it
-uses `declared.Unwritten` for the GCP default, `declared.Target` for the
+Milestones 03, 04 and 08. The plan said this milestone adds no new machinery of
+its own -- `declared.Unwritten` for the GCP default, `declared.Target` for the
 correlation, `declared.SetReach` for the address arithmetic, and milestone 08's
-security-group resolution unchanged. If it needs any of them changed, that is a
-finding about the architecture and is worth more than the family.
+security-group resolution unchanged -- and added that if it needed any of them
+changed, that would be a finding about the architecture worth more than the
+family.
+
+It needed three of the four changed. Measured with `git diff --numstat`:
+
+| the plan said | as built |
+| --- | --- |
+| `declared.Unwritten` for the GCP default | **required reimplementing** `terraformplan.statedArguments` as `collectArguments`, because `Stated` recorded only top-level arguments and the Cloud SQL switch is three levels down. `config.go` +155/−13. Read by the network family through `declared.Unwritten`. |
+| `declared.Target` for the correlation | **insufficient.** The attribute is a list, and the singular `Target` reported every database with more than one group as undecidable. New `Targets`, `Resolve`, `matchesKeys`, `splitKeys`, `namesType`: `target.go` +148/−2. |
+| `declared.SetReach` for the address arithmetic | **insufficient.** Azure's grammar is a start/end pair and not a prefix. New `AddressRange`, `RangeReach`, `value`: `setreach.go` +67. The genuine reuse is `covers`, the sweep both grammars reach. |
+| milestone 08's security-group resolution unchanged | **true for the resolution, and the shared vocabulary was one fact short.** See criterion 5 below. |
+
+Plus `ResourceChange.Opaque` and `DrawsOnOpaque` (`plan.go` +26),
+`NormalizedResource.Removed` (`resource.go` +29/−3), `declared.DatabasePort` (79
+lines, which *was* a declared product decision), `declared.Removed`/`Unstated`
+(48 lines), and `NetworkCapabilities.RangesPartial` (`model/network.go` +19).
+
+The family's own production code is about 1,700 lines across seven files. Of what
+it added outside that, the majority is general-purpose machinery in packages the
+other two families read -- which makes the answer to "composition or third
+column" a split one: a **genuine composition at the policy seam**, where
+`GatedBy` holds addresses and the rule resolves them through the network family's
+own facts, and a **third column in `declared/` and `terraformplan/`**, where the
+shared vocabulary had to grow for a second family to ask a sharper question of
+the same data.
+
+That split is the architectural finding this section asked for, and it is worth
+more than the family.

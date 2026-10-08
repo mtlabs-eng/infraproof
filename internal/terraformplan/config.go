@@ -47,7 +47,7 @@ func parseConfiguration(document map[string]any, errs *[]error) (map[string]Prov
 	// form of every reference, and also names variables, count.index and
 	// each.key, none of which is a resource.
 	for address, resource := range byAddress {
-		resource.references = resolveReferences(resource.references, byAddress)
+		resource.references, resource.opaque = resolveReferences(resource.references, byAddress)
 		byAddress[address] = resource
 	}
 	return configs, byAddress, calls
@@ -59,24 +59,51 @@ type configResource struct {
 	repeated          bool
 	references        []ExpressionReference
 	stated            []string
+	opaque            []string
 	// recorded reports that the entry carries an expressions object, which is
 	// what makes stated an answer rather than a silence.
 	recorded bool
 }
 
-func resolveReferences(refs []ExpressionReference, byAddress map[string]configResource) []ExpressionReference {
+func resolveReferences(refs []ExpressionReference,
+	byAddress map[string]configResource) ([]ExpressionReference, []string) {
+
 	if len(refs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	out := make([]ExpressionReference, 0, len(refs))
+	opaque := map[string]bool{}
 	for _, ref := range refs {
 		if _, declared := byAddress[ref.Target]; declared {
 			out = append(out, ref)
+			continue
+		}
+		// Dropped. Most drops are ordinary: Terraform emits the attribute form
+		// of every reference beside the bare one, and `aws_security_group.a.id`
+		// names no resource while `aws_security_group.a` does. Those say nothing
+		// new.
+		//
+		// A drop that names nothing declared at any depth is the signal: the
+		// argument's value draws on a variable, a local, a module output or a
+		// literal, which this plan does not describe. The filter is right and
+		// the loss of that fact was not -- a list with one placeable reference
+		// and one variable read as a complete list.
+		if ref.Attribute != "" && !namesSomethingDeclared(ref.Target, byAddress) {
+			opaque[ref.Attribute] = true
 		}
 	}
+
+	drew := make([]string, 0, len(opaque))
+	for attribute := range opaque {
+		drew = append(drew, attribute)
+	}
+	slices.Sort(drew)
+	if len(drew) == 0 {
+		drew = nil
+	}
 	if len(out) == 0 {
-		return nil
+		return nil, drew
 	}
 
 	slices.SortFunc(out, func(a, b ExpressionReference) int {
@@ -91,7 +118,7 @@ func resolveReferences(refs []ExpressionReference, byAddress map[string]configRe
 	return slices.CompactFunc(out, func(a, b ExpressionReference) bool {
 		return a.Attribute == b.Attribute && a.Target == b.Target &&
 			slices.Equal(a.TargetKeys, b.TargetKeys)
-	})
+	}), drew
 }
 
 func parseProviderConfigs(configuration map[string]any, errs *[]error) map[string]ProviderConfig {
@@ -240,6 +267,27 @@ func recordsArguments(fields map[string]any) bool {
 	return ok
 }
 
+// namesSomethingDeclared reports that a reference target, or any prefix of it,
+// is a resource the configuration declares.
+//
+// Terraform writes the attribute form of a reference beside the bare one, so a
+// target like `aws_security_group.a.id` is dropped as a matter of course while
+// `aws_security_group.a` is kept. Treating the first as evidence that an
+// argument drew on something outside the configuration would mark every argument
+// that references anything at all.
+func namesSomethingDeclared(target string, byAddress map[string]configResource) bool {
+	for {
+		if _, declared := byAddress[target]; declared {
+			return true
+		}
+		cut := strings.LastIndex(target, ".")
+		if cut <= 0 {
+			return false
+		}
+		target = target[:cut]
+	}
+}
+
 // statedArguments names every argument a resource's configuration writes.
 //
 // The keys of the expressions object are the arguments the author wrote as
@@ -270,12 +318,70 @@ func statedArguments(fields map[string]any) []string {
 	if len(body) == 0 {
 		return nil
 	}
-	names := make([]string, 0, len(body))
-	for name := range body {
-		names = append(names, name)
+	names := map[string]bool{}
+	collectArguments("", body, names)
+	if len(names) == 0 {
+		return nil
 	}
-	slices.Sort(names)
-	return names
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// collectArguments records an argument's name and descends into nested blocks,
+// naming each by the path the configuration nests it at.
+//
+// An attribute inside a nested block has the same two meanings for an unknown
+// value as a top-level one: the author omitted it and a provider default
+// applies, or the author wrote it from something unresolvable and nothing does.
+// Cloud SQL puts the switch deciding whether a database has a public IP three
+// levels down, and recording only the top level made an instance that writes it
+// and one that does not identical -- which is the shape milestone 08's worst
+// defect had.
+//
+// The index is deliberately not part of the path. The configuration nests blocks
+// as arrays, and an argument written in the second `ingress` block is the same
+// argument as one written in the first; a caller asking whether the author wrote
+// it should not have to know how many blocks there were. The consequence is that
+// an argument written in *any* instance of a repeated block counts as written,
+// which is the conservative reading: it withholds a default rather than applying
+// one on the strength of a silence that was not total.
+func collectArguments(prefix string, body map[string]any, into map[string]bool) {
+	for name, entry := range body {
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		into[path] = true
+
+		if single, ok := entry.(map[string]any); ok && !isExpression(single) {
+			// A block with `nesting_mode: single` is written as a bare object
+			// rather than as an array of one. Recording the block and stopping
+			// made `timeouts.create` absent from Stated although the author
+			// wrote it, which is how a provider default is applied over
+			// something somebody wrote.
+			collectArguments(path, single, into)
+			continue
+		}
+
+		elements, nested := entry.([]any)
+		if !nested {
+			continue
+		}
+		for _, element := range elements {
+			block, ok := element.(map[string]any)
+			if !ok {
+				// parseExpressions reports the malformed shape; naming the
+				// arguments of something that is not a block is not this
+				// function's to invent.
+				continue
+			}
+			collectArguments(path, block, into)
+		}
+	}
 }
 
 // parseExpressions reads every reference a resource's configuration makes:
@@ -320,9 +426,24 @@ func parseExpressions(path string, fields map[string]any, addressPrefix string, 
 	return preferKeyed(refs)
 }
 
-// expressionBlock walks one level of a configuration body. An attribute is an
-// object; a nested block is an array of objects, one per block written, and may
-// nest further.
+// expressionBlock walks one level of a configuration body.
+//
+// Three shapes, not two. An attribute is an object carrying `constant_value`
+// and/or `references`. A block with `nesting_mode: list` or `set` is an array of
+// objects, one per block written. A block with `nesting_mode: single` -- which
+// `timeouts` is, and hundreds of other blocks across the providers -- is a bare
+// object, indistinguishable from an attribute expression by its type alone.
+//
+// Telling the third from the first used to be impossible here, because the code
+// did not know the third existed: a single-nested block went to the attribute
+// reader, which looks for a `references` key that is not there, so every
+// reference inside one was dropped in silence.
+//
+// They are told apart by their keys, which is Terraform's encoding and is
+// ambiguous at the edge: a provider attribute literally named `references` or
+// `constant_value` would be read as an expression. That ambiguity belongs to the
+// format rather than to this reader, and saying so is better than claiming the
+// grammar has two cases.
 func expressionBlock(path, prefix string, body map[string]any, addressPrefix string, errs *[]error) []ExpressionReference {
 	var refs []ExpressionReference
 
@@ -335,6 +456,10 @@ func expressionBlock(path, prefix string, body map[string]any, addressPrefix str
 
 		switch typed := entry.(type) {
 		case map[string]any:
+			if !isExpression(typed) {
+				refs = append(refs, expressionBlock(entryPath, attribute, typed, addressPrefix, errs)...)
+				continue
+			}
 			refs = append(refs, expressionReferences(entryPath, attribute, typed, addressPrefix, errs)...)
 		case []any:
 			for i, element := range typed {
@@ -471,6 +596,7 @@ func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
 		change.References = configured.references
 		change.Configured = configured.recorded
 		change.Stated = configured.stated
+		change.Opaque = configured.opaque
 	}
 }
 
@@ -561,4 +687,20 @@ func stripIndexKeys(address string) string {
 		}
 	}
 	return out.String()
+}
+
+// isExpression reports that a configuration object is one attribute's expression
+// rather than a block written with `nesting_mode: single`.
+//
+// An expression carries `constant_value`, `references`, or both, and nothing
+// else. A block carries attribute names. An empty object states nothing either
+// way and is read as an expression, because that is the reading under which it
+// records no argument and names no reference -- the answer that invents least.
+func isExpression(body map[string]any) bool {
+	for name := range body {
+		if name != "constant_value" && name != "references" {
+			return false
+		}
+	}
+	return true
 }

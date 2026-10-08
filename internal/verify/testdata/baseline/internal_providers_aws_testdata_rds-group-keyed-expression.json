@@ -1,0 +1,260 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:333398ca0ec3478cf2ba7a5c39172b8ec821dbc270c8be312d7e251403f8e8c8"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.each[\"eu\"]",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/5432"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"eu\"]",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"eu\"]",
+          "path": "ingress[0].cidr_blocks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"eu\"]",
+          "path": "ingress[0].protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.each[\"us\"]",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/5432"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"us\"]",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"us\"]",
+          "path": "ingress[0].cidr_blocks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"us\"]",
+          "path": "ingress[0].protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN",
+      "required": false,
+      "reason": "The security groups that decide who may reach this database are named partly from something this plan does not describe, so the groups it does name are part of the list rather than the list.",
+      "resource_address": "aws_db_instance.each[\"eu\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.each[\"eu\"]",
+          "path": "vpc_security_group_ids",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN",
+      "required": false,
+      "reason": "The security groups that decide who may reach this database are named partly from something this plan does not describe, so the groups it does name are part of the list rather than the list.",
+      "resource_address": "aws_db_instance.each[\"us\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.each[\"us\"]",
+          "path": "vpc_security_group_ids",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.each[\"eu\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"eu\"]",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.each[\"us\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"us\"]",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: it has an endpoint outside the private network, and the plan does not state whether anything admits every address to it.",
+      "resource_address": "aws_db_instance.each[\"eu\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.each[\"eu\"]",
+          "path": "publicly_accessible",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: it has an endpoint outside the private network, and the plan does not state whether anything admits every address to it.",
+      "resource_address": "aws_db_instance.each[\"us\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.each[\"us\"]",
+          "path": "publicly_accessible",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_db_instance.each[\"eu\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.each[\"eu\"]",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_db_instance.each[\"us\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.each[\"us\"]",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.each[\"eu\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"eu\"]",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.each[\"us\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.each[\"us\"]",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

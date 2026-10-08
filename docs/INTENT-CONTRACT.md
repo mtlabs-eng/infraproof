@@ -8,12 +8,12 @@ The Intent Contract is a structured document confirmed by a human. It records wh
 
 **This build reads JSON only.** YAML is the intended authoring format and remains the direction, but Go has no YAML reader in its standard library, and this project declares no external dependencies. Adding one would put third-party parsing code on a file the user controls, which is the surface the offline-first design exists to avoid. YAML is therefore deferred to its own milestone rather than bought on credit, and a YAML file handed to `check` is refused by name rather than failing as a JSON syntax error.
 
-The example below is written in YAML because it is the clearer form to read. `examples/intent.json` is the same contract in the format this build accepts.
+The example below is written in YAML because it is the clearer form to read, and it shows every family at once. `examples/intent.json` is a smaller contract in the format this build accepts — the one the README runs against `examples/tfplan.json`, which is why it declares only the family that plan contains. A contract declaring a family the change gives nothing to apply to produces `UNKNOWN`, for the reason recorded below, so an example contract and an example plan have to be written for each other.
 
 ## Version 1 example
 
 ```yaml
-schema_version: "1.1"
+schema_version: "1.2"
 change_id: add-private-staging-assets
 environment: staging
 allowed_clouds:
@@ -26,6 +26,9 @@ resources:
   - family: network
     public_ports: ["443"]
     purpose: public web tier
+  - family: database
+    exposure: private
+    purpose: orders
 constraints:
   allowed_regions:
     - eu-west-1
@@ -57,6 +60,14 @@ public_ports: ["443", "80", "8000-8100"]   # ports that may be reachable from an
 purpose: optional string
 ```
 
+```text
+family: database
+exposure: private | public | unspecified
+purpose: optional string
+```
+
+The `database` family declares an exposure and not ports, which is a decision about what an author is in a position to state. A `network` entry describes a service somebody chose to publish, so naming its ports is the statement. Nobody publishes a database port on purpose and then wants to name it, so the question is binary: reachable from the internet, or not. The port the rule reasons about is the one the database listens on, which the author does not choose and the plan usually does not state -- so it is read from the engine rather than declared.
+
 An entry carrying the other family's field is refused rather than ignored. `exposure: private` beside a port that may be public states two things that can contradict each other, and deciding which one wins is worse than refusing the pair — a reader would otherwise believe the one that was ignored.
 
 `public_ports` takes single ports and inclusive ranges. A port outside 0–65535, a range that runs backwards, and anything that is not a port number are all invalid contracts: a declaration nobody can read is one its author fixes, where one quietly emptied permits nothing while appearing to permit something.
@@ -67,7 +78,7 @@ What a declaration permits is the **union** of its ranges. `["80", "81"]` has de
 
 Presence is not length. `public_ports: []` is the most restrictive thing the field can say — no port may be reachable from any address — and an omitted entry is the absence of a statement, under which public ingress needs a human rather than being permitted or forbidden. Silence is not permission.
 
-`unspecified` is explicit uncertainty: the author considered exposure and declined to commit, and no exposure rule is applied. An omitted required field is an invalid contract — a contract that did not say what it permits is not read as permitting anything.
+`unspecified` is explicit uncertainty: the author considered exposure and declined to commit. The exposure rule still runs and still reports what the change permits — a publicly reachable bucket or database is named in the bundle — and what `unspecified` changes is the disposition: nothing it reports blocks, and an undetermined answer is not a required unknown. This document said no rule is applied, which measurement disproves; the finding is there, at a disposition that does not move the exit code. Reporting it is the point. An author who declined to commit on exposure is the reader most likely to want to know what the change actually permits. An omitted required field is an invalid contract — a contract that did not say what it permits is not read as permitting anything.
 
 A resource entry carries no address, and resource cardinality is deferred below. An entry therefore constrains **every** resource of its family in the plan. That is the only reading which does not require the cardinality this contract cannot yet express, and it fails safe: adding a resource to a plan does not escape a declared intent.
 
@@ -77,9 +88,12 @@ An entry is also a requirement to be exercised, not only a constraint to be sati
 
 - A plan affecting a cloud outside `allowed_clouds` is a blocking mismatch.
 - A provably public object-storage resource contradicting `exposure: private` is blocking.
+- A provably public resource is **reported whatever the contract declared**, and the declaration changes only the disposition: blocking under `private`, needing a human under `unspecified` or under no entry at all, and informational under `public`. An informational finding affects no decision, so an author who declared public exposure still gets a `PASS` — what they also get is a list of which resources that declaration turned out to cover. A resource entry carries no address, so one entry written for an intentionally public resource applies to every resource of its family in the plan; without the finding, that entry silently covered the accidental ones too.
 - An unknown exposure for a required private resource produces `UNKNOWN`.
 - A change permitting ingress from any address on a port `public_ports` does not cover is blocking. The claim is about the change, not about reachability: whether anything becomes reachable depends on an attachment that is usually not in the plan, and that limit is reported beside the finding rather than folded into it.
 - A change permitting such ingress where the contract declares no `network` entry needs a human, because silence is not permission.
+- A change making a database reachable from any address contradicts `exposure: private` and is blocking. Reachable means **both** halves: an endpoint outside the private network *and* something admitting every address to it. Neither alone is reported, because an endpoint nobody is admitted to reaches nothing and an allow list in front of no endpoint reaches nothing either — and reporting either alone would produce a finding on the ordinary shape, which is how a tool teaches people to ignore it.
+- A plan holding one half of that pair and not the other produces `UNKNOWN`, naming which half is missing. On AWS this is the common case rather than the exception: the allow list is a security group, which is usually declared in another module. That unknown changes the decision only under `exposure: private`, for the reason recorded below about every declaration: an author who did not ask for privacy is not waiting on evidence of it, and requiring it would make most AWS plans `UNKNOWN`.
 - A change permitting ingress on a protocol with no ports — ICMP, or a spelling this build does not recognize — needs a human too. A port list can neither permit nor forbid it, and this build will not decide on its own that ping from the internet is a violation.
 - An ingress rule set the plan does not contain in full produces `UNKNOWN`. A grant can be proven from part of a set; closure cannot.
 - A destructive action with `destructive_changes: forbidden` is blocking.
@@ -88,9 +102,9 @@ An entry is also a requirement to be exercised, not only a constraint to be sati
 
 ## Compatibility
 
-The major version is the boundary. `public_ports` and the `network` family arrived in `1.1`; a `1.0` contract is still read, because a minor addition cannot change what an earlier contract meant. A later major version is refused rather than read partially, since it may redefine a field this build believes it understands.
+The major version is the boundary. `public_ports` and the `network` family arrived in `1.1`, and the `database` family in `1.2`; a `1.0` contract is still read, because a minor addition cannot change what an earlier contract meant. A later major version is refused rather than read partially, since it may redefine a field this build believes it understands.
 
-Both directions are read, including the awkward one. A `1.0` contract that carries `public_ports` is accepted and the field takes effect, even though the document claims to predate it. The version says which fields a reader may expect, not which ones are forbidden, and the field is an explicit statement by an author: refusing it would refuse intent on a technicality, and silently dropping it would be worse — the contract would then permit less than what was written, with nothing said about it.
+Both directions are read, including the awkward one. A `1.0` contract that carries `public_ports`, or a `database` entry, is accepted and takes effect, even though the document claims to predate it. The version says which fields a reader may expect, not which ones are forbidden, and the field is an explicit statement by an author: refusing it would refuse intent on a technicality, and silently dropping it would be worse — the contract would then permit less than what was written, with nothing said about it.
 
 ## What this build does not evaluate
 

@@ -197,6 +197,32 @@ type ResourceChange struct {
 	// when it is set from something undetermined, where nothing does. The plan
 	// gives the two the same shape; this is the only thing that separates them.
 	Stated []string
+	// Opaque are the arguments whose value this resource's configuration draws,
+	// in part, from something the configuration does not declare as a resource:
+	// a variable, a local, a module output, an id written as a literal.
+	//
+	// References deliberately drops those -- correlation is about resources, and
+	// a variable correlates nothing -- which destroyed the one signal that tells
+	// a half-described list from a fully described one. `concat([aws_security_group.a.id],
+	// var.extra)` leaves exactly one placeable reference, and reading that as the
+	// whole allow list reported a database behind an unknown security group as
+	// private.
+	//
+	// Sorted, and nil when Configured is false: a plan that records no
+	// configuration answers nothing about what an argument drew on, and
+	// answering no would be saying the list is complete.
+	Opaque []string
+}
+
+// DrawsOnOpaque reports whether an argument's value comes, in part, from
+// something the configuration does not declare as a resource.
+//
+// False when the plan carries no configuration for the resource, for the reason
+// States is: a question nobody recorded is not a question answered no. A caller
+// deciding that a set is complete has to consult Configured first.
+func (c ResourceChange) DrawsOnOpaque(attribute string) bool {
+	_, found := slices.BinarySearch(c.Opaque, attribute)
+	return found
 }
 
 // States reports whether the configuration writes an argument.

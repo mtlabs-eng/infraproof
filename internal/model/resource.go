@@ -11,6 +11,11 @@ const (
 	// resource: security groups, network security groups, firewalls, and the
 	// rule resources that belong to them.
 	FamilyNetwork Family = "network"
+	// FamilyDatabase covers managed relational databases and the controls over
+	// their reachability. It is the first family whose answer is the
+	// conjunction of two others' shapes: a switch, as object storage has, and
+	// an allow list, as network exposure has.
+	FamilyDatabase Family = "database"
 	// FamilyUnknown covers every resource no mapper claimed. Such a resource is
 	// retained rather than dropped, and must never read as one that was
 	// examined and found safe.
@@ -29,6 +34,32 @@ type NormalizedResource struct {
 	// Destructive reports that the change destroys the existing object, which
 	// covers a plain delete and both replace orderings.
 	Destructive bool
+	// Removed reports that the change destroys the object and does not recreate
+	// it, which Destructive alone cannot say: a replacement destroys and the
+	// object is there afterwards.
+	//
+	// It matters because every rule in this build asserts what a change
+	// *permits*, and a change that removes a resource permits nothing through
+	// it. A destroy-only change states no attributes and records no
+	// configuration, so without this the database rule reported a database
+	// being deleted as one whose reachability could not be determined -- with
+	// two sentences that were untrue of it.
+	//
+	// Set by the mappers that have a rule reading it, which is the database
+	// family. The justification first written here was that the other two
+	// families "have never needed it, for no behaviour", and a review measured
+	// that wrong: a delete-only bucket raises a required
+	// STORAGE_PUBLIC_DETERMINABLE and exits 4, while a delete-only database
+	// raises nothing. The behaviour differs. It differs in the restrictive
+	// direction for storage -- a bucket going away is reported as a bucket whose
+	// exposure nobody could determine -- so it is a limitation rather than a
+	// hole, and it is recorded as one in the milestone.
+	//
+	// Nothing outside the database rule reads this field. There is no mechanical
+	// guard against a future rule reading it on a family that never sets it, and
+	// false is the dangerous default: it means "not removed", so a rule reading
+	// it on an unset family would judge a resource that is going away.
+	Removed bool
 	// Interpreted reports that a mapper understood this resource type. A
 	// control resource is interpreted but carries no capabilities of its own,
 	// because its meaning belongs to the resource it controls. The distinction
@@ -77,11 +108,16 @@ type NormalizedResource struct {
 	// contract's own environment: a resource that did not say where it belongs
 	// has not agreed with anything.
 	Environment Fact[string]
-	// ObjectStorage and Network hold the normalized capabilities of their
-	// family, and are nil for a resource of another family or for an opaque one.
-	// Nil means "not interpreted", never "nothing to worry about".
+	// ObjectStorage, Network and Database hold the normalized capabilities of
+	// their family, and are nil for a resource of another family or for an
+	// opaque one. Nil means "not interpreted", never "nothing to worry about".
+	//
+	// Exactly one is set on a subject this build understands. A control resource
+	// has none of them and names what it governs in DefersTo instead, because
+	// its meaning belongs to the subject rather than to itself.
 	ObjectStorage *ObjectStorageCapabilities
 	Network       *NetworkCapabilities
+	Database      *DatabaseCapabilities
 }
 
 // ObjectStorageCapabilities is the cloud-neutral view of an object store.
