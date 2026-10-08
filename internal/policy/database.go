@@ -296,6 +296,10 @@ func rangesReach(open []model.OpenRange, port model.Fact[int]) (reaches, wider b
 		}
 	}
 	if len(ported) == 0 {
+		// Exactly, and not as an approximation: the second result is read only
+		// when the first is true, so flipping it here changes nothing. Written
+		// false because that is what it means, and the test for this shape
+		// asserts the absence of both port disclosures rather than this value.
 		return false, false
 	}
 

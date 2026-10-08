@@ -12,11 +12,20 @@ const (
 
 // DatabasePort reads the port an engine listens on by default.
 //
-// It exists because the port itself is never in the plan: `port` is Optional and
-// Computed on every provider measured and comes back unknown on every create,
-// even when the engine is written. Without it, an allow list cannot be compared
-// against anything, and every admitted address would count as reaching the
-// database.
+// It exists because the port is usually not in the plan, which is not the same as
+// never -- an earlier version of this comment said never, and said it of "every
+// provider measured", and both halves were wrong.
+//
+// Measured against `terraform providers schema -json`: `port` is Optional and
+// Computed on `aws_db_instance` and `aws_rds_cluster`, so a create emits it
+// unknown when nobody writes it and carries it when somebody does; Computed only
+// on `aws_rds_cluster_instance`, where it cannot be written at all;
+// and `google_sql_database_instance` and `azurerm_mssql_server` have **no port
+// attribute**. So two of the three providers never state it, one states it when
+// asked, and the AWS mapper reads a stated port in preference to this table.
+//
+// Without a table, an allow list cannot be compared against anything in the
+// common case, and every admitted address would count as reaching the database.
 //
 // This is the argument already accepted for ProtocolNumber: the assignment is
 // closed and published, so reading it is reading a fact rather than guessing at

@@ -131,6 +131,23 @@ func Normalize(plan terraformplan.Plan, mappers []Mapper) model.Graph {
 			// go. Naming the reason lets them fix it: an argument that names
 			// the instance outright — b["a"] rather than b[each.key] — is
 			// resolvable, and this says so.
+			//
+			// Object storage only, and that is a limitation rather than a
+			// design. Milestone 08 did not extend it to the network family and
+			// milestone 09 did not extend it to databases, so a subject of
+			// either whose correlation was dropped gets its family's own
+			// "cannot be settled" control without the actionable half -- the
+			// sentence telling the reader to name the instance outright.
+			//
+			// Measured consequence, on a server under `count` whose firewall
+			// rule admits the whole internet: the verdict is a required UNKNOWN,
+			// which is right, and it is right by accident of Azure never being
+			// able to prove closure rather than by anything here. The reason
+			// text is the honest half and is fixed where it is written; this
+			// hint is the half still missing. Extending it means giving each
+			// family a place to put a control the normalizer rather than the
+			// mapper discovered, which is a change to all three capabilities and
+			// is worth its own milestone rather than a fourth special case.
 			resource.ObjectStorage.Unresolved = append(resource.ObjectStorage.Unresolved, model.MissingControl{
 				CheckID: "CORRELATION_UNRESOLVED",
 				Reason: "A resource repeated alongside this one refers to it without naming an instance, " +

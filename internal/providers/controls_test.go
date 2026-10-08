@@ -367,9 +367,22 @@ func unresolvedOf(found model.NormalizedResource) []model.MissingControl {
 // comment says "every family is asked" and that asked two.
 //
 // A subject with no capability has deferred to something, and coverage then goes
-// looking for what. A database subject carries its own, so leaving it out of the
-// test made every database look like a resource that deferred -- inert while no
-// binding joins a database to another subject, and a trap for the next one.
+// looking for what. A database subject carries its own, so a guard listing only
+// two families would read every database as a resource that deferred.
+//
+// What this test does *not* do is exercise that guard, and the sentence here used
+// to say it did. A review measured it: reverting the guard to milestone 08's
+// two-family form passes this test, passes the whole suite, and changes zero
+// bytes on all 31 database fixtures. The reason is `defersTo`, which only
+// collects candidates the mapper calls subjects -- and no committed shape puts a
+// subject in a database's related set, because the AWS mapper declares no
+// database-to-security-group binding, `aws_rds_cluster` is not a subject, and
+// Azure firewall rules are not subjects either.
+//
+// So the guard is correct and defensive, this test passes for a second reason,
+// and the next binding that joins a database to a subject is what would make the
+// two diverge. Saying that is worth more than a claim of coverage that
+// measurement disproves.
 func TestASubjectCarryingItsOwnVerdictIsNotReadAsDeferring(t *testing.T) {
 	cases := map[string]struct{ cloud, fixture, resource string }{
 		"a bucket":         {"aws", "public-acl", "aws_s3_bucket.assets"},

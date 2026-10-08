@@ -84,15 +84,39 @@ which half is missing — and on AWS that is the ordinary case rather than the
 exception, because the allow list is a security group and a security group is
 usually declared in another module.
 
+That `UNKNOWN` is **required**, and so changes the decision, only where the
+contract declared the family private. An author who wrote `exposure: public`, or
+`unspecified`, or declared no entry for the family is not waiting on evidence of
+privacy, and raising a required unknown for them would make every plan whose
+allow list lives elsewhere an `UNKNOWN` — which, on AWS, is most of them. The
+consequence is worth stating plainly: under `unspecified` a database whose
+reachability could not be determined is reported in the bundle and does not move
+the exit code. The same reading object storage has used since the first family.
+
+An AWS allow list is also not provably complete. `vpc_security_group_ids` is a
+list, and a security group written as a literal id — `["sg-0abc"]` — leaves no
+reference in the plan at all, so a list holding one reference and one literal is
+indistinguishable from a list holding one reference. A database whose named
+groups all read as closed is therefore reported as not reachable, with a
+non-required unknown saying a group named by identifier could admit more. That is
+the same bargain the network family strikes for a proven closure, and it is the
+place a reader should be most careful.
+
 Two things about a database are read rather than proven, and both are disclosed
-where they are used. The port it listens on is almost never in a plan, so it is
-read from the engine through a closed table of documented assignments; an engine
-this build cannot name leaves the port undetermined, and an undetermined port
-makes any public ingress count as possibly reaching the database. That
-over-reports, which is the safe direction, and the approximation is recorded
-beside the verdict. In the other direction, a database that reads as unreachable
-*because* of that port carries an unknown saying so, since a reader of a `PASS`
-would not otherwise learn the verdict rests on a port nobody stated.
+where they are used. The port it listens on is usually not in a plan: AWS states
+it when an author writes it and the mapper reads that in preference to anything
+else, and otherwise the port comes from whatever names the engine — a closed table
+of documented assignments on AWS and GCP, and the resource type itself on Azure,
+which has no engine attribute and no port attribute either. An engine this build
+cannot name leaves the port undetermined, and then any public ingress counts as
+possibly reaching the database. That over-reports, which is the safe direction,
+and it is reported as a **required unknown** rather than as a finding: a `BLOCK`
+may not rest on an approximation the build itself recorded. The exception is a
+gate admitting every usable port, where what the database listens on cannot
+matter, so the reachability is determined and the finding is a finding. In the
+other direction, a database that reads as unreachable *because* of an
+engine-derived port carries an unknown saying so, since a reader of a `PASS` would
+not otherwise learn the verdict rests on a port nobody stated.
 
 What a database finding does not say is anything about credentials. A reachable
 database still demands authentication, which is why the severity is `HIGH` rather

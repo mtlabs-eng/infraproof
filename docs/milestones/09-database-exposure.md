@@ -227,14 +227,67 @@ than from what the design intended.
 - **A cluster whose instances are not in the plan settles nothing**, and says so.
   An Aurora cluster is reachable through its instances, and the endpoint switch is
   on the instance.
-- **Criterion 5 held, with one qualification.** No file of the network family
-  changed. `internal/policy/storage.go` changed by one line, when `referencesOf`
-  was made generic across families; an earlier commit on this branch claimed
-  storage was untouched and that claim was wrong.
-- **`model.NormalizedResource.Removed` is set only by the database mappers.** The
-  storage and network families answer the question from their controls and have
-  never needed it. Setting it there would change files this milestone promised not
-  to touch, for no behaviour.
+- **Criterion 5 held behaviourally, and not as a claim about files.** The
+  behavioural half was re-measured at every stage and holds: `internal/policy/
+  network.go` is untouched, `NetworkExposure` is untouched, and binaries built at
+  `d6734ec` and at the end of this milestone produce byte-identical JSON for all
+  249 pre-existing plan fixtures. No network verdict changed.
+
+  Three shared files did change, and the accounting took three attempts to get
+  right. `internal/policy/storage.go`, one line, when `referencesOf` was made
+  generic -- an earlier commit claimed storage was untouched and was wrong.
+  `internal/terraformplan/config.go`, +155/−13, which the network family reads
+  through `declared.Unwritten`; it is behaviour-preserving for network because
+  `collectArguments` only ever *adds* dotted paths and every network query is
+  dot-free, which a review proved two independent ways. And
+  `internal/model/network.go` +19 with `internal/providers/aws/network.go` +5,
+  for `RangesPartial` -- the one change that was forced by a defect rather than by
+  convenience.
+
+  That last one is what the criterion was really testing. The AWS network mapper
+  prefers a proven grant over an unread rule, which is sound for the boolean
+  milestone 08 asked for. The database family compares a *port* against the range
+  set, and nothing in the capability could say the set was short -- so a group
+  with one unreadable rule in front of a publicly accessible Postgres instance
+  came out PASS, exit 0. A capability describing a set as a boolean plus a list of
+  ranges has no way to say the list is incomplete, and it took a second family
+  asking a sharper question to find that out.
+- **`model.NormalizedResource.Removed` is set only by the database mappers**, and
+  the justification first written for that was wrong. It said the other two
+  families "have never needed it... for no behaviour". Measured: a delete-only
+  bucket raises a **required** `STORAGE_PUBLIC_DETERMINABLE` and exits 4, while a
+  delete-only database raises nothing. So the behaviour is not the same, and the
+  asymmetry is real rather than absent -- it is simply in the restrictive
+  direction for storage, which is why it is a limitation and not a hole. Nothing
+  reads `Removed` outside the database rule, and there is no mechanical guard
+  against a future rule reading it on a family that never sets it; `false` is the
+  dangerous default there.
+- **The actionable half of `CORRELATION_UNRESOLVED` reaches object storage only.**
+  `internal/providers/mapper.go` injects it for resources carrying object-storage
+  capabilities. Milestone 08 did not extend it to the network family and this one
+  did not extend it to databases, so a subject of either whose correlation the
+  normalizer dropped gets its family's own "cannot be settled" control without the
+  sentence telling the reader to name the instance outright. Extending it means
+  giving each capability a place for a control the normalizer rather than the
+  mapper discovered, which is a change to all three and worth its own milestone
+  rather than a fourth special case.
+- **`nesting_mode: single` blocks are read now and were not.** A block declared
+  single is a bare object rather than an array of one, which this package's
+  grammar comment stated as impossible. `timeouts.create` was reported unwritten
+  although the author wrote it. Measured across the three providers, every single-
+  nested block is `timeouts` and none can hold a reference, so the half of the fix
+  that recovers references is defensive; the half that records arguments is live.
+- **No finding carries a verification method.** CLAUDE.md's definition of
+  trustworthy output requires one of every finding, and no family has ever emitted
+  one -- the `d6734ec` binary behaves the same way, so this predates the branch.
+  Adding the field is a change to a public, versioned format and belongs to a
+  milestone that decides what the values are, not to this one.
+- **`google_sql_database_instance.unnameable_version` is nameable.** The fixture
+  resource's address is a leftover from a shape that turned out not to exist:
+  every Cloud SQL version family is one the port table names, and its
+  `database_version` is `SQLSERVER_2022_EXPRESS`, which maps to 1433. The test and
+  the cloud's README both say so; the address does not, and renaming a resource
+  inside committed real plan output would make it no longer the provider's bytes.
 
 ## Out of scope
 
@@ -248,8 +301,35 @@ until the shape is proven on the three above.
 
 ## Prerequisites
 
-Milestones 03, 04 and 08. This milestone adds no new machinery of its own: it
-uses `declared.Unwritten` for the GCP default, `declared.Target` for the
+Milestones 03, 04 and 08. The plan said this milestone adds no new machinery of
+its own -- `declared.Unwritten` for the GCP default, `declared.Target` for the
 correlation, `declared.SetReach` for the address arithmetic, and milestone 08's
-security-group resolution unchanged. If it needs any of them changed, that is a
-finding about the architecture and is worth more than the family.
+security-group resolution unchanged -- and added that if it needed any of them
+changed, that would be a finding about the architecture worth more than the
+family.
+
+It needed three of the four changed. Measured with `git diff --numstat`:
+
+| the plan said | as built |
+| --- | --- |
+| `declared.Unwritten` for the GCP default | **required reimplementing** `terraformplan.statedArguments` as `collectArguments`, because `Stated` recorded only top-level arguments and the Cloud SQL switch is three levels down. `config.go` +155/−13. Read by the network family through `declared.Unwritten`. |
+| `declared.Target` for the correlation | **insufficient.** The attribute is a list, and the singular `Target` reported every database with more than one group as undecidable. New `Targets`, `Resolve`, `matchesKeys`, `splitKeys`, `namesType`: `target.go` +148/−2. |
+| `declared.SetReach` for the address arithmetic | **insufficient.** Azure's grammar is a start/end pair and not a prefix. New `AddressRange`, `RangeReach`, `value`: `setreach.go` +67. The genuine reuse is `covers`, the sweep both grammars reach. |
+| milestone 08's security-group resolution unchanged | **true for the resolution, and the shared vocabulary was one fact short.** See criterion 5 below. |
+
+Plus `ResourceChange.Opaque` and `DrawsOnOpaque` (`plan.go` +26),
+`NormalizedResource.Removed` (`resource.go` +29/−3), `declared.DatabasePort` (79
+lines, which *was* a declared product decision), `declared.Removed`/`Unstated`
+(48 lines), and `NetworkCapabilities.RangesPartial` (`model/network.go` +19).
+
+The family's own production code is about 1,700 lines across seven files. Of what
+it added outside that, the majority is general-purpose machinery in packages the
+other two families read -- which makes the answer to "composition or third
+column" a split one: a **genuine composition at the policy seam**, where
+`GatedBy` holds addresses and the rule resolves them through the network family's
+own facts, and a **third column in `declared/` and `terraformplan/`**, where the
+shared vocabulary had to grow for a second family to ask a sharper question of
+the same data.
+
+That split is the architectural finding this section asked for, and it is worth
+more than the family.

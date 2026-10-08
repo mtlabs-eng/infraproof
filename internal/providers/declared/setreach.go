@@ -208,8 +208,15 @@ func RangeReach(ranges []AddressRange) Reach {
 
 // value reads an address as the integer the sweep compares.
 //
-// The same conversion spanOf does for a prefix, which is why both grammars reach
-// one implementation of coverage rather than two.
+// The conversion is the same six lines spanOf does for a prefix, and it is
+// duplicated rather than shared: spanOf needs the prefix's bounds and this needs
+// one address, and factoring the shared half out left both harder to read than
+// either. What *is* shared, and what the earlier version of this comment claimed
+// the conversion was, is `covers` -- the sweep both grammars reach, so a range
+// and a prefix answer the same question with one implementation rather than two.
+// Mutating this duplicate is killed by ten tests across three packages,
+// including TestRangeAndPrefixAgreeOnEveryPrefix, which is what keeps the two
+// copies honest.
 func value(address netip.Addr) *big.Int {
 	if address.Is4() {
 		four := address.As4()

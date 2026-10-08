@@ -6,10 +6,17 @@ import (
 	"github.com/mtlabs-eng/infraproof/internal/providers/declared"
 )
 
-// A database's port decides whether an allow list reaches it, and the port
-// attribute is Optional and Computed on every provider measured: a real create
-// plan emits it unknown even when the engine is written. So the port comes from
-// the engine, through a table of documented defaults.
+// A database's port decides whether an allow list reaches it, and in the common
+// case the plan does not state it. Measured: Optional and Computed on
+// `aws_db_instance` and `aws_rds_cluster`, Computed only on
+// `aws_rds_cluster_instance`, and absent from the schema entirely on
+// `google_sql_database_instance` and `azurerm_mssql_server`. A real create plan
+// emits it unknown when nobody writes it, even with the engine written.
+//
+// So the port comes from the engine, through a table of documented defaults --
+// except where the plan does state it, which the AWS mapper reads in preference.
+// This comment used to say the attribute is Optional and Computed on every
+// provider measured; two of the three do not have it.
 //
 // This is the argument already accepted for declared.ProtocolNumber. The
 // assignment is closed and published, reading it is reading a fact, and anything

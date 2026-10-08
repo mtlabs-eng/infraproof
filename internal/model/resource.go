@@ -45,10 +45,20 @@ type NormalizedResource struct {
 	// being deleted as one whose reachability could not be determined -- with
 	// two sentences that were untrue of it.
 	//
-	// Set by the mappers that have a rule reading it. The storage and network
-	// families answer the question from their controls and have never needed it;
-	// adding it there would change files this milestone promised not to touch,
-	// for no behaviour.
+	// Set by the mappers that have a rule reading it, which is the database
+	// family. The justification first written here was that the other two
+	// families "have never needed it, for no behaviour", and a review measured
+	// that wrong: a delete-only bucket raises a required
+	// STORAGE_PUBLIC_DETERMINABLE and exits 4, while a delete-only database
+	// raises nothing. The behaviour differs. It differs in the restrictive
+	// direction for storage -- a bucket going away is reported as a bucket whose
+	// exposure nobody could determine -- so it is a limitation rather than a
+	// hole, and it is recorded as one in the milestone.
+	//
+	// Nothing outside the database rule reads this field. There is no mechanical
+	// guard against a future rule reading it on a family that never sets it, and
+	// false is the dangerous default: it means "not removed", so a rule reading
+	// it on an unset family would judge a resource that is going away.
 	Removed bool
 	// Interpreted reports that a mapper understood this resource type. A
 	// control resource is interpreted but carries no capabilities of its own,

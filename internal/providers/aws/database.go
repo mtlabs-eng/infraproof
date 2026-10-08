@@ -299,10 +299,17 @@ func (Mapper) clusterOf(subject terraformplan.ResourceChange,
 
 // listeningPort reads the port this database answers on, from its engine.
 //
-// The port attribute itself is never in the plan -- Optional and Computed on an
-// instance and on a cluster, and Computed only on a cluster instance -- so the
-// engine is the only readable source. An Aurora instance takes its engine from
-// its cluster, which is the same two hops the allow list takes.
+// The plan's own port first, then the engine. `port` is Optional and Computed on
+// an instance and on a cluster, so it is unknown when nobody writes it -- the
+// common case, and why the table exists -- and authoritative when somebody does.
+// On a cluster instance it is Computed only and cannot be written at all, which
+// is the one place "not in the plan" is unconditional.
+//
+// An Aurora instance takes its engine from its cluster, which is the same two
+// hops the allow list takes.
+//
+// This comment used to say the attribute is never in the plan, in the doc comment
+// of the function whose first branch reads it from the plan.
 func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange) (model.Fact[int], bool) {
 

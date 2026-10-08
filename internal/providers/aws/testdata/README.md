@@ -35,8 +35,11 @@ What was verified against the authoritative schema or a real plan:
 - `vpc_security_group_ids` is Optional and Computed, so it is unknown even when
   unwritten -- the configuration separates "the author named no group", where AWS
   applies the VPC's default group, from "named one the plan does not contain".
-- `port` is never in the plan: Optional and Computed on an instance and a
-  cluster, Computed only on a cluster instance.
+- `port` is Optional and Computed on an instance and a cluster, so a create emits
+  it unknown when nobody writes it and carries it when somebody does -- which
+  `rds-port-written` is for -- and Computed only on a cluster instance, where it
+  cannot be written at all. This line used to say the attribute is never in the
+  plan, beside a fixture that exists because it is.
 - The provider lower-cases `engine`, so `POSTGRES` arrives as `postgres`.
 
 | fixture | what it asks |

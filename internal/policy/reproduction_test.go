@@ -18,7 +18,6 @@ package policy_test
 // no mapper yet: no plan can produce a model.FamilyDatabase resource.
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/intent"
@@ -89,6 +88,17 @@ func TestR04ICMPBlocksWithAFalseReason(t *testing.T) {
 	// That is what is asserted now, in both the port-known and port-unknown
 	// shapes, because the exclusion is exact in each: a protocol with no ports
 	// reaches no port.
+	//
+	// A third review then measured that the strengthening left the old loop in
+	// place and that the loop still never ran: this shape produces no unknowns at
+	// all, so a condition inside it asserted nothing. The commit claiming "an
+	// unknown whose reason was untrue beside it" was defended by nothing.
+	//
+	// The live assertion is the one that shape actually supports: neither port
+	// disclosure may be raised here. A protocol with no ports rules the gate out
+	// exactly, so calling the silence an approximation or blaming a documented
+	// default would both be sentences about an inference nothing made -- which is
+	// the same class of untrue reason the defect had.
 	for name, port := range map[string]model.Fact[int]{
 		"port known":        knownPort(5432),
 		"port undetermined": unknownPort(),
@@ -102,11 +112,13 @@ func TestR04ICMPBlocksWithAFalseReason(t *testing.T) {
 				t.Errorf("a rule admitting only ICMP produced a finding: %q", r.Findings[0].Claim)
 			}
 			for _, u := range r.Unknowns {
-				if u.CheckID == policy.CheckDatabasePortUndetermined &&
-					strings.Contains(u.Reason, "its engine does not name one") &&
-					port.IsKnown() {
-					t.Errorf("the port is Known and the unknown says the engine names none:\n  %s",
-						u.Reason)
+				switch u.CheckID {
+				case policy.CheckDatabasePortUndetermined:
+					t.Errorf("the exclusion is exact -- ICMP carries no port -- and it is "+
+						"reported as wider than reality:\n  %s", u.Reason)
+				case policy.CheckDatabasePortInferred:
+					t.Errorf("the exclusion is exact and it is reported as resting on a "+
+						"documented default:\n  %s", u.Reason)
 				}
 			}
 		})

@@ -42,11 +42,20 @@ type DatabaseCapabilities struct {
 	GatedBy []string
 	// Port is the port this database listens on.
 	//
-	// Known only where the engine names it, because the port attribute itself is
-	// Optional and Computed on every provider measured and comes back unknown on
-	// every create. Unknown means the allow list cannot be compared against a
-	// port, so any address admitted at all is reported as possibly reaching it --
-	// wider than reality, and recorded as such.
+	// Read from the plan where the plan states it, and otherwise from whatever
+	// names the engine: a table of documented defaults on AWS and GCP, and the
+	// resource type itself on Azure, where there is no engine attribute and no
+	// port attribute either. PortInferred below says which.
+	//
+	// Unknown means the allow list cannot be compared against a port, so any
+	// address admitted at all is reported as possibly reaching it -- wider than
+	// reality, recorded as such, and reported as a required unknown rather than
+	// as a finding, because a BLOCK may not rest on an approximation.
+	//
+	// This comment used to say the attribute is Optional and Computed on every
+	// provider measured. Three ways wrong: AWS reads a stated port, Azure has no
+	// engine to infer from, and two of the three providers have no such
+	// attribute.
 	Port Fact[int]
 	// PortInferred reports that Port was read from a documented default rather
 	// than stated by the plan.
