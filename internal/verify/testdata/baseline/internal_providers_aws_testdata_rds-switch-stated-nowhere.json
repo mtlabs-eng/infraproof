@@ -121,6 +121,20 @@
       ]
     },
     {
+      "check_id": "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL",
+      "required": false,
+      "reason": "A security group named by identifier rather than by reference leaves nothing in the plan to correlate, so a group admitting more than the ones named here could be attached to this database.",
+      "resource_address": "aws_rds_cluster_instance.ax_false",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster.ax",
+          "path": "vpc_security_group_ids",
+          "redacted": false
+        }
+      ]
+    },
+    {
       "check_id": "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN",
       "required": false,
       "reason": "This database's security groups are not named in a way this plan can correlate, so nothing here can show who may reach it. Either none was named, and AWS applies the default security group of the VPC, or they were named by identifier rather than by reference.",
@@ -129,6 +143,20 @@
         {
           "source": "terraform_plan",
           "resource_address": "aws_db_instance.endpoint_only",
+          "path": "vpc_security_group_ids",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN",
+      "required": false,
+      "reason": "This database's security groups are not named in a way this plan can correlate, so nothing here can show who may reach it. Either none was named, and AWS applies the default security group of the VPC, or they were named by identifier rather than by reference.",
+      "resource_address": "aws_rds_cluster_instance.aurora",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster.aurora",
           "path": "vpc_security_group_ids",
           "redacted": false
         }
@@ -179,6 +207,46 @@
           "source": "terraform_plan",
           "resource_address": "aws_db_instance.endpoint_only",
           "path": "publicly_accessible",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: the plan does not state whether it has an endpoint outside the private network.",
+      "resource_address": "aws_rds_cluster_instance.aurora",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster_instance.aurora",
+          "path": "publicly_accessible",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: the plan does not state whether it has an endpoint outside the private network.",
+      "resource_address": "aws_rds_cluster_instance.ax_false",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster_instance.ax_false",
+          "path": "publicly_accessible",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "ingress[0].cidr_blocks",
           "redacted": false
         }
       ]

@@ -65,6 +65,14 @@ cloud's fixtures, but the grammar they turn on is not guessed: `["delete"]` with
 genuine `terraform show -json` output for AWS and GCP, where a plan could be
 produced. The actions array is Terraform core rather than provider behaviour.
 
+Two details in them are *not* faithful to real output, and nothing reads either:
+`sql-server-destroyed` writes `after_sensitive: {}` where Terraform emits `false`
+for a null side, and omits `before_sensitive`, which Terraform always emits. A
+review measured both. They are left as they are rather than corrected by hand,
+because correcting a hand-authored fixture towards real output one field at a time
+is how a fixture comes to look authoritative without being so -- and the only
+honest fix for this cloud is a plan, which needs a tenant.
+
 `sql-switch-absent` is the one fixture here whose *shape* is unverified, not just
 its values. `public_network_access_enabled` is Optional and not Computed, and on
 AWS the analogous attribute was measured emitting a determined `false` when

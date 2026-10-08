@@ -1,7 +1,13 @@
 # Provenance
 
-Every fixture in this directory is **hand-authored** from the current
-`aws` provider schema, not produced by Terraform.
+The fixtures in this directory come from two places, and this paragraph used to
+say they all come from one. The storage and network fixtures are **hand-authored**
+from the `aws` provider schema. Every database fixture below is real
+`terraform show -json` output, with two exceptions it names.
+
+That split is the story of three milestones rather than an inconsistency, and
+saying it here matters because the next person to add a fixture should know which
+practice they are joining.
 
 That is a real limitation. Milestone 02 showed that hand-written fixtures can
 misrepresent a format, and milestone 03 showed it again: three shapes absent
@@ -15,11 +21,22 @@ cover the shapes that were getting it wrong.
 
 ## Database fixtures
 
-Real `terraform show -json` output throughout, which is what caught the one trap
-this cloud has. Terraform 1.14.0, `hashicorp/aws` v6, `terraform plan` only --
-never applied, no cloud contacted, `skip_*` flags and placeholder strings, with
-the two placeholder credential arguments and every password-shaped value removed
-afterwards.
+Real `terraform show -json` output except where stated, which is what caught the
+one trap this cloud has. Terraform 1.14.0, `hashicorp/aws` v6, `terraform plan`
+only -- never applied, no cloud contacted, `skip_*` flags and placeholder strings,
+with the two placeholder credential arguments and every password-shaped value
+removed afterwards. The destroy and replace fixtures were planned with
+`-refresh=false` against a hand-written state file, which contacts nothing either.
+
+Two are not real output, and both say why in the table: `rds-delete-contradicted`,
+whose whole point is a shape Terraform does not emit, and
+`rds-switch-stated-nowhere`. The second was found by a review to be defending a
+defensive arm with a shape the provider never produces -- measured across every
+plan here, `publicly_accessible` is stated in 60 changes, unknown in 3 and
+null-because-destroyed in 3, and absent from both halves only in that file. The
+arm is kept and now asks the configuration rather than assuming a default, so the
+fixture tests a real decision about an unreal shape, which is the most that can be
+said for it.
 
 What was verified against the authoritative schema or a real plan:
 
@@ -49,7 +66,7 @@ What was verified against the authoritative schema or a real plan:
 | `real-aurora-interpolated` | the switch written from a value the plan cannot resolve, which is the only shape where its unknown is a gap |
 | `rds-cluster-elsewhere` | an Aurora instance whose cluster, and so whose allow list, is managed outside this plan |
 | `rds-cluster-without-instances` | a cluster with no instance to answer for it |
-| `rds-switch-stated-nowhere` | the sanitized shape: the switch in neither half of the change |
+| `rds-switch-stated-nowhere` | hand-authored: the switch in neither half of the change, which no real plan here produces -- it reaches the absent-value arm, whose answer now comes from the configuration |
 | `rds-destroyed` | a destroy-only change, where `after` is JSON null and the switch is therefore absent |
 | `rds-replaced` | a replacement, where `after` is a full object because the database is there afterwards |
 | `rds-destroyed` is not the only change that states nothing: | |

@@ -848,3 +848,53 @@ func assertNoGateIsPinned(t *testing.T, fixture, address string) {
 			"that pins no instance: %q", said)
 	}
 }
+
+// TestASwitchAbsentFromBothHalvesStillAsksTheConfiguration closes a gap a review
+// found in how the absent case is answered, and in how the fixture that reaches
+// it is described.
+//
+// `StateAbsent` used to mean "the provider's default applies" outright. The arm
+// was reached by exactly one committed fixture, and measured across every other
+// AWS plan this repository ships, no real `terraform show -json` output produces
+// the shape: `publicly_accessible` is stated true in 52 changes, stated false in
+// 8, marked unknown in 3, and null-because-destroyed in 3. Absent from both
+// halves happens only in `rds-switch-stated-nowhere`, which is hand-authored --
+// so a defensive arm was being defended by a shape the provider does not emit,
+// which is the class of mistake that caused three of milestone 08's defects.
+//
+// The arm is kept, because a future provider version could stop emitting the
+// attribute and reading an absence as unreadable would make every database
+// undeterminable. What changed is that it now asks the same question the unknown
+// case asks: the configuration. An absence beside an author who wrote nothing is
+// the documented default; an absence beside an author who wrote something the
+// plan cannot resolve is a gap, and claiming a default there invents the one fact
+// the plan withheld.
+//
+// The two shapes are both in that fixture, which is now what it is for.
+func TestASwitchAbsentFromBothHalvesStillAsksTheConfiguration(t *testing.T) {
+	cases := map[string]struct {
+		address string
+		known   bool
+		why     string
+	}{
+		"nobody wrote it": {"aws_rds_cluster_instance.ax", true,
+			"an absence the author did not cause is the provider's default"},
+		"somebody wrote it": {"aws_rds_cluster_instance.aurora", false,
+			"an absence beside a written argument is a value the plan withheld"},
+	}
+
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			capabilities := database(t, "rds-switch-stated-nowhere", want.address).Database
+			if capabilities == nil {
+				t.Fatal("the mapper produced no database capabilities")
+			}
+			if got := capabilities.PublicEndpoint.IsKnown(); got != want.known {
+				t.Fatalf("endpoint known = %v, want %v: %s", got, want.known, want.why)
+			}
+			if want.known && capabilities.PublicEndpoint.Get() {
+				t.Fatal("a switch nobody wrote was read as a public endpoint")
+			}
+		})
+	}
+}

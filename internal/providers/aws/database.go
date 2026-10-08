@@ -109,9 +109,26 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 
 	switch value.State() {
 	case terraformplan.StateAbsent:
-		// Not stated anywhere, in a change that states other things. The
-		// provider's default is a private endpoint.
-		return model.Known(false, cited)
+		// Not stated anywhere, in a change that states other things.
+		//
+		// This used to answer the provider's default outright. Measured across
+		// every AWS plan this repository ships, no real `terraform show -json`
+		// produces the shape -- the attribute is stated in 60 changes, unknown in
+		// 3, and null-because-destroyed in 3 -- so the arm was being defended by
+		// a hand-authored fixture, which is the class of mistake that caused
+		// three of milestone 08's defects.
+		//
+		// Kept, because a future provider version could stop emitting the
+		// attribute and reading an absence as unreadable would make every
+		// database undeterminable. Answered by asking the configuration, which
+		// is the same question the unknown case below asks and for the same
+		// reason: an absence beside an author who wrote nothing is the documented
+		// default, and an absence beside an argument somebody did write is a
+		// value the plan withheld.
+		if declared.Unwritten(subject, attrPubliclyAccessible) {
+			return model.Known(false, cited)
+		}
+		return model.Unknown[bool](cited)
 	case terraformplan.StateKnown:
 		if value.Kind() != terraformplan.KindBool {
 			return model.Unknown[bool](cited)
