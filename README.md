@@ -113,7 +113,7 @@ line.
 ## On a pull request
 
 ```sh
-go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.3.0
+go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.4.0
 infraproof check --intent infra/intent.json --plan tfplan.json --format review
 ```
 
