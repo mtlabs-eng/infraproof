@@ -223,6 +223,23 @@ than from what the design intended.
   determined `false` when unwritten -- so a real plan may always state it and this
   shape may not occur. If so, the fixture defends a path nothing reaches and the
   `UNKNOWN` over-reports. Measuring it needs a tenant.
+- **An AWS allow list is never provably complete, and this build reports it as
+  complete anyway.** `vpc_security_group_ids` is a list, and a security group
+  written as a literal identifier -- `["sg-0abc"]` -- leaves no reference in the
+  plan at all. Measured: a list holding one reference and one literal records
+  exactly what a list holding one reference records, so the two are
+  indistinguishable. A database whose referenced groups all read as closed is
+  therefore reported as not reachable, with a non-required unknown saying a group
+  named by identifier could admit more -- which means a plan where the literal
+  group is open to the world gives `PASS`, exit 0.
+
+  Taken as a decision rather than left as an oversight. It is the same bargain the
+  network family already strikes for a proven closure, and the alternative --
+  never proving closure on this cloud -- would make every AWS database behind
+  closed security groups `UNKNOWN`, including the correctly private ones, which
+  reverses a round-1 fix taken for exactly that reason. The bound is in the
+  bundle and the asymmetry is now in `PRODUCT.md`, where a reader of a `PASS` can
+  find it.
 - **`declared.Targets` cannot tell a conditional inside a list from a list
   literal.** Both record the same way in the configuration, so both branches are
   returned. A gate can only open the question, never close it, so the
