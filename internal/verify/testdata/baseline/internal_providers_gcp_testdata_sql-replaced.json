@@ -1,0 +1,173 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:e21ccae1e3c37764c8156ee778e8c05e1ed04a97db37e5416470b67ba32151f4"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "DATABASE_PUBLIC_REACHABLE",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change makes a database reachable from any address, and the intent contract does not declare that exposure.",
+      "resource": {
+        "address": "google_sql_database_instance.going_away",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "expected": {
+        "path": "database.reachable_from_any_address",
+        "value": false
+      },
+      "observed": {
+        "path": "database.reachable_from_any_address",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.going_away",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.going_away",
+          "path": "settings.ip_configuration.ipv4_enabled",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the exposure in the intent contract, or close the public endpoint or the rule that admits every address."
+    },
+    {
+      "rule_id": "DATABASE_PUBLIC_REACHABLE",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change makes a database reachable from any address, and the intent contract does not declare that exposure.",
+      "resource": {
+        "address": "google_sql_database_instance.replaced",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "expected": {
+        "path": "database.reachable_from_any_address",
+        "value": false
+      },
+      "observed": {
+        "path": "database.reachable_from_any_address",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.replaced",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.replaced",
+          "path": "settings.ip_configuration.ipv4_enabled",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the exposure in the intent contract, or close the public endpoint or the rule that admits every address."
+    },
+    {
+      "rule_id": "DESTRUCTIVE_CHANGE",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change destroys an existing object, which the intent contract permits with a warning.",
+      "resource": {
+        "address": "google_sql_database_instance.replaced",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "expected": {
+        "path": "change.destructive",
+        "value": false
+      },
+      "observed": {
+        "path": "change.destructive",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.replaced",
+          "path": "resource_changes[].change.actions",
+          "redacted": false
+        }
+      ],
+      "remediation": "Confirm that destroying this object is intended before proceeding."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_sql_database_instance.going_away",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.going_away",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_sql_database_instance.replaced",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.replaced",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

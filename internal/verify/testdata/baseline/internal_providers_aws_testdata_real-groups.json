@@ -1,0 +1,1006 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 2 facts required for a safe conclusion were unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:24003935fc714473e4bd2ab45a2167de3c3ffa9bde141abebfd1596869a208d0"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address on a port, and on a protocol the intent contract cannot describe; the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.everyproto",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "every/0-65535"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.everyproto",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.everyproto",
+          "path": "cidr_ipv4",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.everyproto",
+          "path": "cidr_ipv6",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.everyproto",
+          "path": "ip_protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, confirm that the protocol is intended to be reachable from any address, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address on a protocol the intent contract cannot describe, because a port declaration can neither permit nor forbid it.",
+      "resource": {
+        "address": "aws_security_group.icmpv6",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "icmp"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.icmpv6",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.icmpv6",
+          "path": "ingress[0].ipv6_cidr_blocks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.icmpv6",
+          "path": "ingress[0].protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Confirm that this protocol is intended to be reachable from any address, or remove the rule."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.ipv6",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/443"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.ipv6",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.ipv6",
+          "path": "cidr_ipv4",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.ipv6",
+          "path": "cidr_ipv6",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.ipv6",
+          "path": "ip_protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.mixed",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.mixed",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.mixed_open",
+          "path": "cidr_ipv4",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.mixed_open",
+          "path": "cidr_ipv6",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.mixed_open",
+          "path": "ip_protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address on a port, and on a protocol the intent contract cannot describe; the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.protoall",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "every/0-65535"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.protoall",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.protoall",
+          "path": "cidr_ipv4",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.protoall",
+          "path": "cidr_ipv6",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.protoall",
+          "path": "ip_protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, confirm that the protocol is intended to be reachable from any address, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.protonum",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.protonum",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.protonum",
+          "path": "cidr_ipv4",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.protonum",
+          "path": "cidr_ipv6",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.protonum",
+          "path": "ip_protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.splitsource",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.splitsource",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.splitsource",
+          "path": "ingress[0].cidr_blocks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.splitsource",
+          "path": "ingress[0].protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.attrempty",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.attrempty",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.backwards",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.backwards",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.closed",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.closed",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.everyproto",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.everyproto",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.groupsourced",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.groupsourced",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.icmpv6",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.icmpv6",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.ipv6",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.ipv6",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.mixed",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.mixed",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.norules",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.norules",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.prefixlist",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.prefixlist",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.prefixlistrule",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.prefixlistrule",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.protoall",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.protoall",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.protonum",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.protonum",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.splitsource",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.splitsource",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_PREFIX_LIST_UNREAD",
+      "required": false,
+      "reason": "A rule names a managed prefix list as a source, and the addresses in a prefix list are not part of this plan, so whether it reaches every address cannot be determined here.",
+      "resource_address": "aws_security_group.prefixlist",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.prefixlist",
+          "path": "ingress[0].prefix_list_ids",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_PREFIX_LIST_UNREAD",
+      "required": false,
+      "reason": "A rule names a managed prefix list as a source, and the addresses in a prefix list are not part of this plan, so whether it reaches every address cannot be determined here.",
+      "resource_address": "aws_security_group.prefixlistrule",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.prefixlistrule",
+          "path": "prefix_list_id",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_RULES_INCOMPLETE",
+      "required": false,
+      "reason": "The plan does not state this security group's ingress rules in full, so nothing here can show that no rule permits ingress from any address. They may be separate rule resources, or written in the group in a form the plan could not resolve.",
+      "resource_address": "aws_security_group.norules",
+      "evidence": []
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_RULES_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "The group writes its rules inline and the provider does not refuse a separate ingress-rule resource on the same group, so a rule declared outside this plan could admit more than the set written here.",
+      "resource_address": "aws_security_group.attrempty",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.attrempty",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_RULES_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "The group writes its rules inline and the provider does not refuse a separate ingress-rule resource on the same group, so a rule declared outside this plan could admit more than the set written here.",
+      "resource_address": "aws_security_group.closed",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.closed",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_RULES_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "The group writes its rules inline and the provider does not refuse a separate ingress-rule resource on the same group, so a rule declared outside this plan could admit more than the set written here.",
+      "resource_address": "aws_security_group.groupsourced",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.groupsourced",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "aws_vpc.main",
+      "evidence": []
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.attrempty",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.attrempty",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.backwards",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.backwards",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.closed",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.closed",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.everyproto",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.everyproto",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.groupsourced",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.groupsourced",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.icmpv6",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.icmpv6",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.ipv6",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.ipv6",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.mixed",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.mixed",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.norules",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.norules",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.prefixlist",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.prefixlist",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.prefixlistrule",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.prefixlistrule",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.protoall",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.protoall",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.protonum",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.protonum",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.splitsource",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.splitsource",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "aws_vpc.main",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_vpc_security_group_ingress_rule.everyproto",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.everyproto",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_vpc_security_group_ingress_rule.ipv6",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.ipv6",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_vpc_security_group_ingress_rule.mixed_open",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.mixed_open",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_vpc_security_group_ingress_rule.prefixlistrule",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.prefixlistrule",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_vpc_security_group_ingress_rule.protoall",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.protoall",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_vpc_security_group_ingress_rule.protonum",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.protonum",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "NETWORK_PUBLIC_INGRESS_DETERMINABLE",
+      "required": false,
+      "reason": "Ingress from any address could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "aws_security_group.backwards",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.backwards",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.backwards",
+          "path": "ingress[0].cidr_blocks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.backwards",
+          "path": "ingress[0].from_port",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.backwards",
+          "path": "ingress[0].to_port",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "NETWORK_PUBLIC_INGRESS_DETERMINABLE",
+      "required": false,
+      "reason": "Ingress from any address could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "aws_security_group.norules",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.norules",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "NETWORK_PUBLIC_INGRESS_DETERMINABLE",
+      "required": false,
+      "reason": "Ingress from any address could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "aws_security_group.prefixlist",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.prefixlist",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.prefixlist",
+          "path": "ingress[0].prefix_list_ids",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "NETWORK_PUBLIC_INGRESS_DETERMINABLE",
+      "required": false,
+      "reason": "Ingress from any address could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "aws_security_group.prefixlistrule",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.prefixlistrule",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.prefixlistrule",
+          "path": "cidr_ipv4",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.prefixlistrule",
+          "path": "cidr_ipv6",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.prefixlistrule",
+          "path": "ip_protocol",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_vpc_security_group_ingress_rule.prefixlistrule",
+          "path": "prefix_list_id",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

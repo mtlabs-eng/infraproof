@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:4672618f8688e53ab7cef44718a9d7542b1a17c36f0383b70474812e6c536e92"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "AZURE_DATABASE_FIREWALL_RANGE_UNREADABLE",
+      "required": false,
+      "reason": "A firewall rule in front of this server names a range of addresses this build could not read, and it could be the one that admits every address.",
+      "resource_address": "azurerm_mssql_server.db",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.bad",
+          "path": "end_ip_address",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.bad",
+          "path": "start_ip_address",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AZURE_DATABASE_FIREWALL_RULES_INCOMPLETE",
+      "required": false,
+      "reason": "This server's firewall rules are separate resources, so a rule declared outside this plan could admit every address and nothing here can show that none does.",
+      "resource_address": "azurerm_mssql_server.db",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_server.db",
+          "path": "public_network_access_enabled",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: it has an endpoint outside the private network, and the plan does not state whether anything admits every address to it.",
+      "resource_address": "azurerm_mssql_server.db",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.bad",
+          "path": "end_ip_address",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.bad",
+          "path": "start_ip_address",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_server.db",
+          "path": "public_network_access_enabled",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_mssql_firewall_rule.bad",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.bad",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_mssql_server.db",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_server.db",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

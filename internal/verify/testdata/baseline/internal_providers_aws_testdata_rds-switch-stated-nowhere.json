@@ -1,0 +1,320 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 2 facts required for a safe conclusion were unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:fedb6d4c539c6a7acb485d3614dd8946f2cf5ad570c285bf79a83f291f7af716"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "DATABASE_PUBLIC_REACHABLE",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change makes a database reachable from any address, and the intent contract does not declare that exposure.",
+      "resource": {
+        "address": "aws_db_instance.open",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "expected": {
+        "path": "database.reachable_from_any_address",
+        "value": false
+      },
+      "observed": {
+        "path": "database.reachable_from_any_address",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.open",
+          "path": "publicly_accessible",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "ingress[0].cidr_blocks",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the exposure in the intent contract, or close the public endpoint or the rule that admits every address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "aws_security_group.open",
+        "provider": "registry.terraform.io/hashicorp/aws",
+        "cloud": "aws"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/5432"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "ingress",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "ingress[0].cidr_blocks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "ingress[0].protocol",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "AWS_DATABASE_ALLOW_LIST_MAY_BE_PARTIAL",
+      "required": false,
+      "reason": "A security group named by identifier rather than by reference leaves nothing in the plan to correlate, so a group admitting more than the ones named here could be attached to this database.",
+      "resource_address": "aws_db_instance.open",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.open",
+          "path": "vpc_security_group_ids",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_DATABASE_SECURITY_GROUPS_UNKNOWN",
+      "required": false,
+      "reason": "This database's security groups are not named in a way this plan can correlate, so nothing here can show who may reach it. Either none was named, and AWS applies the default security group of the VPC, or they were named by identifier rather than by reference.",
+      "resource_address": "aws_db_instance.endpoint_only",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.endpoint_only",
+          "path": "vpc_security_group_ids",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "AWS_SECURITY_GROUP_ATTACHMENT_UNKNOWN",
+      "required": false,
+      "reason": "A security group applies to whatever attaches it, and an attachment is not part of the group, so the plan does not state what this rule set governs.",
+      "resource_address": "aws_security_group.open",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "ingress",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "aws_vpc.main",
+      "evidence": []
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: it has an endpoint outside the private network, and the plan does not state whether anything admits every address to it.",
+      "resource_address": "aws_db_instance.endpoint_only",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.endpoint_only",
+          "path": "publicly_accessible",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_db_instance.endpoint_only",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.endpoint_only",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_db_instance.implicit",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.implicit",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_db_instance.open",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_db_instance.open",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_rds_cluster.aurora",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster.aurora",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_rds_cluster.ax",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster.ax",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_rds_cluster_instance.aurora",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster_instance.aurora",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_rds_cluster_instance.ax",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster_instance.ax",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_rds_cluster_instance.ax_false",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_rds_cluster_instance.ax_false",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "aws_security_group.open",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "aws_security_group.open",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "aws_vpc.main",
+      "evidence": []
+    }
+  ]
+}

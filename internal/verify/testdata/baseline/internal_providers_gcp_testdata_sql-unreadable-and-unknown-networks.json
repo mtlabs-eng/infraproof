@@ -1,0 +1,155 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 2 facts required for a safe conclusion were unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:1e6a0c00af250af01ed5b4878578573e3e2396ac53d1d193fa8cd324ff721b44"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [],
+  "unknowns": [
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "random_id.churn",
+      "evidence": []
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: it has an endpoint outside the private network, and the plan does not state whether anything admits every address to it.",
+      "resource_address": "google_sql_database_instance.setunknown",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.setunknown",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.setunknown",
+          "path": "settings.ip_configuration.ipv4_enabled",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: it has an endpoint outside the private network, and the plan does not state whether anything admits every address to it.",
+      "resource_address": "google_sql_database_instance.typo",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.typo",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.typo",
+          "path": "settings.ip_configuration.ipv4_enabled",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_sql_database_instance.setunknown",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.setunknown",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_sql_database_instance.typo",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.typo",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "random_id.churn",
+      "evidence": []
+    },
+    {
+      "check_id": "GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE",
+      "required": false,
+      "reason": "The plan does not state which networks are authorized to reach this instance, and one of them could be every address.",
+      "resource_address": "google_sql_database_instance.setunknown",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.setunknown",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE",
+      "required": false,
+      "reason": "An authorized network in front of this instance names an address this build could not read, and it could be every address.",
+      "resource_address": "google_sql_database_instance.typo",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.typo",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

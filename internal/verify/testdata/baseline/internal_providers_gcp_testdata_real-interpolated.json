@@ -1,0 +1,800 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 2 facts required for a safe conclusion were unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:74f4b59cc3195c616574856bc9130e2b04a3dd03889ce6fc0fe2ef5ac92ee930"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address on a port, and on a protocol the intent contract cannot describe; the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "google_compute_firewall.allow_high",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "every/0-65535"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.allow_high",
+          "path": "allow",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.allow_high",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.allow_high",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, confirm that the protocol is intended to be reachable from any address, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "google_compute_firewall.dyn_allow",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.dyn_allow",
+          "path": "allow",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.dyn_allow",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.dyn_allow",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "google_compute_firewall.omitted",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.omitted",
+          "path": "allow",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.omitted",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.omitted",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+          "path": "allow",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+          "path": "allow",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    },
+    {
+      "rule_id": "NETWORK_PUBLIC_INGRESS",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change permits ingress from any address, and the intent contract does not declare which ports may be reachable from any address.",
+      "resource": {
+        "address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "observed": {
+        "path": "network.open_to_any_address",
+        "state": "KNOWN",
+        "value": "tcp/22"
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+          "path": "allow",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the ports in the intent contract, or remove the rule that permits ingress from any address."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "google_compute_network.vpc",
+      "evidence": []
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_compute_firewall.allow_high",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.allow_high",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_compute_firewall.deny_interp_direction",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_direction",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_compute_firewall.deny_interp_disabled",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_disabled",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_compute_firewall.deny_interp_priority",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_priority",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_compute_firewall.dyn_allow",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.dyn_allow",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_compute_firewall.omitted",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.omitted",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_compute_firewall.sensitive_direction",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.sensitive_direction",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "google_compute_network.vpc",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "google_compute_firewall.allow_high",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.allow_high",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "google_compute_firewall.deny_interp_direction",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_direction",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "google_compute_firewall.deny_interp_disabled",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_disabled",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "google_compute_firewall.deny_interp_priority",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_priority",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "google_compute_firewall.dyn_allow",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.dyn_allow",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "google_compute_firewall.omitted",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.omitted",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "google_compute_firewall.sensitive_direction",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.sensitive_direction",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_DENY_MAY_EXIST_ELSEWHERE",
+      "required": false,
+      "reason": "A firewall on the same network at a lower priority can deny what this one permits, and one declared outside this plan is not visible here.",
+      "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+          "path": "priority",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "google_compute_firewall.allow_high",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.allow_high",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "google_compute_firewall.deny_interp_direction",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_direction",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "google_compute_firewall.deny_interp_disabled",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_disabled",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "google_compute_firewall.deny_interp_priority",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_priority",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "google_compute_firewall.dyn_allow",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.dyn_allow",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "google_compute_firewall.omitted",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.omitted",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "google_compute_firewall.sensitive_direction",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.sensitive_direction",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].google_compute_firewall.outer_fw",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"p\"]",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_FIREWALL_SCOPE_UNKNOWN",
+      "required": false,
+      "reason": "A firewall applies to the instances on its network that carry its targets, and an instance names the target rather than the other way round, so the plan does not state what this rule set governs.",
+      "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "module.fwouter[\"a\"].module.fwinner.google_compute_firewall.inner_fw[\"q\"]",
+          "path": "network",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "NETWORK_PUBLIC_INGRESS_DETERMINABLE",
+      "required": false,
+      "reason": "Ingress from any address could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "google_compute_firewall.deny_interp_direction",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_direction",
+          "path": "direction",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_direction",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_direction",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "NETWORK_PUBLIC_INGRESS_DETERMINABLE",
+      "required": false,
+      "reason": "Ingress from any address could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "google_compute_firewall.deny_interp_disabled",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_disabled",
+          "path": "disabled",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_disabled",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_disabled",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "NETWORK_PUBLIC_INGRESS_DETERMINABLE",
+      "required": false,
+      "reason": "Ingress from any address could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "google_compute_firewall.deny_interp_priority",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_priority",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.deny_interp_priority",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "NETWORK_PUBLIC_INGRESS_DETERMINABLE",
+      "required": false,
+      "reason": "Ingress from any address could not be determined from the plan; the state of the deciding value is UNKNOWN.",
+      "resource_address": "google_compute_firewall.sensitive_direction",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.sensitive_direction",
+          "path": "direction",
+          "redacted": true
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.sensitive_direction",
+          "path": "priority",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_compute_firewall.sensitive_direction",
+          "path": "source_ranges",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

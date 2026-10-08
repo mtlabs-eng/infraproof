@@ -1,0 +1,171 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 2 facts required for a safe conclusion were unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:1ac473a0169320fe67c0eca122ef925b7fc1994d929834d0e7bbe82cd809a91d"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "DATABASE_PUBLIC_REACHABLE",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change makes a database reachable from any address, and the intent contract does not declare that exposure.",
+      "resource": {
+        "address": "google_sql_database_instance.version_unreadable",
+        "provider": "registry.terraform.io/hashicorp/google",
+        "cloud": "gcp"
+      },
+      "expected": {
+        "path": "database.reachable_from_any_address",
+        "value": false
+      },
+      "observed": {
+        "path": "database.reachable_from_any_address",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.version_unreadable",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.version_unreadable",
+          "path": "settings.ip_configuration.ipv4_enabled",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the exposure in the intent contract, or close the public endpoint or the rule that admits every address."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "CLOUD_DETERMINABLE",
+      "required": true,
+      "reason": "No mapper interpreted this resource, so it was not normalized and could not be checked against the allowed clouds.",
+      "resource_address": "google_compute_network.vpc",
+      "evidence": []
+    },
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "DATABASE_REACHABILITY_DETERMINABLE",
+      "required": false,
+      "reason": "Whether this database is reachable from any address could not be determined from the plan: it has an endpoint outside the private network, and the plan does not state whether anything admits every address to it.",
+      "resource_address": "google_sql_database_instance.network_unreadable",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.network_unreadable",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.network_unreadable",
+          "path": "settings.ip_configuration.ipv4_enabled",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "No mapper interpreted this resource, so there was no attribute to read an environment from and none was compared with the contract.",
+      "resource_address": "google_compute_network.vpc",
+      "evidence": []
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_sql_database_instance.network_unreadable",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.network_unreadable",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "google_sql_database_instance.version_unreadable",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.version_unreadable",
+          "path": "labels.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_SQL_AUTHORIZED_NETWORK_UNREADABLE",
+      "required": false,
+      "reason": "An authorized network in front of this instance names an address this build could not read, and it could be every address.",
+      "resource_address": "google_sql_database_instance.network_unreadable",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.network_unreadable",
+          "path": "settings.ip_configuration.authorized_networks",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "GCP_SQL_DATABASE_VERSION_UNREADABLE",
+      "required": false,
+      "reason": "This build does not know which port this database's version listens on, so the port is reported as undetermined. The verdict does not rest on it: an authorized network admits addresses and names no port, so nothing here compares one.",
+      "resource_address": "google_sql_database_instance.version_unreadable",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "google_sql_database_instance.version_unreadable",
+          "path": "database_version",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}

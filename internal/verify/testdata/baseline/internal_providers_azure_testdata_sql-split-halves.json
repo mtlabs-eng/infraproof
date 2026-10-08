@@ -1,0 +1,141 @@
+{
+  "schema_version": "1.2",
+  "decision": "UNKNOWN",
+  "summary": "The change could not be verified: 1 fact required for a safe conclusion was unavailable.",
+  "subject": {
+    "intent_source": "testdata/baseline/intent.json",
+    "intent_digest": "sha256:fbe54467e10292bb3b359d03ef283cb639a087cee2518397e4067bb33de9fd6e",
+    "plan_format_version": "1.2",
+    "plan_digest": "sha256:7e860802b08bf338c028f4f619e2032518bbdc67e3be0fe0c53e9df9728e3602"
+  },
+  "verification": [
+    {
+      "name": "intent_contract",
+      "status": "VERIFIED",
+      "method": "intent-contract-json"
+    },
+    {
+      "name": "terraform_plan",
+      "status": "VERIFIED",
+      "method": "terraform-plan-json"
+    },
+    {
+      "name": "live_state",
+      "status": "NOT_AVAILABLE",
+      "method": "none"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "DATABASE_PUBLIC_REACHABLE",
+      "severity": "HIGH",
+      "disposition": "WARN",
+      "claim": "The change makes a database reachable from any address, and the intent contract does not declare that exposure.",
+      "resource": {
+        "address": "azurerm_mssql_server.db",
+        "provider": "registry.terraform.io/hashicorp/azurerm",
+        "cloud": "azure"
+      },
+      "expected": {
+        "path": "database.reachable_from_any_address",
+        "value": false
+      },
+      "observed": {
+        "path": "database.reachable_from_any_address",
+        "state": "KNOWN",
+        "value": true
+      },
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.high",
+          "path": "end_ip_address",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.high",
+          "path": "start_ip_address",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.low",
+          "path": "end_ip_address",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.low",
+          "path": "start_ip_address",
+          "redacted": false
+        },
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_server.db",
+          "path": "public_network_access_enabled",
+          "redacted": false
+        }
+      ],
+      "remediation": "Declare the exposure in the intent contract, or close the public endpoint or the rule that admits every address."
+    }
+  ],
+  "unknowns": [
+    {
+      "check_id": "CONTRACT_DECLARATION_UNEXERCISED",
+      "required": true,
+      "reason": "The contract declares private exposure for object_storage, and the plan contains no resource of that family, so the declaration was not exercised.",
+      "resource_address": null,
+      "evidence": [
+        {
+          "source": "intent_contract",
+          "resource_address": "",
+          "path": "resources",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_mssql_firewall_rule.high",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.high",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_mssql_firewall_rule.low",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_firewall_rule.low",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    },
+    {
+      "check_id": "ENVIRONMENT_EVIDENCE_AVAILABLE",
+      "required": false,
+      "reason": "The resource declares no environment, so it could not be compared with the contract.",
+      "resource_address": "azurerm_mssql_server.db",
+      "evidence": [
+        {
+          "source": "terraform_plan",
+          "resource_address": "azurerm_mssql_server.db",
+          "path": "tags.environment",
+          "redacted": false
+        }
+      ]
+    }
+  ]
+}
