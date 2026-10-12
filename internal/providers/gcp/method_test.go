@@ -178,3 +178,21 @@ func TestADenyAppliedOnADefaultedPriorityIsTheProvidersDefault(t *testing.T) {
 		t.Errorf("web = %s, method = %q, want known false %q", got.State, got.Method(), model.MethodProviderDefault)
 	}
 }
+
+// fw-public with its priority written: INGRESS is known in `after` and nobody
+// wrote it, so direction alone makes the verdict the provider's default.
+func TestAKnownDirectionNobodyWroteIsTheDefaultWithAWrittenPriority(t *testing.T) {
+	got := firewall(t, "fw-public-priority-written").Network.PublicIngress
+	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodProviderDefault {
+		t.Errorf("web = %s, method = %q, want known true %q", got.State, got.Method(), model.MethodProviderDefault)
+	}
+}
+
+// The shape a real create plan emits for an unwritten direction, Computed and
+// so unknown, with the priority written: direction alone is the default.
+func TestAnUnknownUnwrittenDirectionIsTheDefaultWithAWrittenPriority(t *testing.T) {
+	got := firewall(t, "fw-public-direction-computed").Network.PublicIngress
+	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodProviderDefault {
+		t.Errorf("web = %s, method = %q, want known true %q", got.State, got.Method(), model.MethodProviderDefault)
+	}
+}

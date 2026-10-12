@@ -108,8 +108,10 @@ Each fixture is one question:
 | `fw-priority-unwritten` | the same with `web`'s `priority` known 1000 in `after` and unwritten, the shape a real plan emits for the default |
 | `fw-deny-above-priority-unwritten` | `fw-priority-written` with the deny `block`'s `priority` (1001) unwritten: the skip rests on the deny's default, so `web`'s open verdict is the provider's default |
 | `fw-denied-lower-priority-unwritten` | `fw-denied-lower` with `direction` written on both and `priority` written on `web` only: the deny at 100 applies on a priority nobody wrote, so `web`'s closed verdict is the provider's default |
+| `fw-public-priority-written` | `fw-public` with `priority` written: INGRESS known in `after` and unwritten, so direction alone makes the method the provider's default |
+| `fw-public-direction-computed` | `fw-public-direction-omitted` with `direction` unknown in `after_unknown`, the shape a real create plan emits for an unwritten one; `priority` written, so direction alone makes the method the provider's default |
 
-The four `-direction-` fixtures above also write `priority` on every firewall,
+The `-direction-` fixtures above also write `priority` on every firewall,
 so that only `direction` decides their method.
 
 Every other hand-authored fixture here predates milestone 10, and its
