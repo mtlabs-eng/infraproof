@@ -108,6 +108,9 @@
                 "google_compute_network.default.name",
                 "google_compute_network.default"
               ]
+            },
+            "direction": {
+              "constant_value": "INGRESS"
             }
           }
         },

@@ -99,6 +99,7 @@ Each fixture is one question:
 | `fw-unknown-priority` | a priority the plan has not determined, so nothing can be ordered against it |
 | `fw-icmp-deny-one-port` | a deny limited to one port, which cannot reach a protocol that has none |
 | `fw-default-priority-tied` | a deny at 1000 against an unstated priority, which pins the default exactly |
-| `fw-public-direction-omitted` | `fw-public` with `direction` absent from `after` and from the configuration: the INGRESS default, so the verdict's method is the provider's default |
+| `fw-public-direction-omitted` | `fw-public` with `direction` absent from `after` and from the configuration: the INGRESS default, so the verdict's method is the provider's default (`fw-public` itself holds INGRESS in `after` with nothing in the configuration, which is the same default) |
 | `fw-public-direction-written` | `fw-public` with `direction = "INGRESS"` written in the configuration, so the same value is stated |
-| `fw-denied-lower-direction-omitted` | `fw-denied-lower` whose cancelling deny omits `direction`, so the closed verdict rests on a defaulted direction |
+| `fw-denied-lower-direction-omitted` | `fw-denied-lower` with `web`'s `direction` written and the cancelling deny `block`'s omitted, so `web`'s closed verdict is the provider's default only because of the deny's own direction |
+| `fw-deny-above-direction-omitted` | `fw-deny-above` with `web`'s `direction` written and the deny `block`'s omitted: the deny is skipped for priority and never applied, so `web` stays open and stated |

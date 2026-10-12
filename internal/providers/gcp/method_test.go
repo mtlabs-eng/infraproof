@@ -63,20 +63,33 @@ func TestAnUnknownUnwrittenDirectionIsTheProvidersDefault(t *testing.T) {
 	}
 }
 
-// Review Focus 3: the verdict rests on the deny, and the deny's direction is
-// the provider's default.
+// `web` writes its direction, so only the deny's own defaulted direction can make
+// the closed verdict the provider's default.
 func TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault(t *testing.T) {
-	for _, r := range graphOf(t, "fw-denied-lower-direction-omitted").Resources {
-		if r.Network == nil || !r.Network.PublicIngress.IsKnown() || r.Network.PublicIngress.Get() {
-			continue
-		}
-		if r.Network.PublicIngress.Method() != model.MethodProviderDefault {
-			t.Errorf("%s: method = %q, want %q", r.Address, r.Network.PublicIngress.Method(),
-				model.MethodProviderDefault)
-		}
-		return
+	r, ok := graphOf(t, "fw-denied-lower-direction-omitted").At("google_compute_firewall.web")
+	if !ok {
+		t.Fatal("web not in fixture")
 	}
-	t.Fatal("no firewall read as closed; the deny no longer cancels the grant")
+	got := r.Network.PublicIngress
+	if !got.IsKnown() || got.Get() {
+		t.Fatalf("web = %s; the deny should cancel the grant", got.State)
+	}
+	if got.Method() != model.MethodProviderDefault {
+		t.Errorf("method = %q, want %q", got.Method(), model.MethodProviderDefault)
+	}
+}
+
+// A deny with a defaulted direction that is skipped is never applied, so the
+// stated verdict does not rest on it.
+func TestASkippedDenyWithADefaultedDirectionLeavesTheVerdictStated(t *testing.T) {
+	r, ok := graphOf(t, "fw-deny-above-direction-omitted").At("google_compute_firewall.web")
+	if !ok {
+		t.Fatal("web not in fixture")
+	}
+	got := r.Network.PublicIngress
+	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodStated {
+		t.Errorf("web = %s, method = %q, want known true %q", got.State, got.Method(), model.MethodStated)
+	}
 }
 
 func TestAPolicyDataGrantIsInterpreted(t *testing.T) {
