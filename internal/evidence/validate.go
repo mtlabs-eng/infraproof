@@ -323,6 +323,13 @@ func validateFinding(path string, f Finding, requireSteps bool) []error {
 		errs = append(errs, violation(path+".verification_steps",
 			"must say how at least one fact the finding rests on was established"))
 	}
+	if requireSteps && len(f.VerificationSteps) > 0 && !comparesWithContract(f.VerificationSteps) {
+		// Every finding is a comparison with the contract, including one where
+		// the contract declares nothing, so from 1.3 its steps say so.
+		errs = append(errs, violation(path+".verification_steps",
+			"must carry the comparison with the contract, a contract. fact established by %s",
+			MethodIntentComparison))
+	}
 	errs = append(errs, validateSteps(path, f.VerificationSteps)...)
 
 	return errs
@@ -333,6 +340,7 @@ func validateFinding(path string, f Finding, requireSteps bool) []error {
 // is.
 func validateSteps(parent string, steps []VerificationStep) []error {
 	var errs []error
+	seen := map[string]bool{}
 	for i, step := range steps {
 		path := fmt.Sprintf("%s.verification_steps[%d]", parent, i)
 		if strings.TrimSpace(step.Fact) == "" {
@@ -346,6 +354,20 @@ func validateSteps(parent string, steps []VerificationStep) []error {
 		if strings.IndexFunc(step.Fact, isControlChar) >= 0 {
 			errs = append(errs, violation(path+".fact", "must not carry a control character"))
 		}
+		// And it has the shape every such constant has: lower-case dotted
+		// segments. Anything else -- markup, a table cell, an invisible
+		// character -- is not a path this build could have written.
+		if strings.TrimSpace(step.Fact) != "" && !isFactPath(step.Fact) {
+			errs = append(errs, violation(path+".fact",
+				"must be dotted lower-case segments of letters, digits and underscores"))
+		}
+		// One fact is established one way. The same step twice says nothing,
+		// and two methods for one fact say incompatible things about where one
+		// value came from.
+		if seen[step.Fact] {
+			errs = append(errs, violation(path+".fact", "states a fact an earlier step already established"))
+		}
+		seen[step.Fact] = true
 		if !step.Method.Valid() {
 			errs = append(errs, violation(path+".method", "unrecognized verification method %q",
 				string(step.Method)))
@@ -657,4 +679,36 @@ func relativeFilePath(file string) bool {
 // restate, or ignore.
 func (l Location) Valid() bool {
 	return relativeFilePath(l.File) && l.Line >= 1
+}
+
+// comparesWithContract reports that the steps carry the comparison with the
+// intent contract.
+func comparesWithContract(steps []VerificationStep) bool {
+	for _, step := range steps {
+		if strings.HasPrefix(step.Fact, "contract.") && step.Method == MethodIntentComparison {
+			return true
+		}
+	}
+	return false
+}
+
+// isFactPath reports whether s is two or more dot-separated segments, each a
+// lower-case letter followed by lower-case letters, digits or underscores.
+func isFactPath(s string) bool {
+	segments := strings.Split(s, ".")
+	if len(segments) < 2 {
+		return false
+	}
+	for _, segment := range segments {
+		if segment == "" || segment[0] < 'a' || segment[0] > 'z' {
+			return false
+		}
+		for i := 0; i < len(segment); i++ {
+			c := segment[i]
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+				return false
+			}
+		}
+	}
+	return true
 }

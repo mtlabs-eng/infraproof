@@ -61,8 +61,11 @@ func warnFinding() Finding {
 			Source: "terraform_plan",
 			Path:   "resource_changes[].change.after",
 		}},
-		VerificationSteps: []VerificationStep{{Fact: "object_storage.versioning", Method: MethodPlanStatedValue}},
-		Remediation:       "Declare versioning explicitly.",
+		VerificationSteps: []VerificationStep{
+			{Fact: "object_storage.versioning", Method: MethodPlanStatedValue},
+			{Fact: "contract.object_storage.exposure", Method: MethodIntentComparison},
+		},
+		Remediation: "Declare versioning explicitly.",
 	}
 }
 
@@ -76,8 +79,11 @@ func infoFinding() Finding {
 			Source: "terraform_plan",
 			Path:   "resource_changes[]",
 		}},
-		VerificationSteps: []VerificationStep{{Fact: "object_storage.public_access", Method: MethodPlanStatedValue}},
-		Remediation:       "No remediation required; this finding is informational.",
+		VerificationSteps: []VerificationStep{
+			{Fact: "object_storage.public_access", Method: MethodPlanStatedValue},
+			{Fact: "contract.object_storage.exposure", Method: MethodIntentComparison},
+		},
+		Remediation: "No remediation required; this finding is informational.",
 	}
 }
 

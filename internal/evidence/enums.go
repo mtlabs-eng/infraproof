@@ -187,13 +187,22 @@ const (
 	// MethodIntentComparison means the fact is the comparison with the intent
 	// contract.
 	MethodIntentComparison VerificationMethod = "intent-comparison"
+	// MethodPriorState means the argument is unwritten, the change updates an
+	// existing object, and the value is the one Terraform carried from its prior
+	// state: neither written by the author nor the provider's default.
+	MethodPriorState VerificationMethod = "prior-state"
+	// MethodConfigurationUnrecorded means the plan does not record whether the
+	// author wrote the argument, so its absence from the configuration proves
+	// nothing either way.
+	MethodConfigurationUnrecorded VerificationMethod = "configuration-unrecorded"
 )
 
 // Valid reports whether m is a member of the closed method set.
 func (m VerificationMethod) Valid() bool {
 	switch m {
 	case MethodPlanStatedValue, MethodProviderDefault, MethodPolicyDocumentInterpreted,
-		MethodReferenceResolved, MethodDocumentedTable, MethodPlanAction, MethodIntentComparison:
+		MethodReferenceResolved, MethodDocumentedTable, MethodPlanAction, MethodIntentComparison,
+		MethodPriorState, MethodConfigurationUnrecorded:
 		return true
 	}
 	return false
