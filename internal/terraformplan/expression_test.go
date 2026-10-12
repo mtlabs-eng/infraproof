@@ -303,3 +303,171 @@ func TestAValueThePlanDoesNotShowIsNeverContradicted(t *testing.T) {
 		}
 	}
 }
+
+// A block written in block syntax has no expression of its own, and the
+// attributes inside a repeated block have no one expression each; what the
+// configuration records about the block is read from all of them at once.
+// It is a constant only where every attribute inside it, at every depth, is
+// one, and the constants are contradicted where the planned blocks are not,
+// one for one, blocks matching the written ones on the attributes written in
+// them -- the planned block carries every attribute, the written one only those
+// the author wrote.
+func TestABlockIsRecordedFromEverythingWrittenInIt(t *testing.T) {
+	const two = `{"rule": [{"port": 22, "cidr": "0.0.0.0/0"}, {"port": 80, "cidr": "0.0.0.0/0"}],
+	              "settings": [{"ip": [{"enabled": true, "cidr": "0.0.0.0/0"}], "mode": {"x": 1}}],
+	              "timeouts": {"create": "5m", "delete": null}}`
+	cases := map[string]struct {
+		variables, expressions, path string
+		evaluation                   Evaluation
+		contradicted                 bool
+	}{
+		"constants": {`{}`, `{"rule": [{"port": {"constant_value": 22}}, {"port": {"constant_value": 80}}]}`,
+			"rule", EvaluationConstant, false},
+		"constants in another order": {`{}`, `{"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}}]}`,
+			"rule", EvaluationConstant, false},
+		"a constant the plan does not hold": {`{}`, `{"rule": [{"port": {"constant_value": 443}}, {"port": {"constant_value": 80}}]}`,
+			"rule", EvaluationConstant, true},
+		"a second attribute the plan does not hold": {`{}`,
+			`{"rule": [{"port": {"constant_value": 22}, "cidr": {"constant_value": "10.0.0.0/8"}}, {"port": {"constant_value": 80}}]}`,
+			"rule", EvaluationConstant, true},
+		"more blocks written than planned": {`{}`,
+			`{"rule": [{"port": {"constant_value": 22}}, {"port": {"constant_value": 80}}, {"port": {"constant_value": 80}}]}`,
+			"rule", EvaluationConstant, true},
+		// ignore_changes keeps a block the configuration no longer writes, and
+		// a dynamic block beside a static one writes one it does not record:
+		// either way the planned set is not the one written.
+		"fewer blocks written than planned": {`{}`, `{"rule": [{"port": {"constant_value": 22}}]}`,
+			"rule", EvaluationConstant, true},
+		"a literal null inside": {`{}`, `{"rule": [{"port": {"constant_value": 22}, "cidr": {"constant_value": null}}, {"port": {"constant_value": 80}}]}`,
+			"rule", EvaluationConstant, false},
+		"a variable recorded as null inside": {`{"v": {"value": null}}`,
+			`{"rule": [{"port": {"constant_value": 22}, "cidr": {"references": ["var.v"]}}, {"port": {"constant_value": 80}}]}`,
+			"rule", EvaluationConstant, false},
+		"a variable recorded with a value inside": {`{"v": {"value": "0.0.0.0/0"}}`,
+			`{"rule": [{"port": {"constant_value": 22}, "cidr": {"references": ["var.v"]}}]}`,
+			"rule", EvaluationDeferred, false},
+		"a variable the plan does not resolve inside": {`{}`,
+			`{"rule": [{"port": {"constant_value": 22}, "cidr": {"references": ["var.v"]}}]}`,
+			"rule", EvaluationDeferred, false},
+		"a function inside": {`{}`, `{"rule": [{"port": {"constant_value": 22}, "cidr": {}}]}`,
+			"rule", EvaluationDeferred, false},
+		"a block inside a block": {`{}`, `{"settings": [{"ip": [{"cidr": {"constant_value": "0.0.0.0/0"}}]}]}`,
+			"settings.ip", EvaluationConstant, false},
+		"a block inside a block, contradicted": {`{}`, `{"settings": [{"ip": [{"cidr": {"constant_value": "10.0.0.0/8"}}]}]}`,
+			"settings.ip", EvaluationConstant, true},
+		"the outer block, through the inner": {`{}`, `{"settings": [{"ip": [{"cidr": {"constant_value": "10.0.0.0/8"}}]}]}`,
+			"settings", EvaluationConstant, true},
+		"the outer block, a reference in the inner": {`{}`, `{"settings": [{"ip": [{"cidr": {"references": ["local.c"]}}]}]}`,
+			"settings", EvaluationDeferred, false},
+		"a single block inside a block": {`{}`, `{"settings": [{"mode": {"x": {"constant_value": 1}}}]}`,
+			"settings", EvaluationConstant, false},
+		"a single block inside a block, contradicted": {`{}`, `{"settings": [{"mode": {"x": {"constant_value": 2}}}]}`,
+			"settings", EvaluationConstant, true},
+		"a single block inside a block, a reference": {`{}`, `{"settings": [{"mode": {"x": {"references": ["local.x"]}}}]}`,
+			"settings", EvaluationDeferred, false},
+		"the same block written twice": {`{}`, `{"rule": [{"port": {"constant_value": 22}}, {"port": {"constant_value": 22}}]}`,
+			"rule", EvaluationConstant, true},
+		"two blocks written where the plan has one": {`{}`,
+			`{"timeouts": [{"create": {"constant_value": "5m"}}, {"create": {"constant_value": "5m"}}]}`,
+			"timeouts", EvaluationConstant, true},
+		"a single block": {`{}`, `{"timeouts": {"create": {"constant_value": "5m"}}}`,
+			"timeouts", EvaluationConstant, false},
+		"a single block, contradicted": {`{}`, `{"timeouts": {"create": {"constant_value": "9m"}}}`,
+			"timeouts", EvaluationConstant, true},
+		"an attribute the plan does not carry": {`{}`, `{"timeouts": {"update": {"constant_value": "9m"}}}`,
+			"timeouts", EvaluationConstant, true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			plan := expressionPlan(t, c.variables, c.expressions, two, `{}`, `{}`, `{}`)
+			got, found := blockAt(t, plan, "x_thing.t", c.path)
+			if !found {
+				t.Fatalf("no block recorded at %s", c.path)
+			}
+			if got.Evaluation != c.evaluation || got.Contradicted != c.contradicted {
+				t.Errorf("block = %+v, want evaluation %v, contradicted %v", got, c.evaluation, c.contradicted)
+			}
+		})
+	}
+}
+
+// Only a block the configuration places once is recorded: one inside a
+// repeated block is many blocks, and an attribute is not a block.
+func TestOnlyABlockWrittenInOnePlaceIsRecorded(t *testing.T) {
+	plan := expressionPlan(t, `{}`,
+		`{"rule": [{"match": [{"port": {"constant_value": 22}}]}, {"match": [{"port": {"constant_value": 80}}]}],
+		  "acl": {"constant_value": "private"}, "tags": {"constant_value": {"a": "b"}}}`,
+		`{"acl": "private", "tags": {"a": "b"}}`, `{}`, `{}`, `{}`)
+	if _, found := blockAt(t, plan, "x_thing.t", "rule"); !found {
+		t.Error("a repeated block is not recorded")
+	}
+	if _, found := blockAt(t, plan, "x_thing.t", "rule.match"); found {
+		t.Error("a block inside a repeated block is recorded")
+	}
+	for _, path := range []string{"acl", "tags"} {
+		if _, found := blockAt(t, plan, "x_thing.t", path); found {
+			t.Errorf("the attribute %s is recorded as a block", path)
+		}
+	}
+}
+
+// The constants inside a block are read and compared, never kept.
+func TestNoConstantInsideABlockIsRetained(t *testing.T) {
+	const canary = "BLOCK-CANARY-77a1"
+	plan := expressionPlan(t, `{}`, `{"rule": [{"secret": {"constant_value": "`+canary+`"}}]}`,
+		`{"rule": [{"secret": "x"}]}`, `{}`, `{}`, `{}`)
+	if found := findCanary(reflect.ValueOf(plan), "plan", canary); found != "" {
+		t.Errorf("a constant inside a block was retained at %s", found)
+	}
+}
+
+func blockAt(t *testing.T, plan Plan, address, path string) (Expression, bool) {
+	t.Helper()
+	for _, change := range plan.ResourceChanges {
+		if change.Address == address {
+			return change.Block(path)
+		}
+	}
+	t.Fatalf("no change at %s", address)
+	return Expression{}, false
+}
+
+// A block the plan does not know is never contradicted, nor is one block of
+// several it does not know: there is nothing to compare the constants with.
+// Planned blocks that are not objects are not the blocks written.
+func TestABlockThePlanDoesNotShowIsNeverContradicted(t *testing.T) {
+	cases := map[string]struct {
+		after, unknown string
+		want           bool
+	}{
+		"the blocks unknown":     {`{"rule": null}`, `{"rule": true}`, false},
+		"one block unknown":      {`{"rule": [{"port": 80}, null]}`, `{"rule": [false, true]}`, false},
+		"blocks that are values": {`{"rule": [80, 22]}`, `{}`, true},
+		"the blocks known":       {`{"rule": [{"port": 80}, {"port": 23}]}`, `{}`, true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := `{
+			  "format_version": "1.2",
+			  "resource_changes": [{"address": "x_thing.t", "mode": "managed", "type": "x_thing", "name": "t",
+			    "provider_name": "registry.terraform.io/hashicorp/x",
+			    "change": {"actions": ["update"], "before": {"rule": [{"port": 80}, {"port": 22}]},
+			               "after": ` + c.after + `, "after_unknown": ` + c.unknown + `}}],
+			  "configuration": {"root_module": {"resources": [{"address": "x_thing.t", "mode": "managed",
+			    "type": "x_thing", "name": "t", "provider_config_key": "x",
+			    "expressions": {"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}}]}}]}}
+			}`
+			plan, err := Parse([]byte(raw))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			got, found := plan.ResourceChanges[0].Block("rule")
+			if !found || got.Evaluation != EvaluationConstant {
+				t.Fatalf("block: %+v, found %v", got, found)
+			}
+			if got.Contradicted != c.want {
+				t.Errorf("Contradicted = %v, want %v", got.Contradicted, c.want)
+			}
+		})
+	}
+}

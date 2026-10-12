@@ -231,6 +231,10 @@ type ResourceChange struct {
 	// path Stated spells it. Nil when Configured is false. It holds no value:
 	// see Expression.
 	Expressions map[string]Expression
+	// Blocks records, for each block the configuration writes in block syntax
+	// in one place, what everything written inside it evaluates to, by the
+	// path Stated spells it. It holds no value either.
+	Blocks map[string]Expression
 }
 
 // DrawsOnOpaque reports whether an argument's value comes, in part, from

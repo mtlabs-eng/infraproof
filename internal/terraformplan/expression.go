@@ -47,6 +47,10 @@ type Expression struct {
 	// Terraform's `lifecycle { ignore_changes }` keeps the prior value in
 	// `after` whatever the configuration writes, and the plan's configuration
 	// does not record the lifecycle block, so this is the one trace it leaves.
+	// For a block written in block syntax (see Block), it reports that the
+	// planned blocks are not, one for one, blocks holding the constants
+	// written in them.
+	//
 	// The comparison follows Terraform's encoding of a constant: an attribute
 	// written as blocks records every attribute, null where nothing was
 	// written, so a null matches anything; a list is compared as a set; a
@@ -62,6 +66,17 @@ type Expression struct {
 // is written in more than one block.
 func (c ResourceChange) Expression(path string) (Expression, bool) {
 	expression, found := c.Expressions[path]
+	return expression, found
+}
+
+// Block returns what the configuration records about a block written in block
+// syntax, by the path Stated spells it, read from every attribute written in
+// it at every depth: a constant only where each of them is a constant or null.
+// Contradicted then reports that the blocks the plan carries at the path are
+// not, one for one, blocks holding the constants written. False when no block
+// is written there in block syntax, or the block is inside a repeated block.
+func (c ResourceChange) Block(path string) (Expression, bool) {
+	expression, found := c.Blocks[path]
 	return expression, found
 }
 
@@ -121,6 +136,135 @@ func (e evaluator) expressions(raw map[string]any, module string, after Value) m
 		out[path] = recorded
 	}
 	return out
+}
+
+// blocks evaluates every block one resource writes in block syntax against one
+// instance's after value.
+func (e evaluator) blocks(raw map[string]any, module string, after Value) map[string]Expression {
+	out := make(map[string]Expression, len(raw))
+	for path, entry := range raw {
+		elements, ok := entry.([]map[string]any)
+		if !ok {
+			// Inside a repeated block.
+			continue
+		}
+		written, constant := e.blockConstants(elements, module)
+		if !constant {
+			out[path] = Expression{Evaluation: EvaluationDeferred}
+			continue
+		}
+		recorded := Expression{Evaluation: EvaluationConstant}
+		if value, single := valueAtPath(after, path); single {
+			recorded.Contradicted = !blocksMatch(written, value)
+		}
+		out[path] = recorded
+	}
+	return out
+}
+
+// writtenBlocks is the constants written in a block's bodies: each attribute's
+// constant, nil for one written as null, and a nested block as writtenBlocks.
+type writtenBlocks []map[string]any
+
+// blockConstants reads the constants written in a block's bodies. False when
+// anything written in them, at any depth, is not a constant or null.
+func (e evaluator) blockConstants(elements []map[string]any, module string) (writtenBlocks, bool) {
+	out := make(writtenBlocks, 0, len(elements))
+	for _, body := range elements {
+		written := make(map[string]any, len(body))
+		for name, entry := range body {
+			var nested []map[string]any
+			switch typed := entry.(type) {
+			case map[string]any:
+				if !isExpression(typed) {
+					nested = []map[string]any{typed}
+					break
+				}
+				state := e.evaluate(typed, module, 0)
+				switch state.evaluation {
+				case EvaluationConstant:
+					written[name] = state.raw
+				case EvaluationNull:
+					written[name] = nil
+				default:
+					return nil, false
+				}
+				continue
+			case []any:
+				for _, element := range typed {
+					if block, ok := element.(map[string]any); ok {
+						nested = append(nested, block)
+					}
+				}
+			default:
+				continue
+			}
+			inner, constant := e.blockConstants(nested, module)
+			if !constant {
+				return nil, false
+			}
+			written[name] = inner
+		}
+		out = append(out, written)
+	}
+	return out, true
+}
+
+// blocksMatch reports whether the blocks a value holds could be, one for one,
+// the blocks written: each matching a distinct written block on the attributes
+// written in it. A planned block carries every attribute of its schema, the
+// written one only those the author wrote, so an attribute nobody wrote is not
+// compared. Like constantMatches it answers true where it cannot compare.
+func blocksMatch(written writtenBlocks, value Value) bool {
+	if value.State() != StateKnown {
+		return true
+	}
+	if value.Kind() == KindObject {
+		// A block of nesting_mode single.
+		return len(written) == 1 && bodyMatches(written[0], value)
+	}
+	if value.Kind() != KindArray || value.Len() != len(written) {
+		return false
+	}
+	used := make([]bool, value.Len())
+	for _, body := range written {
+		found := false
+		for i := range value.Len() {
+			if !used[i] && bodyMatches(body, value.At(i)) {
+				used[i], found = true, true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func bodyMatches(body map[string]any, value Value) bool {
+	if value.State() != StateKnown {
+		return true
+	}
+	if value.Kind() != KindObject {
+		return false
+	}
+	for name, written := range body {
+		field := value.Field(name)
+		if nested, ok := written.(writtenBlocks); ok {
+			if !blocksMatch(nested, field) {
+				return false
+			}
+			continue
+		}
+		if written != nil && field.State() == StateAbsent {
+			return false
+		}
+		if !constantMatches(written, field) {
+			return false
+		}
+	}
+	return true
 }
 
 // evaluate reads one expression in a module's scope.

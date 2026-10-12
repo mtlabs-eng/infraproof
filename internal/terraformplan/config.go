@@ -68,6 +68,10 @@ type configResource struct {
 	// entry for a path written in more than one block. It is read while
 	// parsing and never kept: see Expression.
 	expressions map[string]any
+	// blocks holds the bodies of each block written in block syntax, by path,
+	// and a nil entry for a block inside a repeated block. Read while parsing
+	// and never kept, like expressions.
+	blocks map[string]any
 	// module is the configuration address of the module declaring it, the
 	// scope its variables resolve in.
 	module string
@@ -209,6 +213,7 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 					stated:            statedArguments(fields),
 					recorded:          recordsArguments(fields),
 					expressions:       recordedExpressions(fields),
+					blocks:            recordedBlocks(fields),
 					module:            addressPrefix,
 				}
 			}
@@ -323,6 +328,53 @@ func collectExpressions(prefix string, body map[string]any, into map[string]any)
 					collectExpressions(path, block, into)
 				}
 			}
+		}
+	}
+}
+
+// recordedBlocks collects the bodies of every block the entry writes in block
+// syntax, by the path Stated spells it: a block of `nesting_mode: single` as a
+// body of one, and a block inside a repeated block as nil, because it is
+// several blocks the path cannot tell apart.
+func recordedBlocks(fields map[string]any) map[string]any {
+	body, ok := fields["expressions"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	into := map[string]any{}
+	collectBlocks("", body, false, into)
+	return into
+}
+
+func collectBlocks(prefix string, body map[string]any, repeated bool, into map[string]any) {
+	for name, entry := range body {
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		var elements []map[string]any
+		switch typed := entry.(type) {
+		case map[string]any:
+			if isExpression(typed) {
+				continue
+			}
+			elements = []map[string]any{typed}
+		case []any:
+			for _, element := range typed {
+				if block, ok := element.(map[string]any); ok {
+					elements = append(elements, block)
+				}
+			}
+		default:
+			continue
+		}
+		if repeated {
+			into[path] = nil
+		} else {
+			into[path] = elements
+		}
+		for _, element := range elements {
+			collectBlocks(path, element, repeated || len(elements) > 1, into)
 		}
 	}
 }
@@ -659,6 +711,7 @@ func resolveProviderInstances(plan *Plan, byAddress map[string]configResource, v
 		change.Stated = configured.stated
 		change.Opaque = configured.opaque
 		change.Expressions = values.expressions(configured.expressions, configured.module, change.After)
+		change.Blocks = values.blocks(configured.blocks, configured.module, change.After)
 	}
 }
 
