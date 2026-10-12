@@ -92,3 +92,27 @@ func TestADenySkippedRestsTheVerdictOnWhyItWasSkipped(t *testing.T) {
 		}
 	}
 }
+
+// Only a binding that grants is a proof of the grant. A member naming one user
+// beside a policy document granting allUsers proves nothing, so the grant is the
+// document's reading; a document naming one user beside a member ignore_changes
+// keeps at allUsers proves nothing either, so the grant is prior state.
+func TestOnlyABindingThatGrantsIsAProof(t *testing.T) {
+	cases := []struct {
+		fixture string
+		want    model.Method
+	}{
+		{"real-policy-grant-beside-private-member", model.MethodPolicyDocument},
+		{"real-carried-member-beside-private-policy", model.MethodPriorState},
+	}
+	for _, c := range cases {
+		r, ok := methodAt(t, c.fixture, "google_storage_bucket.assets")
+		if !ok {
+			t.Fatalf("%s has no bucket", c.fixture)
+		}
+		got := r.ObjectStorage.PublicAccess
+		if !got.IsKnown() || !got.Get() || got.Method() != c.want {
+			t.Errorf("%s: %s method = %q, want known true %q", c.fixture, got.State, got.Method(), c.want)
+		}
+	}
+}

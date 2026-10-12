@@ -68,6 +68,16 @@ func TestAStepPresentIsValidatedWhateverTheVersion(t *testing.T) {
 		"one segment":     {Fact: "public_access", Method: MethodPlanStatedValue},
 		"upper case":      {Fact: "Object_Storage.public_access", Method: MethodPlanStatedValue},
 		"empty segment":   {Fact: "object_storage..public_access", Method: MethodPlanStatedValue},
+		// Added by the fourth review: each is one rule of the documented shape
+		// that no case above isolates.
+		"upper case inside":    {Fact: "object_storage.public_Access", Method: MethodPlanStatedValue},
+		"upper case first":     {Fact: "object_storage.Public_access", Method: MethodPlanStatedValue},
+		"leading digit":        {Fact: "object_storage.1public", Method: MethodPlanStatedValue},
+		"leading underscore":   {Fact: "_object_storage.public_access", Method: MethodPlanStatedValue},
+		"a hyphen":             {Fact: "object-storage.public_access", Method: MethodPlanStatedValue},
+		"leading dot":          {Fact: ".object_storage.public_access", Method: MethodPlanStatedValue},
+		"trailing dot":         {Fact: "object_storage.", Method: MethodPlanStatedValue},
+		"a contract, trailing": {Fact: "contract.", Method: MethodIntentComparison},
 	}
 	for name, step := range cases {
 		for _, version := range []string{"1.2", "1.3"} {
@@ -174,5 +184,22 @@ func TestAVersionWithStepsRequiresTheContractStep(t *testing.T) {
 	}
 	if err := withSteps("1.3", notCompared).Validate(); err == nil {
 		t.Error("a contract. fact not established by intent-comparison was taken for the contract step")
+	}
+	// The prefix is the segment, dot included: a fact that merely begins with
+	// the word is not a contract path.
+	notTheSegment := []VerificationStep{
+		{Fact: "object_storage.public_access", Method: MethodPlanStatedValue},
+		{Fact: "contractual.exposure", Method: MethodIntentComparison},
+	}
+	if err := withSteps("1.3", notTheSegment).Validate(); err == nil {
+		t.Error("a fact beginning with contract but not the contract. segment was taken for the contract step")
+	}
+	// Digits and underscores after the first letter are part of the shape.
+	shaped := []VerificationStep{
+		{Fact: "object_storage.public_access2", Method: MethodPlanStatedValue},
+		{Fact: "contract.object_storage.exposure", Method: MethodIntentComparison},
+	}
+	if err := withSteps("1.3", shaped).Validate(); err != nil {
+		t.Errorf("a well-formed bundle was refused: %v", err)
 	}
 }

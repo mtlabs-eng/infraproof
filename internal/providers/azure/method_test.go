@@ -298,3 +298,14 @@ func TestANetworkSecurityGroupGrantRestsOnTheRulesThatOpen(t *testing.T) {
 		}
 	}
 }
+
+// A database admitted by the union of its firewall rules rests on every rule in
+// the union: two halves of IPv4 admit every address only together. One half is
+// written; the other is kept from state by ignore_changes while the
+// configuration writes a narrower range, so the admission is prior state.
+func TestAnAdmissionByAUnionRestsOnEveryRuleInIt(t *testing.T) {
+	admitted := databaseAt(t, "sql-halves-one-carried", "azurerm_mssql_server.db").Database.AdmitsAnyAddress
+	if !admitted.IsKnown() || !admitted.Get() || admitted.Method() != model.MethodPriorState {
+		t.Errorf("method = %q (state %s), want known true %q", admitted.Method(), admitted.State, model.MethodPriorState)
+	}
+}

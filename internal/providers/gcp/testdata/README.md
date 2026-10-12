@@ -118,6 +118,12 @@ the placeholder token removed afterwards.
   defaulting to `null`. The plan's `variables` records `null`, and `after`
   carries the argument as unknown exactly as when it is omitted: the provider's
   default.
+- `real-policy-grant-beside-private-member.json`: a create of a bucket writing
+  `public_access_prevention = "inherited"`, a member naming one user, and a
+  `google_storage_bucket_iam_policy` whose `policy_data` grants `allUsers`.
+- `real-carried-member-beside-private-policy.json`: the reverse, on an update: a
+  member that writes one user with `ignore_changes = [member]` and `allUsers`
+  in state, beside a policy document naming one user.
 
 ## Skipped-deny fixtures added by the fourth review
 
