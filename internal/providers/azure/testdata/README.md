@@ -89,17 +89,18 @@ core rather than provider behaviour: the actions grammar was measured on AWS and
 GCP, and a reference naming no instance is the correlator's own shape, pinned by
 tests in `internal/providers/declared`.
 
-`sql-switch-defaulted`, `public-blob-written`, `public-blob-container-defaulted`
-and `private-account-forbids-written` are edits of `sql-reachable`, `public-blob`
-(twice) and `private-account-forbids`, and they change only the `configuration`
+`sql-switch-defaulted`, `public-blob-written` and `private-account-forbids-written`
+are edits of `sql-reachable`, `public-blob` and `private-account-forbids`, and
+they change only the `configuration`
 block: the `after` values stay. They exist for the verification method, which
 follows what the configuration writes. The first leaves `public_network_access_enabled`
 out of the configuration while the plan still states it; the others write the
 storage settings the originals leave out, or write only the account's.
 
 `private-container-written-gate-unwritten` and
-`private-container-unwritten-gate-written` are `public-blob-container-defaulted`
-with the container set to `private` in `after`. In the first the container is
+`private-container-unwritten-gate-written` are `public-blob-written` with the
+container set to `private` in `after` and one of the two settings removed from
+the `configuration` block. In the first the container is
 written and the account gate is not; in the second the reverse. Neither gate says
 no, so the container's own setting settles the answer, and the verification
 method has to be the container's rather than the gate's.
@@ -111,19 +112,23 @@ not -- the shape a real plan takes, since the provider defaults the gate to
 `true` -- and the grant is only as strong as the gate, so the method is the
 provider's default.
 
-`public-blob-container-defaulted` is a shape Terraform cannot produce: the
-container's access type defaults to `private` and is not Computed, so an
-unwritten one is planned as `private`, never `blob`. The adversarial review found
-it defending a `provider-default` branch no real plan reaches. The mapper now
-reads a public access type the configuration records as unwritten as one that
-was written, and the fixture pins that.
+`public-blob-container-defaulted`, a public access type the configuration does
+not write on a new container, was removed by the fourth adversarial review. The
+access type defaults to `private` and is not Computed, so no real plan carries a
+`blob` nobody wrote on a new container; the fixture defended first a
+`provider-default` branch and then a rule reading such a value as stated, and
+the rule went with it.
+
+`nsg-separate-open-written` is `nsg-separate-open` with the rule's arguments
+recorded in the `configuration` block, the `after` value unchanged.
 
 The storage fixtures that predate milestone 10 do not write their storage
 settings in the configuration: `public-blob`, `public-container`,
 `private-container`, `private-account-forbids` and the others set
 `allow_nested_items_to_be_public` and `container_access_type` in `after` only,
-so both read as unwritten. A public access type reads as written, for the
-reason above; the account gate reads as the provider's default. They have
+so both read as unwritten. A public access type nobody is recorded writing on a
+new container is `configuration-unrecorded`, for the reason above; the account
+gate reads as the provider's default. They have
 milestone 09 baselines recording their plan digests, so they cannot be
 corrected. The edits above write what each pair needs, and
 only those fixtures say which half is stated. The database fixtures do write

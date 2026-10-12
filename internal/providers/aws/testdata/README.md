@@ -116,11 +116,14 @@ Most storage fixtures here predate milestone 10, and their configurations list
 only the arguments that carry a reference (`bucket`). Every block flag they set
 in `after` therefore reads as unwritten, so a step on them may say
 `provider-default` for a value the fixture meant as written. `public-acl`,
-`public-policy` and the other open-block fixtures read that way on purpose now;
-the blocked fixtures set the flags `true`, which a real plan only carries when
-somebody wrote them -- no flag is Computed and each defaults to `false` -- and
-their proof of prevention stays `plan-stated-value`. They cannot be corrected:
-each has a milestone 09 baseline, which records its plan digest.
+`public-policy` and the other open-block fixtures read that way on purpose now.
+The blocked fixtures set the flags `true` on a new block, which no real plan
+carries for a flag nobody wrote -- none is Computed and each defaults to
+`false` -- so their proof of prevention is `configuration-unrecorded`: a value
+the configuration does not record as written is never stated. They cannot be
+corrected: each has a milestone 09 baseline, which records its plan digest.
+`private-flags-written` is `private` with the four flags recorded in the
+`configuration` block, `after` unchanged, and its proof is stated.
 
 ## Real plans added by milestone 10's adversarial review
 

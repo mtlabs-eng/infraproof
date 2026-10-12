@@ -64,6 +64,7 @@ Each fixture is one question:
 | `sg-unreadable-address` | an address the plan has not determined, which could be `0.0.0.0/0` |
 | `sg-unreadable-element` | one entry of a readable address list that the plan has not determined |
 | `sg-public-rule` | a separate rule resource that grants, where the plan holds part of the set |
+| `sg-public-rule-written` | `sg-public-rule` with the rule's arguments recorded in `configuration`, `after` unchanged, so its address reads as written |
 | `sg-partial-rule` | a separate rule resource that does not grant, where the rest of the set is elsewhere |
 | `sg-no-rules` | a group with no rules in the plan at all |
 | `sg-rule-every-protocol` | `-1` on a separate rule, with the ports absent by the provider's own rule |

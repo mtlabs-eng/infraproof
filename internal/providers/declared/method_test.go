@@ -8,17 +8,23 @@ import (
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
-// change builds a resource change from a plan, so the shapes below are the ones
-// the parser produces rather than structs assembled by hand.
+// planned builds a resource change from a plan, so the shapes below are the
+// ones the parser produces rather than structs assembled by hand.
 func planned(t *testing.T, actions, before, configuration string) terraformplan.ResourceChange {
+	t.Helper()
+	return plannedWith(t, actions, before, current, configuration, `{}`)
+}
+
+func plannedWith(t *testing.T, actions, before, after, configuration, variables string) terraformplan.ResourceChange {
 	t.Helper()
 	raw := `{
 	  "format_version": "1.2",
+	  "variables": ` + variables + `,
 	  "resource_changes": [{
 	    "address": "x_thing.t", "mode": "managed", "type": "x_thing", "name": "t",
 	    "provider_name": "registry.terraform.io/hashicorp/x",
 	    "change": {"actions": ` + actions + `, "before": ` + before + `,
-	               "after": {"name": "t", "flag": true}}
+	               "after": ` + after + `}
 	  }]`
 	if configuration != "" {
 		raw += `, "configuration": {"root_module": {"resources": [` + configuration + `]}}`
@@ -31,11 +37,17 @@ func planned(t *testing.T, actions, before, configuration string) terraformplan.
 }
 
 const (
-	create   = `["create"]`
-	update   = `["update"]`
-	replace  = `["delete", "create"]`
-	noPrior  = `null`
-	hasPrior = `{"name": "t", "flag": true}`
+	create  = `["create"]`
+	update  = `["update"]`
+	noOp    = `["no-op"]`
+	replace = `["delete", "create"]`
+	noPrior = `null`
+	// current is the value every change below plans; hasPrior is the same
+	// object in state, so an update of it carries every argument, and
+	// changed is a state an update moves away from.
+	current  = `{"name": "t", "flag": true, "settings": [{"ip": [{"enabled": true}]}]}`
+	hasPrior = current
+	changed  = `{"name": "t", "flag": false, "settings": [{"ip": [{"enabled": false}]}]}`
 )
 
 func entry(expressions string) string {
@@ -48,17 +60,22 @@ func entry(expressions string) string {
 }
 
 // The method of a value follows what the configuration records about writing
-// it, and "stated" is only ever the answer to a positive record. Every other way
-// of not knowing has its own method, so a reader can tell a default from a value
-// carried from state from a plan that does not say.
+// it, and "stated" is only ever the answer to a positive record of a value.
+// Every other way of not knowing has its own method, so a reader can tell a
+// default from a value carried from state from a plan that does not say.
+//
+// Carried is decided by comparing the prior state with the planned value, not
+// by the schema: under lifecycle { ignore_changes } Terraform carries any
+// argument, Computed or not, and the configuration does not record the
+// lifecycle block.
 func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 	flag := declared.Argument{Path: "flag"}
-	carried := declared.Argument{Path: "flag", Computed: true}
-	rules := declared.Argument{Path: "rule", Block: true, Computed: true}
-	nested := declared.Argument{Path: "settings.ip.enabled", Computed: true}
+	rules := declared.Argument{Path: "rule", Block: true}
+	nested := declared.Argument{Path: "settings.ip.enabled"}
 	required := declared.Argument{Path: "flag", Required: true}
 	requiredNested := declared.Argument{Path: "settings.flag", Required: true}
 
+	unwritten := entry(`{"name": {"constant_value": "t"}}`)
 	cases := map[string]struct {
 		argument declared.Argument
 		change   terraformplan.ResourceChange
@@ -68,28 +85,67 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			flag, planned(t, create, noPrior, entry(`{"flag": {"constant_value": true}}`)),
 			model.MethodStated,
 		},
-		"written, on an update": {
-			carried, planned(t, update, hasPrior, entry(`{"flag": {"constant_value": true}}`)),
+		"written, on an update that keeps it": {
+			flag, planned(t, update, hasPrior, entry(`{"flag": {"constant_value": true}}`)),
 			model.MethodStated,
 		},
-		"unwritten, on a create": {
-			carried, planned(t, create, noPrior, entry(`{"name": {"constant_value": "t"}}`)),
-			model.MethodProviderDefault,
+		"written, on an update that sets it": {
+			flag, planned(t, update, changed, entry(`{"flag": {"constant_value": true}}`)),
+			model.MethodStated,
 		},
-		"unwritten and computed, on an update": {
-			carried, planned(t, update, hasPrior, entry(`{"name": {"constant_value": "t"}}`)),
+		// ignore_changes: the configuration writes false, the plan keeps the
+		// true it had. The value is not the one written.
+		"written as another constant, carried": {
+			flag, planned(t, noOp, hasPrior, entry(`{"flag": {"constant_value": false}}`)),
 			model.MethodPriorState,
 		},
-		// Terraform plans an Optional argument that is not Computed back to its
-		// default when nobody writes it, so on an update the value is still the
-		// default and not what the object had.
-		"unwritten and not computed, on an update": {
-			flag, planned(t, update, hasPrior, entry(`{"name": {"constant_value": "t"}}`)),
+		"written from a resource, carried": {
+			flag, planned(t, noOp, hasPrior, entry(`{"flag": {"references": ["x_other.o.flag", "x_other.o"]}}`)),
+			model.MethodStated,
+		},
+		"written as null, on a create": {
+			flag, planned(t, create, noPrior, entry(`{"flag": {"constant_value": null}}`)),
+			model.MethodProviderDefault,
+		},
+		"written as null, carried": {
+			flag, planned(t, update, hasPrior, entry(`{"flag": {"constant_value": null}}`)),
+			model.MethodPriorState,
+		},
+		"written as a variable recorded as null": {
+			flag, plannedWith(t, update, hasPrior, current, entry(`{"flag": {"references": ["var.v"]}}`),
+				`{"v": {"value": null}}`),
+			model.MethodPriorState,
+		},
+		"written as a variable recorded with a value": {
+			flag, plannedWith(t, update, hasPrior, current, entry(`{"flag": {"references": ["var.v"]}}`),
+				`{"v": {"value": true}}`),
+			model.MethodStated,
+		},
+		"written as a variable the plan does not resolve": {
+			flag, planned(t, create, noPrior, entry(`{"flag": {"references": ["var.v"]}}`)),
+			model.MethodConfigurationUnrecorded,
+		},
+		"unwritten, on a create": {
+			flag, planned(t, create, noPrior, unwritten),
+			model.MethodProviderDefault,
+		},
+		"unwritten, carried": {
+			flag, planned(t, update, hasPrior, unwritten),
+			model.MethodPriorState,
+		},
+		"unwritten, on a no-op": {
+			flag, planned(t, noOp, hasPrior, unwritten),
+			model.MethodPriorState,
+		},
+		// The plan moves the value: it is not carried, it is the value the
+		// provider plans for an argument nobody wrote.
+		"unwritten, on an update that moves it": {
+			flag, planned(t, update, changed, unwritten),
 			model.MethodProviderDefault,
 		},
 		// A replacement creates a new object: nothing is carried.
-		"unwritten and computed, on a replace": {
-			carried, planned(t, replace, hasPrior, entry(`{"name": {"constant_value": "t"}}`)),
+		"unwritten, on a replace": {
+			flag, planned(t, replace, hasPrior, unwritten),
 			model.MethodProviderDefault,
 		},
 		// An empty body: Terraform omits expressions. No dynamic block can
@@ -98,12 +154,16 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			flag, planned(t, create, noPrior, entry("")),
 			model.MethodProviderDefault,
 		},
-		"an empty body, on an update": {
-			carried, planned(t, update, hasPrior, entry("")),
+		"an empty body, carried": {
+			flag, planned(t, update, hasPrior, entry("")),
 			model.MethodPriorState,
 		},
 		"no configuration at all": {
 			flag, planned(t, create, noPrior, ""),
+			model.MethodConfigurationUnrecorded,
+		},
+		"no configuration, carried": {
+			flag, planned(t, update, hasPrior, ""),
 			model.MethodConfigurationUnrecorded,
 		},
 		"a resource the configuration omits": {
@@ -114,7 +174,7 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 		// A block missing from the configuration may be a dynamic block, which
 		// Terraform does not record.
 		"a block nobody recorded": {
-			rules, planned(t, update, hasPrior, entry(`{"name": {"constant_value": "t"}}`)),
+			rules, planned(t, update, hasPrior, unwritten),
 			model.MethodConfigurationUnrecorded,
 		},
 		"a block in an empty body": {
@@ -135,15 +195,27 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			nested, planned(t, create, noPrior, entry(`{"settings": [{"ip": [{"other": {"constant_value": 1}}]}]}`)),
 			model.MethodProviderDefault,
 		},
-		"nested, its block written, on an update": {
+		"nested, its block written, carried": {
 			nested, planned(t, update, hasPrior, entry(`{"settings": [{"ip": [{"other": {"constant_value": 1}}]}]}`)),
+			model.MethodPriorState,
+		},
+		"nested, its block written, moved": {
+			nested, planned(t, update, changed, entry(`{"settings": [{"ip": [{"other": {"constant_value": 1}}]}]}`)),
+			model.MethodProviderDefault,
+		},
+		"nested and written": {
+			nested, planned(t, create, noPrior, entry(`{"settings": [{"ip": [{"enabled": {"constant_value": true}}]}]}`)),
+			model.MethodStated,
+		},
+		"nested, written as another constant, carried": {
+			nested, planned(t, update, hasPrior, entry(`{"settings": [{"ip": [{"enabled": {"constant_value": false}}]}]}`)),
 			model.MethodPriorState,
 		},
 		// Terraform refuses a body that omits a Required argument, and no
 		// dynamic block writes an attribute, so wherever the body holding it is
 		// recorded, so is the argument -- even by an entry with no expressions.
 		"required, the body recorded without it": {
-			required, planned(t, create, noPrior, entry(`{"name": {"constant_value": "t"}}`)),
+			required, planned(t, create, noPrior, unwritten),
 			model.MethodStated,
 		},
 		"required, an entry without expressions": {
@@ -155,16 +227,16 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			model.MethodConfigurationUnrecorded,
 		},
 		"required, inside a block not recorded": {
-			requiredNested, planned(t, create, noPrior, entry(`{"name": {"constant_value": "t"}}`)),
+			requiredNested, planned(t, create, noPrior, unwritten),
 			model.MethodConfigurationUnrecorded,
 		},
 		"required, inside a block written": {
 			requiredNested, planned(t, create, noPrior, entry(`{"settings": [{"tier": {"constant_value": "a"}}]}`)),
 			model.MethodStated,
 		},
-		"nested and written": {
-			nested, planned(t, create, noPrior, entry(`{"settings": [{"ip": [{"enabled": {"constant_value": true}}]}]}`)),
-			model.MethodStated,
+		"required, written as another constant, carried": {
+			required, planned(t, noOp, hasPrior, entry(`{"flag": {"constant_value": false}}`)),
+			model.MethodPriorState,
 		},
 	}
 
@@ -226,15 +298,15 @@ func TestTheStrongestProofOfADisjunctionWins(t *testing.T) {
 	}
 }
 
-// Terraform plans an unwritten argument that is not Computed to its documented
-// default on every change, and no dynamic block writes an attribute. So a
-// configuration recording such an argument as unwritten beside a value that is
-// not the default records something Terraform cannot produce, and the value is
-// the one somebody wrote. Only that contradiction is settled this way: an
-// unrecorded argument stays unrecorded, and a Computed one may be carried.
-func TestANonDefaultValueOfAnArgumentNotComputedWasWritten(t *testing.T) {
+// A value the configuration does not record as written is never stated. The
+// caller that knows the provider's default says whether the value is it: an
+// argument nobody wrote, not Computed, on a new object holding something else
+// is a shape no real plan has shown -- a hand-written plan whose configuration
+// lists only references makes it -- and the plan then does not record who
+// wrote the value. Carried from state, it is prior state whatever it holds.
+func TestAValueNobodyRecordedWritingIsNeverStated(t *testing.T) {
 	flag := declared.Argument{Path: "flag"}
-	carried := declared.Argument{Path: "flag", Computed: true}
+	computed := declared.Argument{Path: "flag", Computed: true}
 	rules := declared.Argument{Path: "rule", Block: true}
 	unwritten := entry(`{"name": {"constant_value": "t"}}`)
 
@@ -244,12 +316,17 @@ func TestANonDefaultValueOfAnArgumentNotComputedWasWritten(t *testing.T) {
 		isDefault bool
 		want      model.Method
 	}{
-		"unwritten, holding the default":          {flag, planned(t, create, noPrior, unwritten), true, model.MethodProviderDefault},
-		"unwritten, holding something else":       {flag, planned(t, create, noPrior, unwritten), false, model.MethodStated},
-		"unwritten, on an update, something else": {flag, planned(t, update, hasPrior, unwritten), false, model.MethodStated},
-		"computed, carried from state":            {carried, planned(t, update, hasPrior, unwritten), false, model.MethodPriorState},
-		"unrecorded stays unrecorded":             {flag, planned(t, create, noPrior, ""), false, model.MethodConfigurationUnrecorded},
-		"a block stays what it records":           {rules, planned(t, create, noPrior, unwritten), false, model.MethodConfigurationUnrecorded},
+		"unwritten, holding the default":            {flag, planned(t, create, noPrior, unwritten), true, model.MethodProviderDefault},
+		"unwritten, holding something else":         {flag, planned(t, create, noPrior, unwritten), false, model.MethodConfigurationUnrecorded},
+		"computed, holding something else":          {computed, planned(t, create, noPrior, unwritten), false, model.MethodProviderDefault},
+		"unwritten, carried, something else":        {flag, planned(t, update, hasPrior, unwritten), false, model.MethodPriorState},
+		"unwritten, moved, something else":          {flag, planned(t, update, changed, unwritten), false, model.MethodConfigurationUnrecorded},
+		"unwritten, moved, the default":             {flag, planned(t, update, changed, unwritten), true, model.MethodProviderDefault},
+		"written as null, something else":           {flag, planned(t, create, noPrior, entry(`{"flag": {"constant_value": null}}`)), false, model.MethodConfigurationUnrecorded},
+		"written, something else":                   {flag, planned(t, create, noPrior, entry(`{"flag": {"constant_value": true}}`)), false, model.MethodStated},
+		"written as another constant, carried":      {flag, planned(t, noOp, hasPrior, entry(`{"flag": {"constant_value": false}}`)), false, model.MethodPriorState},
+		"unrecorded stays unrecorded":               {flag, planned(t, create, noPrior, ""), false, model.MethodConfigurationUnrecorded},
+		"a block stays what the configuration says": {rules, planned(t, create, noPrior, unwritten), false, model.MethodConfigurationUnrecorded},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -257,5 +334,28 @@ func TestANonDefaultValueOfAnArgumentNotComputedWasWritten(t *testing.T) {
 				t.Errorf("MethodFor = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// A method outside the closed set, the empty one included, is a mapper that
+// forgot to say how it knows. Neither order may rank it: the weakest of several
+// inputs and the best of several proofs both come back empty, which fails
+// validation at the bundle boundary instead of hiding behind a valid method.
+func TestAMethodOutsideTheSetIsNeverHidden(t *testing.T) {
+	cases := [][]model.Method{
+		{""},
+		{"", model.MethodStated},
+		{model.MethodStated, ""},
+		{"", model.MethodConfigurationUnrecorded},
+		{model.MethodPolicyDocument, "not-a-method"},
+		{},
+	}
+	for _, in := range cases {
+		if got := declared.Weakest(in...); got != "" {
+			t.Errorf("Weakest(%q) = %q, want the empty method", in, got)
+		}
+		if got := declared.Strongest(in...); got != "" {
+			t.Errorf("Strongest(%q) = %q, want the empty method", in, got)
+		}
 	}
 }

@@ -210,24 +210,43 @@ func normalizeAt(t *testing.T, fixture, address string) model.NormalizedResource
 	return found
 }
 
-// sg-public-rule's configuration lists only the rule's security_group_id. The
-// address that opens is Optional, not Computed and without a default, so
-// Terraform plans an unwritten one as null: an address that opens was written,
-// and the grant is stated rather than a default no provider has.
-func TestASeparateRuleAddressIsStatedEvenWhenTheConfigurationListsOnlyItsReferences(t *testing.T) {
-	ingress := securityGroup(t, "sg-public-rule").Network.PublicIngress
+// A separate rule's address is stated where the configuration writes it.
+func TestASeparateRuleAddressIsStatedWhereTheConfigurationWritesIt(t *testing.T) {
+	ingress := securityGroup(t, "sg-public-rule-written").Network.PublicIngress
 	if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != model.MethodStated {
 		t.Errorf("method = %q (state %s), want known true %q", ingress.Method(), ingress.State, model.MethodStated)
 	}
 }
 
-// The proof of prevention rests on four flags read as true. None is Computed
-// and each defaults to false, so a true was written even where a hand-written
-// configuration lists only the block's bucket -- which private.json does.
+// sg-public-rule's configuration lists only the rule's security_group_id, as a
+// milestone 08 fixture written by hand. The address that opens is Optional, not
+// Computed and without a default, so no real plan carries one nobody wrote on a
+// new rule -- and a value the configuration does not record as written is never
+// stated. Until the fourth review this read stated, on the premise that the
+// shape proves the value was written; ignore_changes falsified that premise.
+func TestASeparateRuleAddressTheConfigurationDoesNotRecordIsUnrecorded(t *testing.T) {
+	ingress := securityGroup(t, "sg-public-rule").Network.PublicIngress
+	if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q (state %s), want known true %q", ingress.Method(), ingress.State, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// The proof of prevention rests on four flags read as true, and is stated where
+// the configuration writes them.
 func TestAProofOfPreventionRestsOnFlagsSomebodyWrote(t *testing.T) {
-	access := bucket(t, "private").ObjectStorage.PublicAccess
+	access := bucket(t, "private-flags-written").ObjectStorage.PublicAccess
 	if !access.IsKnown() || access.Get() || access.Method() != model.MethodStated {
 		t.Errorf("method = %q (state %s), want known false %q", access.Method(), access.State, model.MethodStated)
+	}
+}
+
+// private.json's configuration lists only the block's bucket. Each flag defaults
+// to false and none is Computed, so a true on a new block is a value the plan
+// does not record anybody writing.
+func TestAProofOfPreventionOnFlagsTheConfigurationDoesNotRecordIsUnrecorded(t *testing.T) {
+	access := bucket(t, "private").ObjectStorage.PublicAccess
+	if !access.IsKnown() || access.Get() || access.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q (state %s), want known false %q", access.Method(), access.State, model.MethodConfigurationUnrecorded)
 	}
 }
 

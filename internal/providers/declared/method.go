@@ -1,21 +1,23 @@
 package declared
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
 	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
-// Argument is one argument a mapper reads a value for, described by the two
-// things the method of that value depends on and the plan cannot say.
+// Argument is one argument a mapper reads a value for, described by what the
+// method of that value depends on and the plan cannot say.
 //
 // The method of a KNOWN value follows what the configuration records about
-// writing the argument, never the value itself: a provider writes its default
-// into the plan as a known value, and Terraform carries an unwritten Computed
-// value over from prior state, and both look exactly like a value somebody
-// wrote. Only the configuration separates them, and only where it records
-// anything at all.
+// writing the argument, never the value alone: a provider writes its default
+// into the plan as a known value, Terraform carries an unwritten value over
+// from prior state -- and under lifecycle { ignore_changes } a written one too,
+// in a plan whose configuration does not record the lifecycle block -- and each
+// looks exactly like a value somebody wrote. Only the configuration, compared
+// with the prior state, separates them, and only where it records anything.
 type Argument struct {
 	// Path is the argument as the configuration nests it: dotted, without
 	// indexes, as ResourceChange.Stated spells it. Every segment before the last
@@ -27,9 +29,11 @@ type Argument struct {
 	// Terraform's configuration does not record a dynamic block, so the
 	// absence of a block proves nothing about whether it was written.
 	Block bool
-	// Computed reports that the provider keeps an unwritten value across an
-	// update rather than planning it back to a default: an Optional and
-	// Computed argument, or a Computed-only one.
+	// Computed reports that the provider may compute a value nobody wrote: an
+	// Optional and Computed argument, or a Computed-only one. It matters only
+	// to MethodFor, where a value that is not the default would otherwise be
+	// one the plan cannot have produced; whether a value was carried from
+	// state is decided by comparing the state with the plan, not by the schema.
 	Computed bool
 	// Required reports that the provider's schema requires the argument.
 	// Terraform refuses a body that omits one, and no dynamic block writes an
@@ -85,19 +89,60 @@ func (a Argument) Writing(change terraformplan.ResourceChange) Writing {
 // Method returns how a KNOWN value the plan carries for this argument was
 // established.
 //
-// A written argument is stated. An unwritten one is the provider's default,
-// unless the change updates an object that already exists and the provider
-// keeps the argument's value across an update: then the value is the one
-// Terraform carried from prior state, which nobody wrote and which need not be
-// the default. An unrecorded one says so, rather than reading as stated -- a
-// fallback of "stated" is exactly the defect this method exists to remove.
+//   - Unrecorded: configuration-unrecorded, rather than reading as stated -- a
+//     fallback of "stated" is exactly the defect this method exists to remove.
+//     So is an argument written only from variables the plan does not resolve,
+//     since one of them may be null.
+//   - Written with a value: stated, unless the change keeps an existing object,
+//     the plan carries the prior value, and the configuration records a
+//     constant that is not it -- ignore_changes kept the state, and the value is
+//     prior-state.
+//   - Unwritten, or written as an expression that evaluates to null, which
+//     Terraform treats exactly as unwritten: prior-state where the change keeps
+//     an existing object and the plan carries its prior value; otherwise the
+//     provider's default, on a new object or where the plan moves the value.
 func (a Argument) Method(change terraformplan.ResourceChange) model.Method {
-	switch a.Writing(change) {
+	return a.decide(change, nil)
+}
+
+// MethodFor is Method for a value the caller has compared with the provider's
+// documented default -- null, for an argument that has none.
+//
+// A value the configuration does not record as written is never stated. An
+// argument nobody wrote that the provider does not compute, holding a value
+// that is not its default and not carried from state, is a shape no real plan
+// has shown -- a hand-written plan whose configuration lists only the
+// references makes it -- and the plan then does not record who wrote that
+// value: configuration-unrecorded, not a default the value is not.
+func (a Argument) MethodFor(change terraformplan.ResourceChange, isDefault bool) model.Method {
+	return a.decide(change, &isDefault)
+}
+
+func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) model.Method {
+	writing := a.Writing(change)
+	expression, recorded := change.Expression(a.Path)
+	if writing == WritingWritten && recorded {
+		switch expression.Evaluation {
+		case terraformplan.EvaluationNull:
+			writing = WritingUnwritten
+		case terraformplan.EvaluationUnresolved:
+			writing = WritingUnrecorded
+		}
+	}
+
+	carried := Updates(change) && Carried(change, a.Path)
+	switch writing {
 	case WritingWritten:
+		if carried && recorded && expression.Contradicted {
+			return model.MethodPriorState
+		}
 		return model.MethodStated
 	case WritingUnwritten:
-		if a.Computed && Updates(change) {
+		switch {
+		case carried:
 			return model.MethodPriorState
+		case isDefault != nil && !*isDefault && !a.Computed:
+			return model.MethodConfigurationUnrecorded
 		}
 		return model.MethodProviderDefault
 	default:
@@ -105,24 +150,62 @@ func (a Argument) Method(change terraformplan.ResourceChange) model.Method {
 	}
 }
 
-// MethodFor is Method for a value the caller has compared with the provider's
-// documented default -- null, for an argument that has none.
-//
-// It settles one contradiction and nothing else. Terraform plans an unwritten
-// argument that is not Computed to its default on every change, and no dynamic
-// block writes an attribute, so a configuration that records such an argument
-// as unwritten beside a value that is not its default records something
-// Terraform cannot produce. A hand-written plan whose configuration lists only
-// the references is the shape that does it. The value is then one somebody
-// wrote, and the method is stated rather than a default the value is not.
-//
-// An unrecorded argument stays unrecorded, a block stays what the configuration
-// records, and a Computed argument may hold anything an update carries.
-func (a Argument) MethodFor(change terraformplan.ResourceChange, isDefault bool) model.Method {
-	if !isDefault && !a.Computed && !a.Block && a.Writing(change) == WritingUnwritten {
-		return model.MethodStated
+// Carried reports that the plan keeps the value the object had at a path: the
+// prior state and the planned value are both known there and equal. A block
+// the path passes through is followed into its one element; where it holds
+// other than one, the whole block is compared.
+func Carried(change terraformplan.ResourceChange, path string) bool {
+	before, after := change.Before, change.After
+	for i, segment := range strings.Split(path, ".") {
+		if i > 0 && (before.Kind() == terraformplan.KindArray || after.Kind() == terraformplan.KindArray) {
+			if before.Len() != 1 || after.Len() != 1 {
+				break
+			}
+			before, after = before.At(0), after.At(0)
+		}
+		before, after = before.Field(segment), after.Field(segment)
 	}
-	return a.Method(change)
+	return equal(before, after)
+}
+
+// equal reports that two values are both known, wholly, and the same.
+func equal(a, b terraformplan.Value) bool {
+	if a.State() != terraformplan.StateKnown || b.State() != terraformplan.StateKnown || a.Kind() != b.Kind() {
+		return false
+	}
+	switch a.Kind() {
+	case terraformplan.KindNull:
+		return true
+	case terraformplan.KindBool:
+		return a.Bool() == b.Bool()
+	case terraformplan.KindNumber:
+		return a.Number() == b.Number()
+	case terraformplan.KindString:
+		return a.Text() == b.Text()
+	case terraformplan.KindArray:
+		if a.Len() != b.Len() {
+			return false
+		}
+		for i := range a.Len() {
+			if !equal(a.At(i), b.At(i)) {
+				return false
+			}
+		}
+		return true
+	case terraformplan.KindObject:
+		keys := a.Keys()
+		if !slices.Equal(keys, b.Keys()) {
+			return false
+		}
+		for _, key := range keys {
+			if !equal(a.Field(key), b.Field(key)) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 // Updates reports that the change keeps an existing object: it has a prior
@@ -151,43 +234,45 @@ func Updates(change terraformplan.ResourceChange) bool {
 // from state, which nobody under review wrote, and that is weaker than a
 // documented default the author accepted by writing nothing.
 //
+// A method outside the closed set, the empty one included, is ranked nowhere:
+// the result is then empty, which fails validation at the bundle boundary
+// rather than hiding a mapper that forgot to say how it knows.
+//
 // Where a fact rests on an interpreted policy document, the mappers keep the
 // document's method rather than calling this: the document is what the finding
 // cites, and the product decision recorded in milestone 10 is that a defaulted
 // gate beside it does not show.
 func Weakest(methods ...model.Method) model.Method {
-	if len(methods) == 0 {
-		// Nothing to rest on is not a stated value; the zero method fails
-		// validation.
-		return ""
-	}
-	weakest := methods[0]
-	for _, method := range methods[1:] {
-		if strength(method) < strength(weakest) {
-			weakest = method
-		}
-	}
-	return weakest
+	return rank(methods, func(candidate, current int) bool { return candidate < current })
 }
 
 // Strongest returns the method of the best of several proofs, any one of which
 // settles a fact on its own. A disjunctive grant needs only one, and the finding
-// can cite the one that is best established; the order is Weakest's.
+// can cite the one that is best established; the order is Weakest's, and so is
+// the answer to a method outside the closed set.
 func Strongest(methods ...model.Method) model.Method {
-	if len(methods) == 0 {
-		// No proof is not a stated one. The zero method fails validation, so
-		// a caller that forgot its proofs fails closed.
-		return ""
-	}
-	strongest := methods[0]
-	for _, method := range methods[1:] {
-		if strength(method) > strength(strongest) {
-			strongest = method
-		}
-	}
-	return strongest
+	return rank(methods, func(candidate, current int) bool { return candidate > current })
 }
 
+func rank(methods []model.Method, better func(candidate, current int) bool) model.Method {
+	if len(methods) == 0 {
+		// Nothing to rest on is not a stated value; the zero method fails
+		// validation, so a caller that forgot its inputs fails closed.
+		return ""
+	}
+	chosen := methods[0]
+	for _, method := range methods {
+		if strength(method) < 0 {
+			return ""
+		}
+		if better(strength(method), strength(chosen)) {
+			chosen = method
+		}
+	}
+	return chosen
+}
+
+// strength ranks the methods a mapper assigns, and -1 for anything else.
 func strength(method model.Method) int {
 	switch method {
 	case model.MethodConfigurationUnrecorded:
@@ -196,10 +281,12 @@ func strength(method model.Method) int {
 		return 1
 	case model.MethodProviderDefault:
 		return 2
+	case model.MethodPolicyDocument, model.MethodDocumentedTable, model.MethodReferenceResolved:
+		return 3
 	case model.MethodStated:
 		return 4
 	default:
-		return 3
+		return -1
 	}
 }
 

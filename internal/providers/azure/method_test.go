@@ -54,15 +54,15 @@ func TestStorageAccessSettingsFollowTheConfiguration(t *testing.T) {
 		{"public-blob-written", true, model.MethodStated, "both settings written"},
 		{"private-container-written-gate-unwritten", false, model.MethodStated, "private container written, gate unwritten"},
 		{"private-container-unwritten-gate-written", false, model.MethodProviderDefault, "private container unwritten, gate written"},
-		// Not a default. container_access_type defaults to "private" and is not
-		// Computed, so Terraform plans an unwritten one as "private": a "blob"
-		// beside a configuration that does not write it is a shape Terraform
-		// cannot produce, and the value is somebody's. Until the adversarial
-		// review this row said provider-default, defending a branch no real
-		// plan reaches.
-		{"public-blob-container-defaulted", true, model.MethodStated, "gate written, a public access type cannot be the default"},
 		{"public-blob-gate-defaulted", true, model.MethodProviderDefault, "access type written, gate unwritten"},
-		{"public-blob", true, model.MethodProviderDefault, "neither setting written"},
+		// container_access_type defaults to "private" and is not Computed, so
+		// no real plan carries a "blob" nobody wrote on a new container. The
+		// milestone 03 fixture's configuration lists only references, so the
+		// plan does not record who wrote it: never stated, and not a default
+		// the value is not. The fixture that defended a stated reading of the
+		// same shape, public-blob-container-defaulted, was removed with the
+		// rule it defended.
+		{"public-blob", true, model.MethodConfigurationUnrecorded, "neither setting recorded, the access type not the default"},
 		{"private-account-forbids-written", false, model.MethodStated, "the deciding gate written"},
 		{"private-account-forbids", false, model.MethodProviderDefault, "the deciding gate unwritten"},
 	}
@@ -155,9 +155,8 @@ func TestADatabaseAdmissionInAPlanWithoutConfigurationIsUnrecorded(t *testing.T)
 }
 
 // An inline rule the configuration writes is stated, and so is a separate rule
-// whose source is not null: source_address_prefix is not Computed and has no
-// default, so Terraform plans an unwritten one as null and a source somebody
-// can reach through was written. Without a configuration, neither is recorded;
+// whose source the configuration writes. Without a configuration, neither is
+// recorded;
 // and an inline set the configuration does not record -- Azure carries one
 // across an update, and a dynamic block leaves no record -- is not either.
 func TestANetworkSecurityGroupGrantSaysWhatTheConfigurationRecords(t *testing.T) {
@@ -169,9 +168,15 @@ func TestANetworkSecurityGroupGrantSaysWhatTheConfigurationRecords(t *testing.T)
 		{"inline, written", func() model.NormalizedResource {
 			return networkAt(t, "nsg-public-inline")
 		}, model.MethodStated},
-		{"separate rule", func() model.NormalizedResource {
-			return networkAt(t, "nsg-separate-open")
+		{"separate rule, written", func() model.NormalizedResource {
+			return networkAt(t, "nsg-separate-open-written")
 		}, model.MethodStated},
+		// The milestone 08 fixture lists only the rule's references. A source
+		// is not Computed and has no default, so a value the configuration does
+		// not record as written is never stated.
+		{"separate rule, its source not recorded", func() model.NormalizedResource {
+			return networkAt(t, "nsg-separate-open")
+		}, model.MethodConfigurationUnrecorded},
 		{"inline, no configuration", func() model.NormalizedResource {
 			return withoutConfiguration(t, "nsg-public-inline", "azurerm_network_security_group.web")
 		}, model.MethodConfigurationUnrecorded},
