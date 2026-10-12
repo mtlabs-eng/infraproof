@@ -2,6 +2,7 @@ package terraformplan
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 )
 
@@ -301,4 +302,50 @@ func mergeArray(raw []any, unknown, sensitive mask) []Value {
 		out = append(out, merge(child, present, elementMask(unknown, i, length), elementMask(sensitive, i, length)))
 	}
 	return out
+}
+
+// markCarried sets carried on every node of a merged planned value whose raw
+// prior value, at the same place, is the same as its raw planned value. The
+// raw values are compared, so a sensitive mark on either side changes nothing,
+// and neither raw value is kept. A node the unknown mask marks, at any depth,
+// is not carried: its planned value is not yet a value.
+func markCarried(value Value, before any, beforePresent bool, after any, afterPresent bool, unknown mask) Value {
+	if !value.present {
+		return value
+	}
+	value.carried = beforePresent && afterPresent && !unknown.marks() && reflect.DeepEqual(before, after)
+	if value.sensitive || value.unknown {
+		// Nothing was kept beneath it to mark.
+		return value
+	}
+	switch value.kind {
+	case KindObject:
+		beforeObject, beforeIsObject := before.(map[string]any)
+		afterObject, _ := after.(map[string]any)
+		object := make(map[string]Value, len(value.object))
+		for name, child := range value.object {
+			childBefore, inBefore := beforeObject[name]
+			childAfter, inAfter := afterObject[name]
+			object[name] = markCarried(child, childBefore, beforeIsObject && inBefore, childAfter, inAfter, unknown.field(name))
+		}
+		value.object = object
+	case KindArray:
+		beforeArray, beforeIsArray := before.([]any)
+		afterArray, _ := after.([]any)
+		array := make([]Value, len(value.array))
+		for i, child := range value.array {
+			var childBefore, childAfter any
+			inBefore := beforeIsArray && i < len(beforeArray)
+			if inBefore {
+				childBefore = beforeArray[i]
+			}
+			inAfter := i < len(afterArray)
+			if inAfter {
+				childAfter = afterArray[i]
+			}
+			array[i] = markCarried(child, childBefore, inBefore, childAfter, inAfter, elementMask(unknown, i, len(value.array)))
+		}
+		value.array = array
+	}
+	return value
 }

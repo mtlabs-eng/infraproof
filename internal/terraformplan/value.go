@@ -55,6 +55,9 @@ type Value struct {
 	present   bool
 	unknown   bool
 	sensitive bool
+	// carried is set on a node of a planned value whose prior state holds the
+	// same value at the same place. See Carried.
+	carried bool
 
 	kind    Kind
 	boolean bool
@@ -86,6 +89,19 @@ func (v Value) Unknown() bool { return v.unknown }
 
 // Sensitive reports whether Terraform marked this value sensitive.
 func (v Value) Sensitive() bool { return v.sensitive }
+
+// Carried reports, for a node of a change's planned value, that its prior
+// state holds the same value at the same place: an update or no-op keeps it.
+// An element of a list is compared with the element in the same position.
+//
+// It is decided from the plan's own before and after, before either is masked,
+// so a value marked sensitive -- which this package withholds from every
+// reading -- is compared like any other: a mark must not make a value the plan
+// keeps look like one it moves. Only the answer is kept. A value not yet known
+// is never carried, nor is one with no prior state at its place; and a node
+// read through a value this run was not permitted to see has no place, so it
+// is not carried either.
+func (v Value) Carried() bool { return v.carried }
 
 // Kind reports the JSON shape of a readable value, and KindAbsent for anything
 // that is not readable.

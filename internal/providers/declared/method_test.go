@@ -105,9 +105,13 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			flag, planned(t, create, noPrior, entry(`{"flag": {"constant_value": false}}`)),
 			model.MethodStated,
 		},
+		// The plan holds a value at the argument that is not the constant
+		// written: whatever moved it, it is not the author's value, moved or
+		// not. The principle recorded in milestone 10's fifth-review
+		// amendment.
 		"written as another constant, on an update that moves it": {
 			flag, planned(t, update, changed, entry(`{"flag": {"constant_value": false}}`)),
-			model.MethodStated,
+			model.MethodPriorState,
 		},
 		// The plan records no value for a reference, so on an update that
 		// keeps the value nothing separates the write from a value
@@ -424,6 +428,21 @@ func TestADeclaredEnvironmentSaysWhatTheConfigurationRecords(t *testing.T) {
 		"written as another map, carried": {plannedWith(t, noOp, tagged, tagged,
 			entry(`{"tags": {"constant_value": {"environment": "dev"}}}`), `{}`), model.MethodPriorState},
 		"no configuration": {plannedWith(t, create, noPrior, tagged, "", `{}`), model.MethodConfigurationUnrecorded},
+		// ignore_changes = [tags["environment"]]: another key moves, the one
+		// the declaration is read from does not.
+		"written as another value, the key kept while another moves": {plannedWith(t, update,
+			`{"name": "t", "tags": {"environment": "prod", "team": "a"}}`,
+			`{"name": "t", "tags": {"environment": "prod", "team": "b"}}`,
+			entry(`{"tags": {"constant_value": {"environment": "staging", "team": "b"}}}`), `{}`), model.MethodPriorState},
+		// Two keys of the name with one value: the declaration rests on both.
+		"two keys of the name, one kept against its constant": {plannedWith(t, noOp,
+			`{"name": "t", "tags": {"environment": "prod", "Environment": "prod"}}`,
+			`{"name": "t", "tags": {"environment": "prod", "Environment": "prod"}}`,
+			entry(`{"tags": {"constant_value": {"environment": "prod", "Environment": "dev"}}}`), `{}`), model.MethodPriorState},
+		"two keys of the name, the other kept against its constant": {plannedWith(t, noOp,
+			`{"name": "t", "tags": {"environment": "prod", "Environment": "prod"}}`,
+			`{"name": "t", "tags": {"environment": "prod", "Environment": "prod"}}`,
+			entry(`{"tags": {"constant_value": {"environment": "dev", "Environment": "prod"}}}`), `{}`), model.MethodPriorState},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -449,6 +468,11 @@ func TestCarriedComparesTheWholeValue(t *testing.T) {
 		"a list that grows":      {`{"tags": ["a"]}`, `{"tags": ["a", "b"]}`, false},
 		"the same list":          {`{"tags": ["a", "b"]}`, `{"tags": ["a", "b"]}`, true},
 		"absent on both sides":   {`{}`, `{}`, false},
+		"null on both sides":     {`{"tags": null}`, `{"tags": null}`, true},
+		"a number that moves":    {`{"tags": 500}`, `{"tags": 1000}`, false},
+		"a bool that moves":      {`{"tags": true}`, `{"tags": false}`, false},
+		"a string becoming null": {`{"tags": "a"}`, `{"tags": null}`, false},
+		"a list of another kind": {`{"tags": ["1"]}`, `{"tags": {"0": "1"}}`, false},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -474,8 +498,9 @@ func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
 		two      = `{"rule": [{"port": 22, "cidr": "0.0.0.0/0"}, {"port": 80, "cidr": "0.0.0.0/0"}]}`
 		moved    = `{"rule": [{"port": 22, "cidr": "10.0.0.0/8"}, {"port": 80, "cidr": "0.0.0.0/0"}]}`
 		nestedIP = `{"settings": [{"ip": [{"enabled": true, "cidr": "0.0.0.0/0"}]}]}`
+		empties  = `{"rule": [{"port": 22, "cidr": []}, {"port": 80, "cidr": ""}]}`
 	)
-	constants := entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`)
+	constants := entry(`{"rule": [{"port": {"constant_value": 80}, "cidr": {"constant_value": "0.0.0.0/0"}}, {"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`)
 	cases := map[string]struct {
 		argument      declared.Argument
 		before, after string
@@ -498,7 +523,16 @@ func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
 		"fewer blocks written than kept": {rules, two, two, noOp,
 			entry(`{"rule": [{"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`),
 			model.MethodPriorState},
-		"null inside a block is no write": {rules, two, two, noOp,
+		// Terraform plans an attribute nobody wrote as an empty value, so a
+		// value the plan keeps there is not one the configuration wrote:
+		// written as null, or not written in the block at all.
+		"null inside a block matches only an empty value": {rules, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 80}, "cidr": {"constant_value": null}}, {"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`),
+			model.MethodPriorState},
+		"an attribute nobody wrote, which the plan keeps": {rules, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`),
+			model.MethodPriorState},
+		"an attribute nobody wrote, which the plan keeps empty": {rules, empties, empties, noOp,
 			entry(`{"rule": [{"port": {"constant_value": 80}, "cidr": {"constant_value": null}}, {"port": {"constant_value": 22}}]}`),
 			model.MethodStated},
 		"a variable inside a block, carried": {rules, two, two, noOp,
@@ -514,7 +548,7 @@ func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
 			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"references": ["local.p"]}}]}`),
 			model.MethodStated},
 		"a block inside a block, constants, carried": {inner, nestedIP, nestedIP, noOp,
-			entry(`{"settings": [{"ip": [{"cidr": {"constant_value": "0.0.0.0/0"}}]}]}`),
+			entry(`{"settings": [{"ip": [{"enabled": {"constant_value": true}, "cidr": {"constant_value": "0.0.0.0/0"}}]}]}`),
 			model.MethodStated},
 		"a block inside a block, contradicted": {inner, nestedIP, nestedIP, noOp,
 			entry(`{"settings": [{"ip": [{"cidr": {"constant_value": "10.0.0.0/8"}}]}]}`),
@@ -534,6 +568,142 @@ func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
 			change := plannedWith(t, c.actions, c.before, c.after, c.configuration, `{}`)
 			if got := c.argument.Method(change); got != c.want {
 				t.Errorf("Method = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// plannedMasked is plannedWith with the plan's sensitive masks.
+func plannedMasked(t *testing.T, actions, before, after, beforeSensitive, afterSensitive, configuration string) terraformplan.ResourceChange {
+	t.Helper()
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [{
+	    "address": "x_thing.t", "mode": "managed", "type": "x_thing", "name": "t",
+	    "provider_name": "registry.terraform.io/hashicorp/x",
+	    "change": {"actions": ` + actions + `, "before": ` + before + `, "after": ` + after + `,
+	               "before_sensitive": ` + beforeSensitive + `, "after_sensitive": ` + afterSensitive + `}
+	  }],
+	  "configuration": {"root_module": {"resources": [` + configuration + `]}}
+	}`
+	plan, err := terraformplan.Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	return plan.ResourceChanges[0]
+}
+
+// A verdict that reads one key of a map rests on what was written at that key,
+// decided at that key: under ignore_changes = [tags["environment"]] the state
+// keeps the key while the configuration moves another, so the map moves and
+// the key does not. A sensitive mark on a sibling key must not make a map the
+// plan keeps look moved either.
+func TestAKeyOfAMapIsDecidedAtTheKey(t *testing.T) {
+	environment := declared.Argument{Path: "tags", Key: "environment"}
+	team := declared.Argument{Path: "tags", Key: "team"}
+	const (
+		kept      = `{"tags": {"environment": "prod", "team": "a"}}`
+		teamMoved = `{"tags": {"environment": "prod", "team": "b"}}`
+		envMoved  = `{"tags": {"environment": "staging", "team": "a"}}`
+		written   = `{"tags": {"constant_value": {"environment": "staging", "team": "b"}}}`
+		reference = `{"tags": {"references": ["x_other.o.tags", "x_other.o"]}}`
+	)
+	cases := map[string]struct {
+		argument      declared.Argument
+		before, after string
+		actions       string
+		expressions   string
+		isDefault     bool
+		want          model.Method
+	}{
+		"the key the lifecycle keeps, another moving":    {environment, kept, teamMoved, update, written, false, model.MethodPriorState},
+		"the key the configuration moves":                {team, kept, teamMoved, update, written, false, model.MethodStated},
+		"the key written and kept":                       {environment, `{"tags": {"environment": "staging", "team": "b"}}`, `{"tags": {"environment": "staging", "team": "b"}}`, noOp, written, false, model.MethodStated},
+		"the key on a create":                            {environment, noPrior, `{"tags": {"environment": "staging", "team": "b"}}`, create, written, false, model.MethodStated},
+		"a key the constant does not write, kept":        {environment, kept, teamMoved, update, `{"tags": {"constant_value": {"team": "b"}}}`, false, model.MethodPriorState},
+		"a key the constant does not write, on a create": {environment, noPrior, kept, create, `{"tags": {"constant_value": {"team": "a"}}}`, false, model.MethodConfigurationUnrecorded},
+		"a key written as null, kept":                    {environment, kept, teamMoved, update, `{"tags": {"constant_value": {"environment": null, "team": "b"}}}`, false, model.MethodPriorState},
+		"a map from a reference, the key kept":           {environment, kept, teamMoved, update, reference, false, model.MethodConfigurationUnrecorded},
+		"a map from a reference, the key moved":          {environment, kept, envMoved, update, reference, false, model.MethodStated},
+		"a map from a reference, on a create":            {environment, noPrior, kept, create, reference, false, model.MethodStated},
+		"the map unwritten, the key kept":                {environment, kept, teamMoved, update, `{"name": {"constant_value": "t"}}`, false, model.MethodPriorState},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := plannedWith(t, c.actions, c.before, c.after, entry(c.expressions), `{}`)
+			if got := c.argument.MethodFor(change, c.isDefault); got != c.want {
+				t.Errorf("MethodFor = %q, want %q", got, c.want)
+			}
+		})
+	}
+
+	// ignore_changes = [tags], one tag written from a sensitive variable: the
+	// plan is a no-op, and the mark is on the sibling.
+	const owned = `{"tags": {"environment": "prod", "owner": "team-old"}}`
+	sensitive := plannedMasked(t, noOp, owned, owned, `{"tags": {"owner": true}}`, `{"tags": {"owner": true}}`,
+		entry(`{"tags": {"references": ["var.owner"]}}`))
+	if got := environment.MethodFor(sensitive, false); got != model.MethodConfigurationUnrecorded {
+		t.Errorf("a sensitive sibling on a no-op: %q, want %q", got, model.MethodConfigurationUnrecorded)
+	}
+	if !declared.Carried(sensitive, "tags") {
+		t.Error("a map the no-op keeps, one key sensitive, is not carried")
+	}
+}
+
+// A constant compared with a value the plan withholds cannot be shown to be the
+// value the update keeps: the comparison is undecided, and so is the method.
+// The same constant on a create, or on an update the plan moves, is applied.
+func TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept(t *testing.T) {
+	flag := declared.Argument{Path: "flag"}
+	marked := `{"flag": true}`
+	cases := map[string]struct {
+		actions, before string
+		want            model.Method
+	}{
+		"kept":     {noOp, current, model.MethodConfigurationUnrecorded},
+		"moved":    {update, changed, model.MethodStated},
+		"a create": {create, noPrior, model.MethodStated},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := plannedMasked(t, c.actions, c.before, current, marked, marked,
+				entry(`{"flag": {"constant_value": true}}`))
+			if got := flag.Method(change); got != c.want {
+				t.Errorf("Method = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// A block the path passes through is followed into its one element on both
+// sides; where either side holds other than one, the whole block is what the
+// plan keeps or not.
+func TestCarriedFollowsABlockOnlyThroughItsOneElement(t *testing.T) {
+	const path = "settings.ip.enabled"
+	cases := map[string]struct {
+		before, after string
+		want          bool
+	}{
+		"one block, kept": {`{"settings": [{"ip": [{"enabled": true}]}]}`,
+			`{"settings": [{"ip": [{"enabled": true}]}]}`, true},
+		"one block, moved": {`{"settings": [{"ip": [{"enabled": false}]}]}`,
+			`{"settings": [{"ip": [{"enabled": true}]}]}`, false},
+		"one block, a sibling moved": {`{"settings": [{"tier": "a", "ip": [{"enabled": true}]}]}`,
+			`{"settings": [{"tier": "b", "ip": [{"enabled": true}]}]}`, true},
+		"a block the update drops": {`{"settings": [{"ip": [{"enabled": true}]}, {"ip": [{"enabled": false}]}]}`,
+			`{"settings": [{"ip": [{"enabled": true}]}]}`, false},
+		"a block the update adds": {`{"settings": [{"ip": [{"enabled": true}]}]}`,
+			`{"settings": [{"ip": [{"enabled": true}]}, {"ip": [{"enabled": false}]}]}`, false},
+		"two blocks, both kept": {`{"settings": [{"ip": [{"enabled": true}]}, {"ip": [{"enabled": false}]}]}`,
+			`{"settings": [{"ip": [{"enabled": true}]}, {"ip": [{"enabled": false}]}]}`, true},
+		"no block before":           {`{"settings": []}`, `{"settings": [{"ip": [{"enabled": true}]}]}`, false},
+		"a block before, not after": {`{"settings": [{"ip": [{"enabled": true}]}]}`, `{"settings": null}`, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := plannedWith(t, update, c.before, c.after, "", `{}`)
+			if got := declared.Carried(change, path); got != c.want {
+				t.Errorf("Carried = %v, want %v", got, c.want)
 			}
 		})
 	}

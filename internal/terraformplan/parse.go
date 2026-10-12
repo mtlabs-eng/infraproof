@@ -249,6 +249,7 @@ func parseChangeBody(path string, body map[string]any, change *ResourceChange, e
 	// known, by definition.
 	change.Before = merge(before, beforePresent, mask{}, beforeSensitive)
 	change.After = merge(after, afterPresent, afterUnknown, afterSensitive)
+	change.After = markCarried(change.After, before, beforePresent, after, afterPresent, afterUnknown)
 }
 
 func parseMaskField(path string, body map[string]any, name string, errs *[]error) mask {

@@ -1,7 +1,6 @@
 package declared
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
@@ -35,6 +34,14 @@ type Argument struct {
 	// written -- including by a configuration entry with no expressions, and
 	// by a hand-written plan whose configuration lists only the references.
 	Required bool
+	// Key is the key of a map argument the verdict reads, such as the
+	// environment in tags, or empty where the verdict reads the argument
+	// whole. The method is then decided at the key: what was written there,
+	// and whether the plan keeps the value there. Under
+	// ignore_changes = [tags["environment"]] the state keeps one key while
+	// the configuration moves another, and the map as a whole is neither the
+	// configuration's nor the state's.
+	Key string
 }
 
 // Writing is what the configuration records about one argument.
@@ -81,29 +88,35 @@ func (a Argument) Writing(change terraformplan.ResourceChange) Writing {
 }
 
 // Method returns how a KNOWN value the plan carries for this argument was
-// established.
+// established, decided at the place the verdict reads: the argument, or its Key.
 //
 //   - Unrecorded: configuration-unrecorded, rather than reading as stated -- a
 //     fallback of "stated" is exactly the defect this method exists to remove.
 //     So is an argument written only from variables the plan does not resolve,
 //     since one of them may be null.
-//   - Written with a value, on a new object or where the plan moves the value:
-//     stated. ignore_changes keeps the prior value, so a value the plan moves is
-//     the one the configuration evaluates to.
+//   - Written with a value, on a new object: stated.
+//   - Written as a constant the plan's value is provably not, on an update or
+//     no-op: prior-state, whether or not the plan moves the value. Under
+//     ignore_changes the state's value stands where the configuration wrote
+//     another, and the plan's configuration does not record the lifecycle
+//     block; a provider that canonicalizes a constant reads the same way, which
+//     understates it.
+//   - Written with a value, where the plan moves the value: stated.
+//     ignore_changes keeps the prior value, so a value the plan moves is the
+//     one the configuration evaluates to.
 //   - Written with a value, where the change keeps an existing object and the
-//     plan carries the prior value: ignore_changes may have kept it, and the
-//     configuration does not record the lifecycle block. Stated only where the
-//     configuration records a constant -- in block syntax, every attribute
-//     written in the block -- and the value carried is it; prior-state where
-//     it is not. Anything else -- a reference, a variable, a function, an
-//     attribute written in several blocks, a write the configuration records
-//     no expression for -- records no value to compare with the one carried,
-//     and is configuration-unrecorded: a write that evaluates to what the
-//     object already had is unrecorded too, which is the cost of the decision
-//     recorded in milestone 10.
+//     plan keeps the value it had: stated only where the configuration records
+//     a constant -- in block syntax, every attribute written in the block, and
+//     nothing the block does not write holding a value -- that the plan's
+//     value is shown to be. Anything else -- a reference, a variable, a
+//     function, an attribute written in several blocks, a write the
+//     configuration records no expression for, a comparison with a value the
+//     plan withholds or does not know -- is configuration-unrecorded: a write
+//     that evaluates to what the object already had is unrecorded too, which
+//     is the cost of the decision recorded in milestone 10.
 //   - Unwritten, or written as an expression that evaluates to null, which
 //     Terraform treats exactly as unwritten: prior-state where the change keeps
-//     an existing object and the plan carries its prior value; otherwise the
+//     an existing object and the plan keeps its prior value; otherwise the
 //     provider's default, on a new object or where the plan moves the value.
 func (a Argument) Method(change terraformplan.ResourceChange) model.Method {
 	return a.decide(change, nil)
@@ -130,6 +143,11 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 		// Block syntax: what is written inside the block.
 		expression, recorded = change.Block(a.Path)
 	}
+	path := a.Path
+	if a.Key != "" {
+		path += "." + a.Key
+		expression = expression.Element(a.Key)
+	}
 	if writing == WritingWritten && recorded {
 		switch expression.Evaluation {
 		case terraformplan.EvaluationNull:
@@ -139,19 +157,23 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 		}
 	}
 
-	carried := Updates(change) && Carried(change, a.Path)
+	updates := Updates(change)
+	carried := updates && Carried(change, path)
 	switch writing {
 	case WritingWritten:
+		constant := expression.Evaluation == terraformplan.EvaluationConstant
 		switch {
+		case !updates:
+			return model.MethodStated
+		case constant && expression.Contradicted:
+			return model.MethodPriorState
 		case !carried:
 			return model.MethodStated
-		case expression.Evaluation != terraformplan.EvaluationConstant:
-			// The plan records no value for the write to be compared with
-			// the one the update keeps. A write the configuration records no
+		case !constant || expression.Undecided:
+			// The plan records no value for the write to be shown to be the
+			// one the update keeps. A write the configuration records no
 			// expression for is the zero Expression, which is deferred.
 			return model.MethodConfigurationUnrecorded
-		case expression.Contradicted:
-			return model.MethodPriorState
 		}
 		return model.MethodStated
 	case WritingUnwritten:
@@ -167,62 +189,23 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 	}
 }
 
-// Carried reports that the plan keeps the value the object had at a path: the
-// prior state and the planned value are both known there and equal. A block
-// the path passes through is followed into its one element; where it holds
-// other than one, the whole block is compared.
+// Carried reports that the plan keeps the value the object had at a path:
+// the prior state holds the same value there, compared as the plan wrote both
+// before any sensitive mark was applied (terraformplan.Value.Carried). A block
+// the path passes through is followed into its one element; where either side
+// holds other than one, the answer is the whole block's.
 func Carried(change terraformplan.ResourceChange, path string) bool {
 	before, after := change.Before, change.After
 	for i, segment := range strings.Split(path, ".") {
-		if i > 0 && (before.Kind() == terraformplan.KindArray || after.Kind() == terraformplan.KindArray) {
+		if i > 0 && after.Kind() == terraformplan.KindArray {
 			if before.Len() != 1 || after.Len() != 1 {
-				break
+				return after.Carried()
 			}
 			before, after = before.At(0), after.At(0)
 		}
 		before, after = before.Field(segment), after.Field(segment)
 	}
-	return equal(before, after)
-}
-
-// equal reports that two values are both known, wholly, and the same.
-func equal(a, b terraformplan.Value) bool {
-	if a.State() != terraformplan.StateKnown || b.State() != terraformplan.StateKnown || a.Kind() != b.Kind() {
-		return false
-	}
-	switch a.Kind() {
-	case terraformplan.KindNull:
-		return true
-	case terraformplan.KindBool:
-		return a.Bool() == b.Bool()
-	case terraformplan.KindNumber:
-		return a.Number() == b.Number()
-	case terraformplan.KindString:
-		return a.Text() == b.Text()
-	case terraformplan.KindArray:
-		if a.Len() != b.Len() {
-			return false
-		}
-		for i := range a.Len() {
-			if !equal(a.At(i), b.At(i)) {
-				return false
-			}
-		}
-		return true
-	case terraformplan.KindObject:
-		keys := a.Keys()
-		if !slices.Equal(keys, b.Keys()) {
-			return false
-		}
-		for _, key := range keys {
-			if !equal(a.Field(key), b.Field(key)) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
+	return after.Carried()
 }
 
 // Updates reports that the change keeps an existing object: it has a prior

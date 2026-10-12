@@ -225,6 +225,9 @@ func TestAConstantNotInAfterIsContradicted(t *testing.T) {
 			`{"rule": [{"port": 80}, {"port": 22}]}`,
 			"rule.port", false,
 		},
+		"a constant where the plan has nothing": {
+			`{"acl": {"constant_value": "x"}}`, `{}`, "acl", true,
+		},
 		"a reference cannot be compared": {
 			`{"acl": {"references": ["x_other.o.acl", "x_other.o"]}}`, `{"acl": "public-read"}`, "acl", false,
 		},
@@ -321,10 +324,14 @@ func TestABlockIsRecordedFromEverythingWrittenInIt(t *testing.T) {
 		evaluation                   Evaluation
 		contradicted                 bool
 	}{
-		"constants": {`{}`, `{"rule": [{"port": {"constant_value": 22}}, {"port": {"constant_value": 80}}]}`,
+		"constants": {`{}`, `{"rule": [{"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}, {"port": {"constant_value": 80}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`,
 			"rule", EvaluationConstant, false},
-		"constants in another order": {`{}`, `{"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}}]}`,
+		"constants in another order": {`{}`, `{"rule": [{"port": {"constant_value": 80}, "cidr": {"constant_value": "0.0.0.0/0"}}, {"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`,
 			"rule", EvaluationConstant, false},
+		// Terraform plans an attribute nobody wrote as an empty value, so one
+		// the plan holds came from elsewhere: under ignore_changes, from state.
+		"an attribute nobody wrote, which the plan holds": {`{}`, `{"rule": [{"port": {"constant_value": 22}}, {"port": {"constant_value": 80}}]}`,
+			"rule", EvaluationConstant, true},
 		"a constant the plan does not hold": {`{}`, `{"rule": [{"port": {"constant_value": 443}}, {"port": {"constant_value": 80}}]}`,
 			"rule", EvaluationConstant, true},
 		"a second attribute the plan does not hold": {`{}`,
@@ -338,11 +345,13 @@ func TestABlockIsRecordedFromEverythingWrittenInIt(t *testing.T) {
 		// either way the planned set is not the one written.
 		"fewer blocks written than planned": {`{}`, `{"rule": [{"port": {"constant_value": 22}}]}`,
 			"rule", EvaluationConstant, true},
-		"a literal null inside": {`{}`, `{"rule": [{"port": {"constant_value": 22}, "cidr": {"constant_value": null}}, {"port": {"constant_value": 80}}]}`,
-			"rule", EvaluationConstant, false},
-		"a variable recorded as null inside": {`{"v": {"value": null}}`,
+		// Null is no write, and matches only the empty value Terraform plans
+		// for one: the plan's 0.0.0.0/0 is not it.
+		"a literal null inside, where the plan holds a value": {`{}`, `{"rule": [{"port": {"constant_value": 22}, "cidr": {"constant_value": null}}, {"port": {"constant_value": 80}}]}`,
+			"rule", EvaluationConstant, true},
+		"a variable recorded as null inside, where the plan holds a value": {`{"v": {"value": null}}`,
 			`{"rule": [{"port": {"constant_value": 22}, "cidr": {"references": ["var.v"]}}, {"port": {"constant_value": 80}}]}`,
-			"rule", EvaluationConstant, false},
+			"rule", EvaluationConstant, true},
 		"a variable recorded with a value inside": {`{"v": {"value": "0.0.0.0/0"}}`,
 			`{"rule": [{"port": {"constant_value": 22}, "cidr": {"references": ["var.v"]}}]}`,
 			"rule", EvaluationDeferred, false},
@@ -351,7 +360,7 @@ func TestABlockIsRecordedFromEverythingWrittenInIt(t *testing.T) {
 			"rule", EvaluationDeferred, false},
 		"a function inside": {`{}`, `{"rule": [{"port": {"constant_value": 22}, "cidr": {}}]}`,
 			"rule", EvaluationDeferred, false},
-		"a block inside a block": {`{}`, `{"settings": [{"ip": [{"cidr": {"constant_value": "0.0.0.0/0"}}]}]}`,
+		"a block inside a block": {`{}`, `{"settings": [{"ip": [{"enabled": {"constant_value": true}, "cidr": {"constant_value": "0.0.0.0/0"}}]}]}`,
 			"settings.ip", EvaluationConstant, false},
 		"a block inside a block, contradicted": {`{}`, `{"settings": [{"ip": [{"cidr": {"constant_value": "10.0.0.0/8"}}]}]}`,
 			"settings.ip", EvaluationConstant, true},
@@ -359,7 +368,7 @@ func TestABlockIsRecordedFromEverythingWrittenInIt(t *testing.T) {
 			"settings", EvaluationConstant, true},
 		"the outer block, a reference in the inner": {`{}`, `{"settings": [{"ip": [{"cidr": {"references": ["local.c"]}}]}]}`,
 			"settings", EvaluationDeferred, false},
-		"a single block inside a block": {`{}`, `{"settings": [{"mode": {"x": {"constant_value": 1}}}]}`,
+		"a single block inside a block": {`{}`, `{"settings": [{"mode": {"x": {"constant_value": 1}}, "ip": [{"enabled": {"constant_value": true}, "cidr": {"constant_value": "0.0.0.0/0"}}]}]}`,
 			"settings", EvaluationConstant, false},
 		"a single block inside a block, contradicted": {`{}`, `{"settings": [{"mode": {"x": {"constant_value": 2}}}]}`,
 			"settings", EvaluationConstant, true},

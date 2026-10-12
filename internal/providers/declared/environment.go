@@ -71,6 +71,8 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 	// something the plan did not say.
 	var stated string
 	var readable, unusable bool
+	// The keys the declaration was read from; the method is decided at each.
+	var declaredAt []string
 
 	for _, key := range labels.Keys() {
 		if !strings.EqualFold(key, environmentKey) {
@@ -95,6 +97,7 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 			return model.Unknown[string](source)
 		}
 		stated, readable = text, true
+		declaredAt = append(declaredAt, key)
 	}
 
 	switch {
@@ -108,8 +111,15 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 		// provider here: stated where the configuration writes them, prior
 		// state where an update carries them (ignore_changes on tags is
 		// common), and otherwise a value the plan does not record anybody
-		// writing.
-		return model.Known(stated, Argument{Path: attribute}.MethodFor(change, false), source)
+		// writing. Decided at the key the declaration is read from, not the
+		// map: ignore_changes = [tags["environment"]] keeps that key while the
+		// configuration moves the others. A declaration read from two keys of
+		// the name rests on both.
+		methods := make([]model.Method, 0, len(declaredAt))
+		for _, key := range declaredAt {
+			methods = append(methods, Argument{Path: attribute, Key: key}.MethodFor(change, false))
+		}
+		return model.Known(stated, Weakest(methods...), source)
 	}
 
 	return model.Absent[string](source)

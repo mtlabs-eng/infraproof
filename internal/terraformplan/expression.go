@@ -42,7 +42,7 @@ type Expression struct {
 	// Evaluation is what the expression evaluates to.
 	Evaluation Evaluation
 	// Contradicted reports that the expression is a constant and the value the
-	// plan carries at the argument's path is not that constant.
+	// plan carries at the argument's path is provably not that constant.
 	//
 	// Terraform's `lifecycle { ignore_changes }` keeps the prior value in
 	// `after` whatever the configuration writes, and the plan's configuration
@@ -53,11 +53,38 @@ type Expression struct {
 	//
 	// The comparison follows Terraform's encoding of a constant: an attribute
 	// written as blocks records every attribute, null where nothing was
-	// written, so a null matches anything; a list is compared as a set; a
-	// number, a string and a bool match by their text, as Terraform converts a
-	// constant to the argument's type. An unknown or withheld value is
-	// never contradicted -- there is nothing to compare with.
+	// written, and Terraform plans an attribute nobody wrote as an empty value,
+	// so null -- and, in a block written in block syntax, an attribute not
+	// written at all -- matches only null, an empty list, map or string, or
+	// false. A list is compared as a set; a number, a string and a bool match
+	// by their text, as Terraform converts a constant to the argument's type.
+	// Nothing else is normalized: a provider that canonicalizes a constant (a
+	// protocol's case, a protocol number) contradicts it.
 	Contradicted bool
+	// Undecided reports that the expression is a constant and the comparison
+	// could not be completed: a planned value where it is compared is not yet
+	// known, or is withheld as sensitive, or the path names no single value.
+	// It is never set beside Contradicted.
+	Undecided bool
+	// elements are the keys of a constant written as a map, each compared on
+	// its own with the planned value at that key; nil for any other
+	// expression.
+	elements map[string]Expression
+}
+
+// Element returns what the configuration records at one key of an argument
+// written as a map: a verdict that reads one key rests on what was written
+// there, not on the whole map. A key the constant does not write is written as
+// nothing, which is null. An argument written other than as a constant map
+// records nothing per key, and the answer is the argument's own.
+func (e Expression) Element(key string) Expression {
+	if e.elements == nil {
+		return e
+	}
+	if element, found := e.elements[key]; found {
+		return element
+	}
+	return Expression{Evaluation: EvaluationNull}
 }
 
 // Expression returns what the configuration records about the value of an
@@ -129,13 +156,28 @@ func (e evaluator) expressions(raw map[string]any, module string, after Value) m
 		state := e.evaluate(expression, module, 0)
 		recorded := Expression{Evaluation: state.evaluation}
 		if state.evaluation == EvaluationConstant {
-			if value, single := valueAtPath(after, path); single {
-				recorded.Contradicted = !constantMatches(state.raw, value)
+			value, single := valueAtPath(after, path)
+			recorded.record(compareIf(single, func() comparison { return compare(state.raw, value) }))
+			if written, isMap := state.raw.(map[string]any); isMap {
+				recorded.elements = make(map[string]Expression, len(written))
+				for key, element := range written {
+					recorded.elements[key] = elementExpression(element, single, value.Field(key))
+				}
 			}
 		}
 		out[path] = recorded
 	}
 	return out
+}
+
+// elementExpression is what a constant map records at one key.
+func elementExpression(element any, single bool, value Value) Expression {
+	if element == nil {
+		return Expression{Evaluation: EvaluationNull}
+	}
+	recorded := Expression{Evaluation: EvaluationConstant}
+	recorded.record(compareIf(single, func() comparison { return compare(element, value) }))
+	return recorded
 }
 
 // blocks evaluates every block one resource writes in block syntax against one
@@ -154,9 +196,8 @@ func (e evaluator) blocks(raw map[string]any, module string, after Value) map[st
 			continue
 		}
 		recorded := Expression{Evaluation: EvaluationConstant}
-		if value, single := valueAtPath(after, path); single {
-			recorded.Contradicted = !blocksMatch(written, value)
-		}
+		value, single := valueAtPath(after, path)
+		recorded.record(compareIf(single, func() comparison { return compareBlocks(written, value) }))
 		out[path] = recorded
 	}
 	return out
@@ -210,61 +251,196 @@ func (e evaluator) blockConstants(elements []map[string]any, module string) (wri
 	return out, true
 }
 
-// blocksMatch reports whether the blocks a value holds could be, one for one,
-// the blocks written: each matching a distinct written block on the attributes
-// written in it. A planned block carries every attribute of its schema, the
-// written one only those the author wrote, so an attribute nobody wrote is not
-// compared. Like constantMatches it answers true where it cannot compare.
-func blocksMatch(written writtenBlocks, value Value) bool {
-	if value.State() != StateKnown {
+// comparison is the answer to whether a planned value is the constant written.
+// The order is the order of strength: a contradiction anywhere decides, and
+// anything the plan does not show leaves the answer undecided.
+type comparison int
+
+const (
+	matched comparison = iota
+	undecided
+	contradicted
+)
+
+func (e *Expression) record(answer comparison) {
+	e.Contradicted = answer == contradicted
+	e.Undecided = answer == undecided
+}
+
+// compareIf compares where the path names a single planned value, and is
+// undecided where it does not.
+func compareIf(single bool, compare func() comparison) comparison {
+	if !single {
+		return undecided
+	}
+	return compare()
+}
+
+// notShown reports what comparing with a value the plan does not show
+// answers, and false for a value it shows. A value it does not know or
+// withholds cannot be compared; one it does not mention matches only
+// nothing written.
+func notShown(written any, value Value) (comparison, bool) {
+	switch value.State() {
+	case StateUnknown, StateRedacted:
+		return undecided, true
+	case StateAbsent:
+		if written == nil {
+			return matched, true
+		}
+		return contradicted, true
+	default:
+		return matched, false
+	}
+}
+
+// compare answers whether a planned value is the constant the configuration
+// records.
+func compare(constant any, value Value) comparison {
+	if answer, decided := notShown(constant, value); decided {
+		return answer
+	}
+	switch typed := constant.(type) {
+	case nil:
+		// Nothing written here: Terraform plans an empty value for it.
+		if empty(value) {
+			return matched
+		}
+		return contradicted
+	case []any:
+		if value.Kind() != KindArray || value.Len() != len(typed) {
+			return contradicted
+		}
+		return matchSet(len(typed), value, func(i int, planned Value) comparison {
+			return compare(typed[i], planned)
+		})
+	case map[string]any:
+		if value.Kind() != KindObject {
+			return contradicted
+		}
+		for _, key := range value.Keys() {
+			if _, recorded := typed[key]; !recorded {
+				return contradicted
+			}
+		}
+		answer := matched
+		for key, element := range typed {
+			answer = max(answer, compare(element, value.Field(key)))
+		}
+		return answer
+	default:
+		text, ok := scalarText(constant)
+		if !ok {
+			return undecided
+		}
+		same := false
+		switch value.Kind() {
+		case KindString:
+			same = text == value.Text()
+		case KindNumber:
+			same = text == string(value.Number())
+		case KindBool:
+			same = text == strconv.FormatBool(value.Bool())
+		}
+		if same {
+			return matched
+		}
+		return contradicted
+	}
+}
+
+// empty reports a value Terraform plans for an attribute nobody wrote.
+func empty(value Value) bool {
+	switch value.Kind() {
+	case KindNull:
 		return true
+	case KindArray, KindObject:
+		return value.Len() == 0
+	case KindString:
+		return value.Text() == ""
+	case KindBool:
+		return !value.Bool()
+	default:
+		return false
+	}
+}
+
+// matchSet pairs each of count written elements with a distinct element of a
+// planned list, greedily: a planned element that matches first, one the plan
+// does not show otherwise. A written element left with neither contradicts;
+// one paired with an element the plan does not show leaves the answer
+// undecided. Greedy pairing can miss a pairing that exists, which reads as a
+// contradiction, never as a match.
+func matchSet(count int, value Value, compare func(i int, planned Value) comparison) comparison {
+	used := make([]bool, value.Len())
+	answer := matched
+	for i := range count {
+		best, at := contradicted, -1
+		for j := range value.Len() {
+			if used[j] {
+				continue
+			}
+			if candidate := compare(i, value.At(j)); candidate < best {
+				best, at = candidate, j
+				if candidate == matched {
+					break
+				}
+			}
+		}
+		if at < 0 {
+			return contradicted
+		}
+		used[at] = true
+		answer = max(answer, best)
+	}
+	return answer
+}
+
+// compareBlocks answers whether the blocks a value holds are, one for one, the
+// blocks written. A planned block carries every attribute of its schema, and
+// Terraform plans the ones nobody wrote as empty values, so an attribute the
+// written block does not hold is compared as written as nothing.
+func compareBlocks(written writtenBlocks, value Value) comparison {
+	if answer, decided := notShown(written, value); decided {
+		return answer
 	}
 	if value.Kind() == KindObject {
 		// A block of nesting_mode single.
-		return len(written) == 1 && bodyMatches(written[0], value)
+		if len(written) != 1 {
+			return contradicted
+		}
+		return compareBody(written[0], value)
 	}
 	if value.Kind() != KindArray || value.Len() != len(written) {
-		return false
+		return contradicted
 	}
-	used := make([]bool, value.Len())
-	for _, body := range written {
-		found := false
-		for i := range value.Len() {
-			if !used[i] && bodyMatches(body, value.At(i)) {
-				used[i], found = true, true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
+	return matchSet(len(written), value, func(i int, planned Value) comparison {
+		return compareBody(written[i], planned)
+	})
 }
 
-func bodyMatches(body map[string]any, value Value) bool {
-	if value.State() != StateKnown {
-		return true
+func compareBody(body map[string]any, value Value) comparison {
+	if answer, decided := notShown(body, value); decided {
+		return answer
 	}
 	if value.Kind() != KindObject {
-		return false
+		return contradicted
 	}
+	answer := matched
 	for name, written := range body {
 		field := value.Field(name)
 		if nested, ok := written.(writtenBlocks); ok {
-			if !blocksMatch(nested, field) {
-				return false
-			}
+			answer = max(answer, compareBlocks(nested, field))
 			continue
 		}
-		if written != nil && field.State() == StateAbsent {
-			return false
-		}
-		if !constantMatches(written, field) {
-			return false
+		answer = max(answer, compare(written, field))
+	}
+	for _, name := range value.Keys() {
+		if _, written := body[name]; !written {
+			answer = max(answer, compare(nil, value.Field(name)))
 		}
 	}
-	return true
+	return answer
 }
 
 // evaluate reads one expression in a module's scope.
@@ -437,73 +613,6 @@ func valueAtPath(value Value, path string) (Value, bool) {
 		value = value.Field(segment)
 	}
 	return value, true
-}
-
-// constantMatches reports whether a value could be the constant the
-// configuration records. It answers true wherever it cannot compare: the
-// question it serves is whether the value is provably not the one written.
-func constantMatches(constant any, value Value) bool {
-	if value.State() != StateKnown {
-		return true
-	}
-	switch typed := constant.(type) {
-	case nil:
-		// Nothing written here: an attribute written as blocks records every
-		// attribute, null where the author wrote none.
-		return true
-	case []any:
-		if value.Kind() != KindArray || value.Len() != len(typed) {
-			return false
-		}
-		used := make([]bool, value.Len())
-		for _, element := range typed {
-			found := false
-			for i := range value.Len() {
-				if !used[i] && constantMatches(element, value.At(i)) {
-					used[i], found = true, true
-					break
-				}
-			}
-			if !found {
-				return false
-			}
-		}
-		return true
-	case map[string]any:
-		if value.Kind() != KindObject {
-			return false
-		}
-		for _, key := range value.Keys() {
-			if _, recorded := typed[key]; !recorded {
-				return false
-			}
-		}
-		for key, element := range typed {
-			field := value.Field(key)
-			if element != nil && field.State() == StateAbsent {
-				return false
-			}
-			if !constantMatches(element, field) {
-				return false
-			}
-		}
-		return true
-	default:
-		text, ok := scalarText(constant)
-		if !ok {
-			return true
-		}
-		switch value.Kind() {
-		case KindString:
-			return text == value.Text()
-		case KindNumber:
-			return text == string(value.Number())
-		case KindBool:
-			return text == strconv.FormatBool(value.Bool())
-		default:
-			return false
-		}
-	}
 }
 
 func scalarText(constant any) (string, bool) {
