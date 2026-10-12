@@ -156,8 +156,8 @@ func RedactedFact(path string) *ObservedFact {
 // VerificationStep is one fact a finding rests on and how it was established.
 // It has no value field by construction, like an evidence reference.
 type VerificationStep struct {
-	// Fact is a capability path, or contract.<field> for the comparison with
-	// the intent contract.
+	// Fact is a capability path, or contract.<field> or contract.<family>.<field>
+	// for the comparison with the intent contract; both shapes are emitted.
 	Fact string `json:"fact"`
 	// Method is how the fact was established.
 	Method VerificationMethod `json:"method"`

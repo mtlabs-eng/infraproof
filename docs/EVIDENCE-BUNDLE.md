@@ -149,7 +149,19 @@ Verification method:
 plan-stated-value | provider-default | policy-document-interpreted | reference-resolved | documented-table | plan-action | intent-comparison
 ```
 
-A step's fact is a capability path for a plan fact, and `contract.<field>` for the comparison with the intent contract. `policy-document-interpreted` is distinct from `plan-stated-value` because it rests on this build's reading of a policy grammar.
+| method | means |
+| --- | --- |
+| `plan-stated-value` | the value is stated in the plan |
+| `provider-default` | the argument is unwritten, and the value is the provider's documented default |
+| `policy-document-interpreted` | the value results from this build's reading of a JSON policy document |
+| `reference-resolved` | the fact joins two resources through configuration references |
+| `documented-table` | the value comes from a closed, documented table in this build |
+| `plan-action` | the value is the classification of the plan's actions |
+| `intent-comparison` | the fact is the comparison with the intent contract |
+
+- A step's fact is a capability path for a plan fact, and `contract.<field>` or `contract.<family>.<field>` for the comparison with the intent contract; both shapes are emitted (`contract.environment`, `contract.object_storage.exposure`).
+- `policy-document-interpreted` is distinct from `plan-stated-value` because it rests on this build's reading of a policy grammar.
+- The method follows the configuration: a value the provider writes into the plan for an argument the configuration does not write is `provider-default`. A plan exported without its `configuration` section cannot show what was written, so such values read `plan-stated-value`.
 
 Unknown record:
 

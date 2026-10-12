@@ -104,7 +104,9 @@ the bundle only as an unknown.
 
 A step carries a fact path and a method, and no value -- the same discipline as
 an evidence reference. A step's `fact` is a capability path for a plan fact and
-`contract.<family>.<field>` for the comparison with the contract.
+`contract.<field>` or `contract.<family>.<field>` for the comparison with the
+contract; both shapes are emitted (`contract.environment`,
+`contract.object_storage.exposure`).
 
 | rule | steps |
 | --- | --- |
