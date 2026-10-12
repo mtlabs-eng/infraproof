@@ -97,19 +97,27 @@ func TestAStatedPortIsStatedInTheStep(t *testing.T) {
 	)
 }
 
-// Criterion 3, GCP ipv4_enabled: the pair differs in that one method and in
-// nothing else.
+// Criterion 3, GCP ipv4_enabled: a true pair. real-sql-ipv4-written and
+// real-sql-ipv4-unwritten are real create plans of one instance whose
+// configurations differ only in writing `ipv4_enabled = true` inside a written
+// ip_configuration; the plans' after values are identical. The findings differ
+// in the method of that step and nowhere else.
+//
+// This used to compare two different instances from two different plans, so
+// "nowhere else" could not have held and was never asserted.
 func TestTheIPv4DefaultChangesOneStepAndNothingElse(t *testing.T) {
-	written := stepsOf(t, evaluateDatabase(t, "gcp", "real-databases", requiringPrivate()),
-		policy.RuleDatabasePublicReachable, "google_sql_database_instance.reachable")
-	unwritten := stepsOf(t, evaluateDatabase(t, "gcp", "real-databases-ipv4-unwritten", requiringPrivate()),
-		policy.RuleDatabasePublicReachable, "google_sql_database_instance.default_endpoint")
-	assertSteps(t, written,
+	written := evaluateDatabase(t, "gcp", "real-sql-ipv4-written", requiringPrivate())
+	unwritten := evaluateDatabase(t, "gcp", "real-sql-ipv4-unwritten", requiringPrivate())
+	const address = "google_sql_database_instance.db"
+	assertSameBesidesSteps(t,
+		findingOf(t, written, policy.RuleDatabasePublicReachable, address),
+		findingOf(t, unwritten, policy.RuleDatabasePublicReachable, address))
+	assertSteps(t, stepsOf(t, written, policy.RuleDatabasePublicReachable, address),
 		step("contract.database.exposure", evidence.MethodIntentComparison),
 		step("database.admitted_by", evidence.MethodPlanStatedValue),
 		step("database.public_endpoint", evidence.MethodPlanStatedValue),
 	)
-	assertSteps(t, unwritten,
+	assertSteps(t, stepsOf(t, unwritten, policy.RuleDatabasePublicReachable, address),
 		step("contract.database.exposure", evidence.MethodIntentComparison),
 		step("database.admitted_by", evidence.MethodPlanStatedValue),
 		step("database.public_endpoint", evidence.MethodProviderDefault),
@@ -286,4 +294,29 @@ func planAt(t *testing.T, cloud, fixture string) terraformplan.Plan {
 		t.Fatalf("parsing %s: %v", fixture, err)
 	}
 	return plan
+}
+
+// A gate open on every usable port reaches a database whatever it listens on, so
+// when the port is unknown, or is a value that is not a port, the port did not
+// decide and the finding names no port step. A step there would carry the method
+// of a port nobody used -- for an unknown one, no method at all.
+func TestAnUnusablePortBehindAGateOpenOnEveryPortNamesNoPortStep(t *testing.T) {
+	for name, port := range map[string]model.Fact[int]{
+		"unknown": unknownPort(),
+		"zero":    knownPort(0),
+	} {
+		result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
+			reachable(known(true), unknownBool(), port,
+				group("aws_security_group.db", known(true), rngR(model.ProtocolTCP, 1, 65535))))
+		if len(result.Findings) == 0 {
+			t.Fatalf("%s: no finding for a gate open on every usable port", name)
+		}
+		for _, f := range result.Findings {
+			for _, s := range f.VerificationSteps {
+				if s.Fact == "database.port" {
+					t.Errorf("%s port: the finding names a port step %v, but the port did not decide", name, s)
+				}
+			}
+		}
+	}
 }
