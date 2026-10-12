@@ -556,7 +556,11 @@ func TestEveryFindingSaysHowItKnows(t *testing.T) {
 	for _, fixture := range planFixtures(t) {
 		bundle, err := verify.FromFiles(intent, fixture, verify.Options{})
 		if err != nil {
-			continue // reported by TestEveryFixtureProducesItsBaselineBundle
+			// Not skipped: the baseline test is fatal only for a fixture that
+			// has a baseline, and the fixtures added since have none, so a
+			// skip here let one that could not be verified pass in silence.
+			t.Errorf("%s: could not be verified: %v", fixture, err)
+			continue
 		}
 		if bundle.SchemaVersion != "1.3" {
 			t.Fatalf("%s: schema_version = %q, want 1.3", fixture, bundle.SchemaVersion)
