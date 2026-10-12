@@ -276,3 +276,25 @@ func TestAGrantIsOnlyAsStrongAsTheWeakerSetting(t *testing.T) {
 		t.Errorf("method = %q (state %s), want known true %q", access.Method(), access.State, model.MethodConfigurationUnrecorded)
 	}
 }
+
+// A grant takes the method of the rules it rests on: those that open something
+// to every address once the denies are applied. A rule a deny cancels, or one
+// whose source is narrower than every address, proves nothing, and counting it
+// made a grant resting only on an unrecorded inline rule read as stated
+// (review 4, F1). A rule that does open is a proof, and the best proof wins.
+func TestANetworkSecurityGroupGrantRestsOnTheRulesThatOpen(t *testing.T) {
+	cases := []struct {
+		fixture string
+		method  model.Method
+	}{
+		{"nsg-cancelled-rule-beside-unrecorded", model.MethodConfigurationUnrecorded},
+		{"nsg-narrow-rule-beside-unrecorded", model.MethodConfigurationUnrecorded},
+		{"nsg-open-rule-beside-unrecorded", model.MethodStated},
+	}
+	for _, c := range cases {
+		ingress := networkAt(t, c.fixture).Network.PublicIngress
+		if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != c.method {
+			t.Errorf("%s: method = %q (state %s), want known true %q", c.fixture, ingress.Method(), ingress.State, c.method)
+		}
+	}
+}

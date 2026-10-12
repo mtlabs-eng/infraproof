@@ -104,7 +104,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		cited = append(cited, rule.cited...)
 	}
 
-	opened, approximated, narrowedByDestination := resolve(rules)
+	opened, openedBy, approximated, narrowedByDestination := resolve(rules)
 
 	capabilities := model.NetworkCapabilities{
 		OpenToAnyAddress: opened,
@@ -146,7 +146,9 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	case unread:
 		capabilities.PublicIngress = model.Unknown[bool](cited...)
 	case len(opened) > 0:
-		capabilities.PublicIngress = model.Known(true, grantMethod(rules), cited...)
+		// A grant needs only one of the rules that open, so it takes the
+		// best established of them.
+		capabilities.PublicIngress = model.Known(true, declared.Strongest(openedBy...), cited...)
 		if !stated {
 			// A grant is provable from part of a rule set, and this is that
 			// part. What is not here is a deny at a lower priority, which would
@@ -236,20 +238,6 @@ type inbound struct {
 	method model.Method
 }
 
-// grantMethod is the method of a grant: the best established of the rules
-// allowing ingress from every address, since any one of them is a grant. The
-// denies a grant survived do not enter it, a limitation recorded in milestone
-// 10: GCP's firewall counts a deny it applied, and this does not.
-func grantMethod(rules []inbound) model.Method {
-	var proofs []model.Method
-	for _, rule := range rules {
-		if rule.allow && rule.inbound && rule.anySource && !rule.unread {
-			proofs = append(proofs, rule.method)
-		}
-	}
-	return declared.Strongest(proofs...)
-}
-
 // separateSource is how a separate rule's source was established. Neither
 // source field is Computed and neither has a default, so Terraform plans an
 // unwritten one as null: a source that is there was written, whatever a
@@ -277,7 +265,14 @@ func separateSource(change terraformplan.ResourceChange) model.Method {
 // except TCP" is not one. Rather than drop the grant, which would hide that UDP
 // and ICMP are still open, the wider range is reported and the approximation is
 // returned so the caller can say so.
-func resolve(rules []inbound) (opened []model.OpenRange, approximated, narrowedByDestination bool) {
+//
+// openedBy holds the method of each allow that leaves something open once the
+// denies are applied, which is what a grant rests on: an allow a deny cancels
+// whole proves nothing, and counting it read a grant resting only on an
+// unrecorded rule as stated. The denies an allow survived do not enter it, a
+// limitation recorded in milestone 10.
+func resolve(rules []inbound) (opened []model.OpenRange, openedBy []model.Method,
+	approximated, narrowedByDestination bool) {
 	ordered := slices.Clone(rules)
 	slices.SortStableFunc(ordered, func(a, b inbound) int { return a.priority - b.priority })
 
@@ -345,9 +340,13 @@ func resolve(rules []inbound) (opened []model.OpenRange, approximated, narrowedB
 			// world has no port range to iterate, and reporting nothing would
 			// turn a grant into silence.
 			opened = append(opened, model.OpenRange{Protocol: allow.protocol, Sources: allow.cited})
+			openedBy = append(openedBy, allow.method)
 			continue
 		}
 
+		if len(remaining) > 0 {
+			openedBy = append(openedBy, allow.method)
+		}
 		for _, ports := range remaining {
 			opened = append(opened, model.OpenRange{
 				Protocol: allow.protocol,
@@ -356,7 +355,7 @@ func resolve(rules []inbound) (opened []model.OpenRange, approximated, narrowedB
 			})
 		}
 	}
-	return opened, approximated, narrowedByDestination
+	return opened, openedBy, approximated, narrowedByDestination
 }
 
 // meets reports whether any port in either set is in the other, so an
