@@ -546,3 +546,32 @@ func verdictOnly(b evidence.Bundle) evidence.Bundle {
 	}
 	return out
 }
+
+// TestEveryFindingSaysHowItKnows is criterion 1 over every committed plan
+// fixture, not a sample: each finding carries at least one step and the bundle
+// validates as 1.3.
+func TestEveryFindingSaysHowItKnows(t *testing.T) {
+	intent := filepath.Join("testdata", "baseline", "intent.json")
+	findings := 0
+	for _, fixture := range planFixtures(t) {
+		bundle, err := verify.FromFiles(intent, fixture, verify.Options{})
+		if err != nil {
+			continue // reported by TestEveryFixtureProducesItsBaselineBundle
+		}
+		if bundle.SchemaVersion != "1.3" {
+			t.Fatalf("%s: schema_version = %q, want 1.3", fixture, bundle.SchemaVersion)
+		}
+		for _, f := range bundle.Findings {
+			findings++
+			if len(f.VerificationSteps) == 0 {
+				t.Errorf("%s: %s on %v carries no step", fixture, f.RuleID, f.Resource)
+			}
+		}
+		if err := bundle.Validate(); err != nil {
+			t.Errorf("%s: %v", fixture, err)
+		}
+	}
+	if findings == 0 {
+		t.Fatal("no fixture produced a finding; the test asserted nothing")
+	}
+}

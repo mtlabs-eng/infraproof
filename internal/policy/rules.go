@@ -114,6 +114,11 @@ func DestructiveChange(contract intent.Contract, graph model.Graph) Result {
 				Path:            "resource_changes[].change.actions",
 			}},
 			Remediation: remediation,
+			VerificationSteps: []evidence.VerificationStep{
+				// Destructive is read from the action list the plan states.
+				{Fact: "change.destructive", Method: evidence.MethodPlanAction},
+				contractStep("destructive_changes"),
+			},
 		})
 	}
 
@@ -181,6 +186,12 @@ func CloudAllowed(contract intent.Contract, graph model.Graph) Result {
 				Path:            "resource_changes[].provider_name",
 			}},
 			Remediation: "Remove the resources in this cloud, or add the cloud to allowed_clouds in the intent contract.",
+			VerificationSteps: []evidence.VerificationStep{
+				// The cloud is whichever mapper claimed the provider the plan
+				// names in provider_name, which is stated.
+				{Fact: "resource.cloud", Method: evidence.MethodPlanStatedValue},
+				contractStep("allowed_clouds"),
+			},
 		})
 	}
 
@@ -258,6 +269,10 @@ func EnvironmentMatch(contract intent.Contract, graph model.Graph) Result {
 			Evidence: environmentEvidence(declared),
 			Remediation: "Target the environment the contract declares, or write the contract for the " +
 				"environment this change affects.",
+			VerificationSteps: []evidence.VerificationStep{
+				factStep("resource.environment", declared),
+				contractStep("environment"),
+			},
 		})
 	}
 

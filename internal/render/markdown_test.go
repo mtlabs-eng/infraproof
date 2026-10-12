@@ -72,7 +72,10 @@ func TestMarkdownOrdersFindingsCanonically(t *testing.T) {
 		Disposition: evidence.DispositionInfo,
 		Claim:       "An informational observation.",
 		Remediation: "No remediation required.",
-		Evidence:    []evidence.EvidenceRef{},
+		VerificationSteps: []evidence.VerificationStep{
+			{Fact: "object_storage.versioning", Method: evidence.MethodPlanStatedValue},
+		},
+		Evidence: []evidence.EvidenceRef{},
 	}}, bundle.Findings...)
 
 	got, err := render.Markdown(bundle)
@@ -482,6 +485,10 @@ func hostileBundle() evidence.Bundle {
 			Evidence: []evidence.EvidenceRef{{Source: "terraform_plan",
 				ResourceAddress: address, Path: "acl"}},
 			Remediation: "Remove the grant.",
+			VerificationSteps: []evidence.VerificationStep{
+				{Fact: "object_storage.public_access", Method: evidence.MethodPlanStatedValue},
+				{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
+			},
 		}},
 		Unknowns: []evidence.Unknown{{
 			CheckID: "STORAGE_PUBLIC_DETERMINABLE", Required: false,

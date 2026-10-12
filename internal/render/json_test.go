@@ -131,7 +131,10 @@ func TestJSONDoesNotMutateInput(t *testing.T) {
 		Disposition: evidence.DispositionInfo,
 		Claim:       "An informational observation.",
 		Remediation: "No remediation required.",
-		Evidence:    []evidence.EvidenceRef{},
+		VerificationSteps: []evidence.VerificationStep{
+			{Fact: "object_storage.versioning", Method: evidence.MethodPlanStatedValue},
+		},
+		Evidence: []evidence.EvidenceRef{},
 	})
 	firstRuleID := bundle.Findings[0].RuleID
 
@@ -154,7 +157,10 @@ func TestJSONOrdersFindingsCanonically(t *testing.T) {
 		Disposition: evidence.DispositionInfo,
 		Claim:       "An informational observation.",
 		Remediation: "No remediation required.",
-		Evidence:    []evidence.EvidenceRef{},
+		VerificationSteps: []evidence.VerificationStep{
+			{Fact: "object_storage.versioning", Method: evidence.MethodPlanStatedValue},
+		},
+		Evidence: []evidence.EvidenceRef{},
 	}}, bundle.Findings...)
 
 	raw, err := render.JSON(bundle)
@@ -202,7 +208,10 @@ func TestJSONRendersNilEvidenceAsArray(t *testing.T) {
 		Disposition: evidence.DispositionInfo,
 		Claim:       "An informational observation.",
 		Remediation: "No remediation required.",
-		Evidence:    nil,
+		VerificationSteps: []evidence.VerificationStep{
+			{Fact: "object_storage.versioning", Method: evidence.MethodPlanStatedValue},
+		},
+		Evidence: nil,
 	}}
 
 	raw, err := render.JSON(bundle)

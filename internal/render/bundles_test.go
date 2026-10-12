@@ -49,6 +49,10 @@ func contractBundle() evidence.Bundle {
 					Location: &evidence.Location{File: "main.tf", Line: 6},
 				}},
 				Remediation: "Disable public access using the provider-supported controls.",
+				VerificationSteps: []evidence.VerificationStep{
+					{Fact: "object_storage.public_access", Method: evidence.MethodPlanStatedValue},
+					{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
+				},
 			},
 		},
 		Unknowns: []evidence.Unknown{{
@@ -115,6 +119,10 @@ func redactedBundle() evidence.Bundle {
 				Redacted:        true,
 			}},
 			Remediation: "Supply the policy through a non-sensitive attribute, or accept the UNKNOWN result.",
+			VerificationSteps: []evidence.VerificationStep{
+				// The plan itself marks the document sensitive.
+				{Fact: "object_storage.policy_document", Method: evidence.MethodPlanStatedValue},
+			},
 		}},
 		Unknowns: []evidence.Unknown{{
 			CheckID:         "STORAGE_PUBLIC_DETERMINABLE",

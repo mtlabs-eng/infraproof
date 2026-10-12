@@ -123,6 +123,10 @@ func ingressFinding(resource model.NormalizedResource, capabilities model.Networ
 		Observed:    openObserved(append(exceeding, undescribable...)),
 		Evidence:    ingressEvidence(capabilities, append(exceeding, undescribable...)),
 		Remediation: remediation,
+		VerificationSteps: []evidence.VerificationStep{
+			factStep("network.public_ingress", capabilities.PublicIngress),
+			contractStep("network.public_ports"),
+		},
 	}
 	return finding, true
 }

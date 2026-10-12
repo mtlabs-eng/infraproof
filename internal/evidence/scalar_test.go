@@ -90,6 +90,10 @@ func TestABundleSurvivesARoundTrip(t *testing.T) {
 				Source: "terraform_plan", ResourceAddress: "aws_s3_bucket.assets", Path: "acl",
 			}},
 			Remediation: "Remove the grant.",
+			VerificationSteps: []VerificationStep{
+				{Fact: "object_storage.public_access", Method: MethodPlanStatedValue},
+				{Fact: "contract.object_storage.exposure", Method: MethodIntentComparison},
+			},
 		}},
 		Unknowns: []Unknown{},
 	}
