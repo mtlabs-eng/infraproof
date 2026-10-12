@@ -1,9 +1,12 @@
 package azure_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers"
+	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
 // The port is from a table keyed on the type -- documented-table -- and is
@@ -49,6 +52,7 @@ func TestStorageAccessSettingsFollowTheConfiguration(t *testing.T) {
 		{"private-container-written-gate-unwritten", false, model.MethodStated, "private container written, gate unwritten"},
 		{"private-container-unwritten-gate-written", false, model.MethodProviderDefault, "private container unwritten, gate written"},
 		{"public-blob-container-defaulted", true, model.MethodProviderDefault, "gate written, access type unwritten"},
+		{"public-blob-gate-defaulted", true, model.MethodProviderDefault, "access type written, gate unwritten"},
 		{"public-blob", true, model.MethodProviderDefault, "neither setting written"},
 		{"private-account-forbids-written", false, model.MethodStated, "the deciding gate written"},
 		{"private-account-forbids", false, model.MethodProviderDefault, "the deciding gate unwritten"},
@@ -61,6 +65,57 @@ func TestStorageAccessSettingsFollowTheConfiguration(t *testing.T) {
 		}
 		if got.Method() != c.method {
 			t.Errorf("%s (%s): method = %q, want %q", c.fixture, c.why, got.Method(), c.method)
+		}
+	}
+}
+
+// An account with no container is judged on its own gate, and a gate that says
+// no takes the gate's method: stated when the configuration writes it, the
+// provider's default when it does not.
+func TestAnAccountAloneTakesItsGatesMethod(t *testing.T) {
+	access := func(written string) model.Fact[bool] {
+		t.Helper()
+		raw := []byte(fmt.Sprintf(`{
+		  "format_version": "1.2",
+		  "resource_changes": [{
+		    "address": "azurerm_storage_account.example", "mode": "managed",
+		    "type": "azurerm_storage_account", "name": "example", "provider_name": "p",
+		    "change": {"actions": ["create"], "before": null,
+		               "after": {"name": "s", "allow_nested_items_to_be_public": false}}
+		  }],
+		  "configuration": {"root_module": {"resources": [{
+		    "address": "azurerm_storage_account.example", "mode": "managed",
+		    "type": "azurerm_storage_account", "name": "example",
+		    "expressions": {"name": {"constant_value": "s"}%s}
+		  }]}}
+		}`, written))
+		plan, err := terraformplan.Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		account, ok := providers.Normalize(plan, providers.Default()).At("azurerm_storage_account.example")
+		if !ok || account.ObjectStorage == nil {
+			t.Fatal("the account is missing from the graph")
+		}
+		return account.ObjectStorage.PublicAccess
+	}
+
+	cases := []struct {
+		why     string
+		written string
+		method  model.Method
+	}{
+		{"gate written", `, "allow_nested_items_to_be_public": {"constant_value": false}`, model.MethodStated},
+		{"gate unwritten", ``, model.MethodProviderDefault},
+	}
+	for _, c := range cases {
+		got := access(c.written)
+		if !got.IsKnown() || got.Get() {
+			t.Errorf("%s: state = %s, want known false", c.why, got.State)
+			continue
+		}
+		if got.Method() != c.method {
+			t.Errorf("%s: method = %q, want %q", c.why, got.Method(), c.method)
 		}
 	}
 }

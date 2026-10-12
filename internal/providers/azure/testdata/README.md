@@ -103,3 +103,10 @@ with the container set to `private` in `after`. In the first the container is
 written and the account gate is not; in the second the reverse. Neither gate says
 no, so the container's own setting settles the answer, and the verification
 method has to be the container's rather than the gate's.
+
+`public-blob-gate-defaulted` is `public-blob-written` with the account's
+`allow_nested_items_to_be_public` removed from the `configuration` block, the
+`after` value unchanged. The container's access type is written and the gate is
+not -- the shape a real plan takes, since the provider defaults the gate to
+`true` -- and the grant is only as strong as the gate, so the method is the
+provider's default.
