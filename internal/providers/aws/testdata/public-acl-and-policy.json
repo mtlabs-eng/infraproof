@@ -124,6 +124,18 @@
                 "aws_s3_bucket.assets.id",
                 "aws_s3_bucket.assets"
               ]
+            },
+            "block_public_acls": {
+              "constant_value": false
+            },
+            "block_public_policy": {
+              "constant_value": false
+            },
+            "ignore_public_acls": {
+              "constant_value": false
+            },
+            "restrict_public_buckets": {
+              "constant_value": false
             }
           }
         },

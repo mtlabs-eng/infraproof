@@ -48,15 +48,47 @@ func TestAPolicyGrantIsInterpreted(t *testing.T) {
 	}
 }
 
+// An ACL grant settles only because no block flag shuts the route. With every
+// flag written, each input the grant rests on is stated.
 func TestAnACLGrantIsStated(t *testing.T) {
-	access := bucket(t, "public-acl").ObjectStorage.PublicAccess
+	access := bucket(t, "public-acl-flags-written").ObjectStorage.PublicAccess
 	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodStated {
 		t.Errorf("method = %q, want %q", access.Method(), model.MethodStated)
 	}
 }
 
+// public-acl writes none of the block flags: the provider writes its default,
+// false, into the plan, and the grant rests on that default.
+func TestAnACLGrantThroughDefaultedBucketFlagsIsTheProvidersDefault(t *testing.T) {
+	access := bucket(t, "public-acl").ObjectStorage.PublicAccess
+	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodProviderDefault {
+		t.Errorf("method = %q (state %s), want known true %q", access.Method(), access.State, model.MethodProviderDefault)
+	}
+}
+
+// The account-wide block's flags decide the route as well, and an unwritten one
+// is the provider's default just the same.
+func TestAnACLGrantThroughDefaultedAccountFlagsIsTheProvidersDefault(t *testing.T) {
+	access := bucket(t, "public-acl-account-flags-defaulted").ObjectStorage.PublicAccess
+	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodProviderDefault {
+		t.Errorf("method = %q (state %s), want known true %q", access.Method(), access.State, model.MethodProviderDefault)
+	}
+}
+
+// public-policy writes none of the block flags either. The grant rests on two
+// inputs that are not stated, the defaulted flags and the interpreted document,
+// and the spec says such a site is reported, not ordered: the method stays the
+// document's. Recorded under the milestone's limitations.
+func TestAPolicyGrantThroughDefaultedFlagsStaysInterpreted(t *testing.T) {
+	access := bucket(t, "public-policy").ObjectStorage.PublicAccess
+	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodPolicyDocument {
+		t.Errorf("method = %q (state %s), want known true %q", access.Method(), access.State, model.MethodPolicyDocument)
+	}
+}
+
 // Two proofs, one stated and one interpreted. The finding cites the stated one,
-// so the method is stated.
+// so the method is stated. The fixture writes every block flag, so the ACL
+// proof rests on nothing the provider defaulted.
 func TestAGrantProvenTwiceTakesTheStatedProof(t *testing.T) {
 	access := bucket(t, "public-acl-and-policy").ObjectStorage.PublicAccess
 	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodStated {

@@ -101,3 +101,21 @@ shape it turns on is the provider's rather than this project's.
 Hand-authored storage fixtures:
 
 - `public-acl-and-policy.json` — both channels grant; the ACL is the cited proof.
+  Its configuration writes the four bucket block flags as `false`, so the ACL
+  proof rests on nothing the provider defaulted and stays `plan-stated-value`.
+- `public-acl-flags-written.json` — `public-acl` with the four bucket block flags
+  written as `false` in the configuration; `after` is unchanged. The written half
+  of the pair whose unwritten half is `public-acl`: the ACL grant is
+  `plan-stated-value` here and `provider-default` there.
+- `public-acl-account-flags-defaulted.json` — a public-read ACL, no bucket block,
+  and an account-wide block whose four flags are `false` in `after` and written
+  nowhere in the configuration. The grant rests on the account block's defaults,
+  so it is `provider-default`.
+
+Most storage fixtures here predate milestone 10, and their configurations list
+only the arguments that carry a reference (`bucket`). Every block flag they set
+in `after` therefore reads as unwritten, so a step on them may say
+`provider-default` for a value the fixture meant as written. `public-acl`,
+`public-policy` and the other open-block fixtures read that way on purpose now;
+the blocked fixtures set the flags `true`, which a real plan only carries when
+somebody wrote them, and their proof of prevention stays `plan-stated-value`.

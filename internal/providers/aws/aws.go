@@ -235,6 +235,11 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	// No route grants access. That only proves the bucket is not public if the
 	// plan also blocks the routes it cannot see — a policy or ACL applied
 	// outside this change.
+	//
+	// The proof rests on flags read as true. Every flag defaults to false, so a
+	// true is one somebody wrote, and this stays stated. The hand-written
+	// fixtures that omit a true flag from their configuration are a fixture
+	// shortcut, recorded in the testdata README, not a shape a plan produces.
 	if blocksEveryRoute(block) || blocksEveryRoute(account) {
 		proven := block
 		if !blocksEveryRoute(proven) {
@@ -250,11 +255,15 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 // can disable ACLs for the bucket outright.
 func aclChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
 	ownership := findType(related, typeOwnershipControls)
-	c := channel{method: model.MethodStated, blocked: strongest(
-		blockedBy(block, "block_public_acls", "ignore_public_acls"),
-		blockedBy(account, "block_public_acls", "ignore_public_acls"),
-		aclsDisabled(ownership),
-	)}
+	bucketBlocked, bucketDefaulted := blockedBy(block, "block_public_acls", "ignore_public_acls")
+	accountBlocked, accountDefaulted := blockedBy(account, "block_public_acls", "ignore_public_acls")
+	c := channel{method: model.MethodStated, blocked: strongest(bucketBlocked, accountBlocked, aclsDisabled(ownership))}
+	// A grant through this route settles only when the route is not blocked. If
+	// a flag that answered "not blocked" is one nobody wrote, the provider's
+	// default is what the verdict rests on, and the method says so.
+	if bucketDefaulted || accountDefaulted {
+		c.method = model.MethodProviderDefault
+	}
 	if block != nil {
 		c.sources = blockProvenance(block)
 	}
@@ -289,10 +298,13 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 // policyChannel reads the bucket policy and whether policies are blocked, at
 // either the bucket or the account level.
 func policyChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
-	c := channel{method: model.MethodPolicyDocument, blocked: strongest(
-		blockedBy(block, "block_public_policy", "restrict_public_buckets"),
-		blockedBy(account, "block_public_policy", "restrict_public_buckets"),
-	)}
+	// A defaulted flag is discarded here on purpose. A policy grant through a
+	// defaulted flag rests on two inputs that are not stated, the default and the
+	// interpreted document, and the spec reports such a site rather than inventing
+	// an order of strength between them: the method stays the document's.
+	bucketBlocked, _ := blockedBy(block, "block_public_policy", "restrict_public_buckets")
+	accountBlocked, _ := blockedBy(account, "block_public_policy", "restrict_public_buckets")
+	c := channel{method: model.MethodPolicyDocument, blocked: strongest(bucketBlocked, accountBlocked)}
 	if block != nil {
 		c.sources = blockProvenance(block)
 	}
@@ -322,18 +334,28 @@ func policyChannel(related []terraformplan.ResourceChange, block, account *terra
 }
 
 // blockedBy reports whether either of two block flags is set.
-func blockedBy(block *terraformplan.ResourceChange, flags ...string) answer {
+//
+// The second result reports that a flag read as known false is one the
+// configuration does not write: the provider writes its default, false, into
+// the plan, so a "not blocked" resting on it rests on that default. It is only
+// meaningful when the answer is answerNo. No block resource at all is nothing
+// unwritten.
+func blockedBy(block *terraformplan.ResourceChange, flags ...string) (answer, bool) {
 	if block == nil {
-		return answerNo
+		return answerNo, false
 	}
 
 	result := answerNo
+	defaulted := false
 	for _, flag := range flags {
 		value := block.After.Field(flag)
 		switch value.State() {
 		case terraformplan.StateKnown:
 			if value.Bool() {
-				return answerYes
+				return answerYes, false
+			}
+			if declared.Unwritten(*block, flag) {
+				defaulted = true
 			}
 		case terraformplan.StateRedacted:
 			result = answerRedacted
@@ -343,7 +365,7 @@ func blockedBy(block *terraformplan.ResourceChange, flags ...string) answer {
 			}
 		}
 	}
-	return result
+	return result, defaulted
 }
 
 // strongest combines several independent blocks. A definite yes from any of

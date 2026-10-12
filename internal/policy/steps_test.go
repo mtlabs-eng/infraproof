@@ -101,6 +101,18 @@ func TestAPolicyDocumentGrantIsInterpretedInTheStep(t *testing.T) {
 		step("object_storage.public_access", evidence.MethodPolicyDocumentInterpreted))
 }
 
+// The ACL channel's pair: public-acl-flags-written writes every bucket block
+// flag, public-acl leaves them to the provider. The grant rests on the flags
+// answering "not blocked", so the step follows them.
+func TestTheBlockFlagDefaultChangesTheACLStep(t *testing.T) {
+	assertSteps(t, stepsOf(t, evaluate(t, "aws", "public-acl-flags-written"), policy.RuleStoragePublic, "aws_s3_bucket.assets"),
+		step("contract.object_storage.exposure", evidence.MethodIntentComparison),
+		step("object_storage.public_access", evidence.MethodPlanStatedValue))
+	assertSteps(t, stepsOf(t, evaluate(t, "aws", "public-acl"), policy.RuleStoragePublic, "aws_s3_bucket.assets"),
+		step("contract.object_storage.exposure", evidence.MethodIntentComparison),
+		step("object_storage.public_access", evidence.MethodProviderDefault))
+}
+
 func TestEveryGenericRuleSaysHowItKnows(t *testing.T) {
 	resource := model.NormalizedResource{
 		Address: "aws_s3_bucket.assets", Provider: "registry.terraform.io/hashicorp/aws",
