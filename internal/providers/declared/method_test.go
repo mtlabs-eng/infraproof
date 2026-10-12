@@ -306,7 +306,6 @@ func TestTheStrongestProofOfADisjunctionWins(t *testing.T) {
 // wrote the value. Carried from state, it is prior state whatever it holds.
 func TestAValueNobodyRecordedWritingIsNeverStated(t *testing.T) {
 	flag := declared.Argument{Path: "flag"}
-	computed := declared.Argument{Path: "flag", Computed: true}
 	rules := declared.Argument{Path: "rule", Block: true}
 	unwritten := entry(`{"name": {"constant_value": "t"}}`)
 
@@ -318,7 +317,6 @@ func TestAValueNobodyRecordedWritingIsNeverStated(t *testing.T) {
 	}{
 		"unwritten, holding the default":            {flag, planned(t, create, noPrior, unwritten), true, model.MethodProviderDefault},
 		"unwritten, holding something else":         {flag, planned(t, create, noPrior, unwritten), false, model.MethodConfigurationUnrecorded},
-		"computed, holding something else":          {computed, planned(t, create, noPrior, unwritten), false, model.MethodProviderDefault},
 		"unwritten, carried, something else":        {flag, planned(t, update, hasPrior, unwritten), false, model.MethodPriorState},
 		"unwritten, moved, something else":          {flag, planned(t, update, changed, unwritten), false, model.MethodConfigurationUnrecorded},
 		"unwritten, moved, the default":             {flag, planned(t, update, changed, unwritten), true, model.MethodProviderDefault},
@@ -357,5 +355,35 @@ func TestAMethodOutsideTheSetIsNeverHidden(t *testing.T) {
 		if got := declared.Strongest(in...); got != "" {
 			t.Errorf("Strongest(%q) = %q, want the empty method", in, got)
 		}
+	}
+}
+
+// A declared environment says what the configuration records about the tags
+// or labels. Neither is Computed on any provider here and neither has a
+// default, so tags nobody wrote on a new object are a value the plan does not
+// record anybody writing; kept from state, they are prior state.
+func TestADeclaredEnvironmentSaysWhatTheConfigurationRecords(t *testing.T) {
+	const tagged = `{"name": "t", "tags": {"environment": "prod"}}`
+	cases := map[string]struct {
+		change terraformplan.ResourceChange
+		want   model.Method
+	}{
+		"written": {plannedWith(t, create, noPrior, tagged,
+			entry(`{"tags": {"constant_value": {"environment": "prod"}}}`), `{}`), model.MethodStated},
+		"unwritten, on a create": {plannedWith(t, create, noPrior, tagged,
+			entry(`{"name": {"constant_value": "t"}}`), `{}`), model.MethodConfigurationUnrecorded},
+		"unwritten, carried": {plannedWith(t, noOp, tagged, tagged,
+			entry(`{"name": {"constant_value": "t"}}`), `{}`), model.MethodPriorState},
+		"written as another map, carried": {plannedWith(t, noOp, tagged, tagged,
+			entry(`{"tags": {"constant_value": {"environment": "dev"}}}`), `{}`), model.MethodPriorState},
+		"no configuration": {plannedWith(t, create, noPrior, tagged, "", `{}`), model.MethodConfigurationUnrecorded},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			fact := declared.Environment(c.change, "tags", model.CloudAWS)
+			if !fact.IsKnown() || fact.Method() != c.want {
+				t.Errorf("%s method = %q, want known %q", fact.State, fact.Method(), c.want)
+			}
+		})
 	}
 }

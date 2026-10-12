@@ -145,3 +145,32 @@ update plans ran against a hand-written state file and contacted nothing.
   a public-read ACL through `resource "aws_s3_account_public_access_block" "acct" {}`,
   which Terraform records with no `expressions` key, and through one that writes
   an unrelated flag. Both are `provider-default`.
+
+## Real plans added by milestone 10's fourth review
+
+Same tooling: Terraform 1.14.0, `hashicorp/aws` 6.67.0, `plan -refresh=false`
+against a hand-written state where the change is an update, nothing applied,
+the two credential arguments and every password value removed afterwards.
+
+- `real-ignore-changes.json`: `lifecycle { ignore_changes }` on a bucket that
+  writes no `tags` (state: `environment = prod`), an ACL that writes `private`
+  (state: `public-read`, ownership `ObjectWriter`) and a group that writes one
+  inline rule, 443 from `10.0.0.0/8` (state: 22 from `0.0.0.0/0`). Every
+  `after` is the state's and the configuration does not record `lifecycle`:
+  each value is `prior-state`.
+- `real-sg-tags-ignored.json`: a group that writes no `tags`, with
+  `ignore_changes = [tags]` and `environment = production` in state.
+- `real-null-variables-update.json`: `real-rds-unwritten-update`'s shape with
+  the Aurora instance writing `publicly_accessible = var.publicly_accessible`
+  and the instance `port = var.port`, both defaulting to `null`. Terraform
+  carries the state's `true` and 5432 exactly as when the arguments are
+  omitted.
+- `real-acl-block-flags-reset.json`: a block that writes only
+  `block_public_policy = true`, against a state holding all four flags `true`;
+  the update plans the other three back to `false`, the provider's default.
+- `real-ownership-dynamic-rule.json`: a public-read ACL beside ownership controls
+  whose `rule` is a `dynamic` block, which the configuration does not record.
+- `real-sg-inline-and-carried-rule.json`: a group open on 22 through a written
+  inline rule, beside a separate rule that writes `10.0.0.0/8` with
+  `ignore_changes = [cidr_ipv4]` and `0.0.0.0/0` on 443 in state, and a third
+  rule that opens 80 to `10.0.0.0/8` only.

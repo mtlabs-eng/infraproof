@@ -260,10 +260,10 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 	return model.Known(false, allowList.Method(subject), cited), nil
 }
 
-// allowList is the authorized networks, a block inside the Computed
-// ip_configuration: stated only when the configuration records it, because a
-// dynamic block or a block carried from state leaves no record.
-var allowList = declared.Argument{Path: pathIPConfig + "." + attrAuthorizedNets, Block: true, Computed: true}
+// allowList is the authorized networks, a block inside ip_configuration:
+// stated only when the configuration records it, because a dynamic block or a
+// block carried from state leaves no record.
+var allowList = declared.Argument{Path: pathIPConfig + "." + attrAuthorizedNets, Block: true}
 
 // wroteSettings reports that the author wrote the block the switch and the allow
 // list live inside.

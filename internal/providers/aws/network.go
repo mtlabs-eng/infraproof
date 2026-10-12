@@ -64,10 +64,11 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	found := openness{cited: []model.Provenance{
 		declared.Source(model.CloudAWS, subject.Address, "ingress", inline),
 	}}
-	// `ingress` is a block the provider also carries across an update, so an
-	// inline rule set the configuration does not record -- left in state, or
-	// written as a dynamic block -- reads as such rather than as stated.
-	inlineArgument := declared.Argument{Path: "ingress", Block: true, Computed: true}
+	// `ingress` can be written as blocks, and a dynamic block leaves no
+	// record, so an inline rule set the configuration does not record -- left
+	// in state, or written as a dynamic block -- reads as such rather than as
+	// stated.
+	inlineArgument := declared.Argument{Path: "ingress", Block: true}
 	// proofs are the methods of every rule that opens something. A grant needs
 	// only one, so it takes the best of them.
 	var proofs []model.Method

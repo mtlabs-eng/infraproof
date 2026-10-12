@@ -203,9 +203,10 @@ func preventionState(bucket terraformplan.ResourceChange) (answer, []model.Prove
 }
 
 // preventionMethod is how the bucket's public_access_prevention was
-// established. Optional and Computed: unwritten on a create, the provider's
-// default, which is "inherited" and which a real create plan carries as
-// unknown; unwritten on an update, the value Terraform carried from state.
+// established. Unwritten on a create, the provider's default, which is
+// "inherited" and which a real create plan carries as unknown; unwritten or
+// written and overridden by ignore_changes on an update, the value Terraform
+// carried from state.
 //
 // A value somebody wrote that the plan does not yet know reads as stated: the
 // method records that the author wrote it, and the verdict, as in milestone 09,
@@ -213,7 +214,7 @@ func preventionState(bucket terraformplan.ResourceChange) (answer, []model.Prove
 // withholding a method there changes nothing, since a stated input never
 // weakens a fact, so the branch that did it was removed.
 func preventionMethod(bucket terraformplan.ResourceChange) model.Method {
-	return declared.Argument{Path: attrPrevention, Computed: true}.Method(bucket)
+	return declared.Argument{Path: attrPrevention}.Method(bucket)
 }
 
 // publicBinding reports whether any related IAM resource names everyone, and how

@@ -79,10 +79,11 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	var rules []inbound
 	unread := !noInlineRules &&
 		inline.State() != terraformplan.StateKnown && inline.State() != terraformplan.StateAbsent
-	// `security_rule` is a block the provider carries across an update, so an
-	// inline set the configuration does not record -- left in state, or
-	// written as a dynamic block -- reads as such rather than as stated.
-	inlineMethod := declared.Argument{Path: attrSecurityRule, Block: true, Computed: true}.Method(subject)
+	// `security_rule` can be written as blocks, and a dynamic block leaves no
+	// record, so an inline set the configuration does not record -- left in
+	// state, or written as a dynamic block -- reads as such rather than as
+	// stated.
+	inlineMethod := declared.Argument{Path: attrSecurityRule, Block: true}.Method(subject)
 	for i := range inline.Len() {
 		path := fmt.Sprintf("%s[%d]", attrSecurityRule, i)
 		rule := readRule(subject.Address, path, inline.At(i))

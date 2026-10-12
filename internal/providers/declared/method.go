@@ -29,12 +29,6 @@ type Argument struct {
 	// Terraform's configuration does not record a dynamic block, so the
 	// absence of a block proves nothing about whether it was written.
 	Block bool
-	// Computed reports that the provider may compute a value nobody wrote: an
-	// Optional and Computed argument, or a Computed-only one. It matters only
-	// to MethodFor, where a value that is not the default would otherwise be
-	// one the plan cannot have produced; whether a value was carried from
-	// state is decided by comparing the state with the plan, not by the schema.
-	Computed bool
 	// Required reports that the provider's schema requires the argument.
 	// Terraform refuses a body that omits one, and no dynamic block writes an
 	// attribute, so wherever the body holding it is recorded the argument is
@@ -108,12 +102,13 @@ func (a Argument) Method(change terraformplan.ResourceChange) model.Method {
 // MethodFor is Method for a value the caller has compared with the provider's
 // documented default -- null, for an argument that has none.
 //
-// A value the configuration does not record as written is never stated. An
-// argument nobody wrote that the provider does not compute, holding a value
-// that is not its default and not carried from state, is a shape no real plan
-// has shown -- a hand-written plan whose configuration lists only the
-// references makes it -- and the plan then does not record who wrote that
-// value: configuration-unrecorded, not a default the value is not.
+// It is for an argument the provider does not compute, which is every caller
+// here. A value the configuration does not record as written is never stated:
+// an unwritten argument holding a value that is not its default and not carried
+// from state is a shape no real plan has shown -- a hand-written plan whose
+// configuration lists only the references makes it -- and the plan then does
+// not record who wrote that value: configuration-unrecorded, not a default the
+// value is not.
 func (a Argument) MethodFor(change terraformplan.ResourceChange, isDefault bool) model.Method {
 	return a.decide(change, &isDefault)
 }
@@ -141,7 +136,7 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 		switch {
 		case carried:
 			return model.MethodPriorState
-		case isDefault != nil && !*isDefault && !a.Computed:
+		case isDefault != nil && !*isDefault:
 			return model.MethodConfigurationUnrecorded
 		}
 		return model.MethodProviderDefault

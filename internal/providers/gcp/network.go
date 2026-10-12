@@ -294,7 +294,7 @@ var (
 	// planned to 1000 on every change.
 	priorityArgument = declared.Argument{Path: "priority"}
 	// directionArgument is Optional and Computed.
-	directionArgument = declared.Argument{Path: "direction", Computed: true}
+	directionArgument = declared.Argument{Path: "direction"}
 	// sourceArgument is Optional and not Computed, with no default.
 	sourceArgument = declared.Argument{Path: "source_ranges"}
 	// disabledArgument is Optional and not Computed, defaulting to false.
