@@ -126,7 +126,7 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 		// default, and an absence beside an argument somebody did write is a
 		// value the plan withheld.
 		if declared.Unwritten(subject, attrPubliclyAccessible) {
-			return model.Known(false, model.MethodStated, cited)
+			return model.Known(false, model.MethodProviderDefault, cited)
 		}
 		return model.Unknown[bool](cited)
 	case terraformplan.StateKnown:
@@ -138,7 +138,7 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 		if declared.Unwritten(subject, attrPubliclyAccessible) {
 			// Computed and nobody wrote it, so the provider's documented default
 			// applies: a database is not publicly accessible unless asked for.
-			return model.Known(false, model.MethodStated, cited)
+			return model.Known(false, model.MethodProviderDefault, cited)
 		}
 		return model.Unknown[bool](cited)
 	}
@@ -362,7 +362,7 @@ func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	if !named {
 		return model.Unknown[int](cited), true
 	}
-	return model.Known(port, model.MethodStated, cited), true
+	return model.Known(port, model.MethodDocumentedTable, cited), true
 }
 
 // clusterUncorrelated reports that the plan holds an Aurora cluster the subject

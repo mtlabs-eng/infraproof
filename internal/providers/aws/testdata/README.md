@@ -97,3 +97,7 @@ placeholder credentials, and the provider's credential arguments and the databas
 password removed from the committed files. Each exists because a review found a
 decision nothing exercised, and each was generated rather than written so the
 shape it turns on is the provider's rather than this project's.
+
+Hand-authored storage fixtures:
+
+- `public-acl-and-policy.json` — both channels grant; the ACL is the cited proof.

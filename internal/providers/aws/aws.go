@@ -172,6 +172,9 @@ const (
 type channel struct {
 	grant   answer
 	blocked answer
+	// method is how the grant, if any, was established: a canned ACL is stated,
+	// a policy document is this build's reading of one.
+	method  model.Method
 	sources []model.Provenance
 }
 
@@ -203,7 +206,7 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	// A grant nothing blocks settles it.
 	for _, c := range []channel{acl, policy} {
 		if c.grant == answerYes && c.blocked == answerNo {
-			return model.Known(true, model.MethodStated, c.sources...).Canonical()
+			return model.Known(true, c.method, c.sources...).Canonical()
 		}
 	}
 
@@ -247,7 +250,7 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 // can disable ACLs for the bucket outright.
 func aclChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
 	ownership := findType(related, typeOwnershipControls)
-	c := channel{blocked: strongest(
+	c := channel{method: model.MethodStated, blocked: strongest(
 		blockedBy(block, "block_public_acls", "ignore_public_acls"),
 		blockedBy(account, "block_public_acls", "ignore_public_acls"),
 		aclsDisabled(ownership),
@@ -286,7 +289,7 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 // policyChannel reads the bucket policy and whether policies are blocked, at
 // either the bucket or the account level.
 func policyChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
-	c := channel{blocked: strongest(
+	c := channel{method: model.MethodPolicyDocument, blocked: strongest(
 		blockedBy(block, "block_public_policy", "restrict_public_buckets"),
 		blockedBy(account, "block_public_policy", "restrict_public_buckets"),
 	)}
