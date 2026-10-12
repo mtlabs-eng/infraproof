@@ -81,11 +81,13 @@ belongs to, read from its provider. A value the plan carries for an argument
 nobody wrote, or wrote as `null`, is the provider's default on a new object and
 the value carried from prior state where an update keeps it, because providers
 write their defaults into the plan and Terraform keeps an existing value. So is
-a written value that `lifecycle { ignore_changes }` overrides with the state's,
-which the plan's configuration does not record. Where the configuration does
-not record the argument at all -- a plan exported without it, a dynamic block,
-or a variable the plan does not resolve -- the method says that, rather than
-reading as stated. The method decides nothing.
+a written constant that `lifecycle { ignore_changes }` overrides with the
+state's, which the plan's configuration does not record. Where the configuration
+does not record the argument at all -- a plan exported without it, a dynamic
+block, or a variable the plan does not resolve -- the method says that, rather
+than reading as stated; and so it does for a write by reference, variable or
+function on an update that keeps the value, because the plan records no value
+for such a write and cannot tell it from one `ignore_changes` kept. The method decides nothing.
 
 For network exposure the claim is narrower still, and deliberately so. A finding
 says the change **permits ingress from any address**, not that anything becomes

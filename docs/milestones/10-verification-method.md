@@ -48,10 +48,10 @@ the bundle only as an unknown.
 
   | method | means |
   | --- | --- |
-  | `plan-stated-value` | the plan's configuration records that the author wrote the argument with a value, and the plan carries that value; the policy also assigns it to `resource.cloud`, from `provider_name` |
+  | `plan-stated-value` | the plan's configuration records that the author wrote the argument with a value, and the plan carries that value: any write on a new object or where the plan moves the value; where the change keeps the object and the value it had, only a constant (in block syntax, every attribute written in the block) that the carried value is. The policy also assigns it to `resource.cloud`, from `provider_name` |
   | `provider-default` | the configuration records the argument as unwritten, or written as `null`, and the value is not carried from prior state: the provider's documented default, on a new object or where the plan moves the value to it |
   | `prior-state` | the change keeps an existing object, the plan carries the value it had, and the configuration does not record the author writing it: unwritten, written as `null`, or written as a constant the carried value contradicts (`lifecycle { ignore_changes }`) |
-  | `configuration-unrecorded` | the plan does not record whether the author wrote the argument with a value |
+  | `configuration-unrecorded` | the plan does not record whether the author wrote the argument with a value; or it was written by an expression the plan does not evaluate -- a reference, a variable, a function -- on an update or no-op whose `after` equals `before` at the argument |
   | `policy-document-interpreted` | the value results from this build's reading of a JSON policy document |
   | `reference-resolved` | the value is obtainable only by resolving a reference: the security groups a database reaches through `vpc_security_group_ids` |
   | `documented-table` | the value comes from a closed, documented table in this build |
@@ -65,7 +65,9 @@ the bundle only as an unknown.
   `before` with `after`, a `null` write is no write, and `provider-default` is
   a value not carried rather than strictly a value on a new object, because an
   update that plans an unwritten argument back to its default is neither of the
-  other two. `reference-resolved` was narrowed by decision
+  other two. The third fix wave narrowed `plan-stated-value` and widened
+  `configuration-unrecorded` by the user's decision recorded in the amendment
+  "user decision on unevaluated writes" below. `reference-resolved` was narrowed by decision
   D2: a grant written on its own ACL, IAM or firewall-rule resource is stated,
   and the reference that joins it to a bucket or a server only locates where
   it applies.
@@ -293,7 +295,9 @@ adversarial review's second fix wave.
   not record -- it carries the prior value even of an argument the
   configuration writes. One mechanism, `declared.Argument`, decides every
   mapper's method: `configuration-unrecorded` where the plan does not record
-  the writing; `prior-state` where the change keeps the object, `before` and
+  the writing, and where the change keeps the object, `before` and `after`
+  agree at the argument's path, and the write is an expression the plan does
+  not evaluate; `prior-state` where the change keeps the object, `before` and
   `after` agree at the argument's path, and the configuration records the
   argument as unwritten, as `null`, or as a constant the carried value
   contradicts; otherwise `plan-stated-value` for a written value and
@@ -346,16 +350,34 @@ adversarial review's second fix wave.
   `coalesce(var.x, "private")` -- reads as unwritten, which is never stated. An
   expression that also draws on a resource or a local reads as written, as it
   did.
-- **A written value `ignore_changes` overrides is detected only as a
-  constant.** The plan records a constant's value, and a constant that is not
-  the value an update carries is `prior-state`. A value written as a reference,
-  a variable or a function, or written in block syntax, records no value to
-  compare with, and on an update that carries the prior value it still reads
-  `plan-stated-value`. The comparison takes Terraform's encoding: an attribute
-  written as blocks records every attribute, `null` where nothing was written,
-  and a list is compared as a set. A provider that normalizes a constant -- a
-  case, a canonical CIDR -- on a value the update keeps would read
-  `prior-state`, never stated; none was found.
+- **On an update that keeps a value, only a constant write is stated.** The
+  plan records a constant's value: a constant the carried value is reads
+  `plan-stated-value`, and one it is not reads `prior-state` (`ignore_changes`
+  kept the state). A write by reference, variable or function records no value
+  -- `lower(var.x)` is recorded exactly as `var.x`, a function of constants as
+  `{}` -- so where `after` equals `before` at the argument it reads
+  `configuration-unrecorded`, with `ignore_changes` or without it. This is the
+  user's conservative rule (see the amendment below), and its accepted cost: a
+  referenced value written legitimately that an update does not change is no
+  longer stated (measured: `real-reference-write-unchanged`). Block syntax is
+  decided by everything written in the block, at every depth: all constants are
+  compared with the planned blocks one for one on the attributes written --
+  `plan-stated-value` or `prior-state` as above -- and a block with anything
+  else inside reads `configuration-unrecorded`. An attribute written in a
+  repeated block, and a block inside a repeated block, have no one expression
+  to compare, so carried they read `configuration-unrecorded`; the mapper
+  sites read whole blocks, never those paths. A write the plan moves is stated
+  without a comparison: `ignore_changes` keeps a value, so a value the plan
+  moves is the configuration's, but the plan does not show that `after` is
+  what the expression evaluates to (a provider that normalizes or computes the
+  value would read stated). A static block beside a `dynamic` one of the same
+  type, on a create, still reads stated; carried, the planned set is not the
+  written one and it reads `prior-state`. The comparison takes Terraform's
+  encoding: an attribute written as blocks records every attribute, `null`
+  where nothing was written, and a list is compared as a set, greedily, so a
+  set it fails to pair reads `prior-state`, never stated. A provider that
+  normalizes a constant -- a case, a canonical CIDR -- on a value the update
+  keeps would read `prior-state`, never stated; none was found.
 - **A grant on an interpreted document keeps the document's method.** On AWS a
   policy-document grant through a block flag nobody wrote, and on GCP a
   `policy_data` grant beside a `public_access_prevention` nobody wrote, rest on
@@ -947,3 +969,160 @@ code replaced by the surviving-rule rule, whose own mutants are killed; the
 five "not Computed" mutants mutate a flag that no longer exists. Results:
 `scratchpad/w2/mut/{w2b,w2c,prior}-r.json`.
 
+
+## Amendment: user decision on unevaluated writes (third fix wave)
+
+The second fix wave reported, as its concern 2, that a value written by a
+reference, a variable, a function or block syntax and kept from state by
+`lifecycle { ignore_changes }` still read `plan-stated-value`: the plan records
+no value for the expression to compare with the one carried. The user decided
+it, conservatively:
+
+- **Decision.** Where the change keeps an existing object (an update or a
+  no-op), the configuration records the argument as written by an expression
+  whose value the plan does not record, and `after` equals `before` at the
+  argument's path, the method is `configuration-unrecorded`, never
+  `plan-stated-value`. Constant writes keep the second wave's behaviour; creates
+  are unchanged.
+- **Accepted cost.** A referenced value written legitimately that an update
+  does not change loses "stated". Pinned on a real plan with no
+  `ignore_changes`: `real-reference-write-unchanged`.
+- **Block syntax**, by the same principle applied to what the verdict rests on.
+  The mapper sites read whole blocks (a firewall's `allow`, the Cloud SQL
+  `authorized_networks`, an inline rule set), so the parse now records each
+  block written in block syntax from everything written in it
+  (`ResourceChange.Block`): a constant only where every attribute inside, at
+  every depth, is a constant or `null`, and contradicted where the planned
+  blocks are not, one for one, blocks holding those constants on the
+  attributes written. A carried block of constants is therefore stated or
+  `prior-state` like a constant attribute -- the second wave read every written
+  block stated -- and a carried block with anything else inside is
+  `configuration-unrecorded`. Where the mechanism cannot decide per path -- an
+  attribute written in a repeated block, a block inside a repeated block, a
+  Required argument with no recorded expression -- it errs to
+  `configuration-unrecorded`.
+- **A reference write the update moves** stays `plan-stated-value`. The plan
+  cannot show that `after` is what the expression evaluates to; the method
+  rests on the move: `ignore_changes` keeps a value, so a value the plan moves
+  is the configuration's. Pinned: `real-reference-write-moved`.
+
+Measured on real plans (Terraform 1.14.0, `hashicorp/aws` 6.67.0,
+`hashicorp/google` 6.50.0, `plan -refresh=false` against hand-written state,
+nothing applied): `lower(var.acl)` is recorded exactly as `var.acl`
+(`{"references": ["var.acl"]}`), a function of constants as `{}`, an AWS inline
+rule with one referenced attribute as one reference expression for the whole
+`ingress`, and a GCP block's attributes one by one.
+
+### Tests whose assertion changed
+
+By the decision, in `TestTheMethodFollowsWhatTheConfigurationRecords`:
+`written from a resource, carried` asserted `plan-stated-value` and now asserts
+`configuration-unrecorded`; `written as a variable recorded with a value` (an
+update that carries the value) is renamed `..., carried` and asserts
+`configuration-unrecorded` in place of `plan-stated-value`. Both had pinned the
+behaviour the decision removes. Each gained create and moved siblings that
+assert `plan-stated-value`. No test was removed or skipped.
+
+### Criterion 8, re-measured after the third fix wave
+
+The binary built from `3b50544` and one built from the third wave's tree ran
+`check --format json` on every plan JSON in the tree under the shipped
+contract and the three in `scratchpad/intents/`, normalised as before
+(`scratchpad/w3/c8/c8.py`).
+
+| | count |
+| --- | --- |
+| plans x contracts compared | 311 x 4 = 1244 |
+| identical after normalisation, same exit code and stderr | 1244 |
+| differing | 0 |
+| exit codes, shipped contract (before = after) | 253 x `4`, 42 x `3`, 14 x `0`, 2 x `10` |
+
+The seven plans added are the six real plans below and
+`real-function-write-unchanged`. `git diff 3b50544 --
+internal/verify/testdata/baseline` is empty and no fixture with a baseline was
+touched; the 226 baselines still match. Against the second wave's head, across
+the 304 plans both share, no step changed (`scratchpad/w3/c8/stepdiff.txt`):
+no committed fixture had a carried write by reference or a carried block that
+does not hold its constants. On the new plans, against the second wave:
+`real-reference-write-ignored` (AWS) and `-unchanged` move
+`object_storage.public_access`, `resource.environment` and
+`network.public_ingress` from `plan-stated-value` to
+`configuration-unrecorded`, except the constant group `const`, which stays
+stated; `real-function-write-unchanged` moves `resource.environment` the same
+way; `real-reference-write-moved` stays stated; on GCP the variable-written
+bucket grant, the local-written firewall source, the variable port inside an
+`allow` block and the variable-written authorized network move to
+`configuration-unrecorded`, the constant `allow` and the constant network that
+`ignore_changes` overrides move to `prior-state`, and the constant twins stay
+stated (`scratchpad/w3/c8/newfixtures.txt`). Steps on plan facts across the
+1244 runs, `resource.cloud`, `contract.` and `plan-action` excluded:
+`plan-stated-value` 825, `configuration-unrecorded` 207, `provider-default` 132,
+`prior-state` 107, `reference-resolved` 100, `documented-table` 72,
+`policy-document-interpreted` 12.
+
+### Criterion 9, re-measured after the third fix wave
+
+The second wave's harness, re-pointed (`scratchpad/w3/mut/mut.py`): each mutant
+replaces one string occurring once, the build must succeed, `go test ./...
+-count=1` runs, and the file is restored. Every line the wave added or
+changed was mutated. On the first run, 37 mutants: nine survived and four did
+not compile:
+
+- the four that did not compile were re-expressed (`&& false`, `_ =`);
+- three survivors were equivalent guards, and the code was simplified instead:
+  the `!recorded ||` beside the constant test (an unrecorded write is the zero
+  `Expression`, which is deferred -- pinned by the repeated-block and
+  no-expressions rows, and re-mutated as `m-constant-guard-*`), and the
+  empty-body and empty-map guards of the block collection;
+- six were given tests: a single nested block inside a block, the same block
+  written twice, two blocks written where the plan has one, a block the plan
+  does not know, one element it does not know, and planned blocks that are not
+  objects.
+
+Final, 38 mutants: the 36 that apply are all killed (failing tests listed are the first
+three the harness records). Two more survive and are unobservable: the
+`default: continue` of `collectBlocks` and of `blockConstants` handle an entry
+that is neither an object nor an array, which `Parse` already rejects
+("must be an object or an array of blocks"). Results:
+`scratchpad/w3/mut/final-results.json`.
+
+| mutant | file | result |
+| --- | --- | --- |
+| `m-unrecorded-stated` | `providers/declared/method.go` | killed: `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue`, `TestTheMethodFollowsWhatTheConfigurationRecords` |
+| `c-blocks-never` | `terraformplan/config.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestValuesIgnoreChangesKeepsArePriorState` |
+| `m-constant-guard-recorded` | `providers/declared/method.go` | killed: `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue`, `TestTheMethodFollowsWhatTheConfigurationRecords` |
+| `m-constant-guard-deferred` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestTheMethodFollowsWhatTheConfigurationRecords` |
+| `m-block-lookup-dropped` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestValuesIgnoreChangesKeepsArePriorState` |
+| `m-block-lookup-inverted` | `providers/declared/method.go` | killed: `TestAnArgumentWrittenAsANullVariableReadsAsUnwritten`, `TestBlockFlagsAnUpdateResetsAreTheProvidersDefault`, `TestValuesIgnoreChangesKeepsArePriorState` |
+| `m-not-carried-inverted` | `providers/declared/method.go` | killed: `TestAWriteThePlanDoesNotEvaluateIsStatedWhereTheUpdateMovesTheValue`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue`, `TestValuesIgnoreChangesKeepsArePriorState` |
+| `m-not-carried-unrecorded` | `providers/declared/method.go` | killed: `TestADatabaseBehindAnOpenGroupNamesTheHopAndTheGate`, `TestAStatedPortIsStatedInTheStep`, `TestTheIPv4DefaultChangesOneStepAndNothingElse` |
+| `m-contradicted-stated` | `providers/declared/method.go` | killed: `TestAnAdmissionByAUnionRestsOnEveryRuleInIt`, `TestValuesIgnoreChangesKeepsArePriorState` |
+| `c-repeated-recorded` | `terraformplan/config.go` | killed: `TestOnlyABlockWrittenInOnePlaceIsRecorded` |
+| `c-repeated-not-propagated` | `terraformplan/config.go` | killed: `TestOnlyABlockWrittenInOnePlaceIsRecorded` |
+| `c-repeated-any` | `terraformplan/config.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `c-expression-as-block` | `terraformplan/config.go` | killed: `TestOnlyABlockWrittenInOnePlaceIsRecorded` |
+| `c-single-block-skipped` | `terraformplan/config.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `c-blocks-not-assigned` | `terraformplan/config.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestValuesIgnoreChangesKeepsArePriorState` |
+| `e-repeated-evaluated` | `terraformplan/expression.go` | killed: `TestOnlyABlockWrittenInOnePlaceIsRecorded` |
+| `e-nonconstant-constant` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `e-contradiction-inverted` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `e-contradiction-never` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `e-null-not-constant` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-deferred-wildcard` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `e-single-nested-ignored` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-list-nested-ignored` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-inner-nonconstant-ignored` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-inner-not-kept` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-unknown-mismatch` | `terraformplan/expression.go` | killed: `TestABlockThePlanDoesNotShowIsNeverContradicted` |
+| `e-single-count-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-single-branch-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-count-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-used-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-notfound-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `e-body-unknown-mismatch` | `terraformplan/expression.go` | killed: `TestABlockThePlanDoesNotShowIsNeverContradicted` |
+| `e-body-kind-match` | `terraformplan/expression.go` | killed: `TestABlockThePlanDoesNotShowIsNeverContradicted` |
+| `e-body-nested-skipped` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-body-absent-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-body-constant-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `c-scalar-entry-recorded` | `terraformplan/config.go` | survived: unobservable, `Parse` rejects the shape |
+| `e-scalar-entry-nested` | `terraformplan/expression.go` | survived: unobservable, `Parse` rejects the shape |
