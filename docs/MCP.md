@@ -78,6 +78,24 @@ the new answer — which is the point, and why there is nothing to invalidate.
 A rule that reported nothing is an answer rather than an error: the response
 says so and lists the rules that did report.
 
+### How a finding says it knows
+
+Every finding in a bundle declaring `1.3` carries `verification_steps`: for
+each fact the verdict rests on, how that fact was established. The method
+describes provenance, not how certain the verdict is, and no decision or exit
+code reads it. What an agent can do with each:
+
+| method | what to do |
+| --- | --- |
+| `plan-stated-value` | the author wrote it; the evidence names where |
+| `provider-default` | nobody wrote it and the provider's default applies; write the argument if that is not the intent |
+| `prior-state` | the object already has this value and Terraform keeps it, often through `lifecycle { ignore_changes }`; read the state or the deployed resource, because the configuration under review does not decide it |
+| `configuration-unrecorded` | the plan does not record who wrote it -- a `dynamic` block, a plan without its `configuration` section, or a variable the plan does not resolve; read the configuration, or write the argument statically |
+| `policy-document-interpreted`, `documented-table`, `reference-resolved` | this build derived the value from a document, a table or a reference the evidence names |
+| `plan-action`, `intent-comparison` | the classification of the plan's actions, and the comparison with the contract |
+
+`docs/EVIDENCE-BUNDLE.md` defines each method exactly.
+
 ## Making a plan to verify
 
 The server does not run Terraform, and will not. Produce the plan yourself:

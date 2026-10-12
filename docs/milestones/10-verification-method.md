@@ -33,10 +33,13 @@ the bundle only as an unknown.
   the provider defaults, or something this build inferred.
 - **A finding carries a list of steps, one per fact.** A database verdict rests
   on an endpoint switch, an admission and a port, and those can have three
-  different provenances. Reducing them to the weakest would require fixing an
-  order of strength in a public format; a deduplicated set of methods would not
-  say which applies to what. A list of `{fact, method}` is exact, and a consumer
-  can compute the weakest link itself.
+  different provenances. A deduplicated set of methods would not say which
+  applies to what. A list of `{fact, method}` is exact, and a consumer can
+  compute the weakest link itself. *Amended:* this bullet also argued that
+  reducing several methods to the weakest would require fixing an order of
+  strength in a public format. The adversarial review fixed one anyway, for the
+  inputs of a single fact (`EVIDENCE-BUNDLE.md`, `declared.Weakest`); the steps
+  of a finding stay one per fact.
 - **The field is named `verification_steps`.** It is a list, and the bundle
   already has a top-level `verification[]` that describes input coverage, not
   findings. `EVIDENCE-BUNDLE.md` ties the name to the "verification method" of
@@ -45,10 +48,10 @@ the bundle only as an unknown.
 
   | method | means |
   | --- | --- |
-  | `plan-stated-value` | the plan's configuration records that the author wrote the argument |
-  | `provider-default` | the configuration records the argument as unwritten, and the object is new: the value is the provider's documented default |
-  | `prior-state` | the configuration records the argument as unwritten, the change updates an existing object, and the value is the one Terraform carried from its prior state |
-  | `configuration-unrecorded` | the plan does not record whether the author wrote the argument |
+  | `plan-stated-value` | the plan's configuration records that the author wrote the argument with a value, and the plan carries that value; the policy also assigns it to `resource.cloud`, from `provider_name` |
+  | `provider-default` | the configuration records the argument as unwritten, or written as `null`, and the value is not carried from prior state: the provider's documented default, on a new object or where the plan moves the value to it |
+  | `prior-state` | the change keeps an existing object, the plan carries the value it had, and the configuration does not record the author writing it: unwritten, written as `null`, or written as a constant the carried value contradicts (`lifecycle { ignore_changes }`) |
+  | `configuration-unrecorded` | the plan does not record whether the author wrote the argument with a value |
   | `policy-document-interpreted` | the value results from this build's reading of a JSON policy document |
   | `reference-resolved` | the value is obtainable only by resolving a reference: the security groups a database reaches through `vpc_security_group_ids` |
   | `documented-table` | the value comes from a closed, documented table in this build |
@@ -57,7 +60,12 @@ the bundle only as an unknown.
 
   `prior-state` and `configuration-unrecorded` were added by the adversarial
   review (decision D1, see the amendment below); 1.3 was unreleased, so the
-  schema version stays `1.3`. `reference-resolved` was narrowed by decision
+  schema version stays `1.3`. The fourth review's fix wave sharpened the first
+  four rows to what the table above says: carried is decided by comparing
+  `before` with `after`, a `null` write is no write, and `provider-default` is
+  a value not carried rather than strictly a value on a new object, because an
+  update that plans an unwritten argument back to its default is neither of the
+  other two. `reference-resolved` was narrowed by decision
   D2: a grant written on its own ACL, IAM or firewall-rule resource is stated,
   and the reference that joins it to a bucket or a server only locates where
   it applies.
@@ -94,7 +102,13 @@ the bundle only as an unknown.
   before, on AWS and now GCP alike.
 - **A disjunctive grant takes the method of the proof the mapper cites.** AWS
   storage settles on the first unblocked granting channel, the ACL before the
-  policy; GCP storage on any granting binding. A grant proven by a stated value
+  policy, and cites that channel alone; GCP storage cites every binding and
+  takes the best granting one, and so do an AWS security group and an Azure
+  NSG among the rules that open something. The fourth review read
+  `EVIDENCE-BUNDLE.md`'s "the best of its proofs" as contradicted by AWS
+  storage; the code was kept, because taking the policy's method while citing
+  the ACL's sources would name a proof the finding does not cite, and the
+  document now says which proof each cloud cites. A grant proven by a stated value
   is `plan-stated-value` even when an interpreted policy document also grants,
   because the stated proof is the one the finding cites.
 - **`PortInferred` stays.** Measured while planning: Azure's port comes from a
@@ -164,6 +178,11 @@ contract declares nothing: silence is read, and is what made the finding a
   lists every site as built.
 - `EVIDENCE-BUNDLE.md`, `docs/examples/evidence-bundle.json`, `ARCHITECTURE.md`
   and `PRODUCT.md` where they describe a finding.
+
+The list above is the scope as planned. The adversarial review's fix waves
+superseded it site by site -- GCP `ipv4_enabled` and `direction`, for one, are
+no longer simply `provider-default` -- and "Limitations as built" below is what
+the code does.
 
 ## Safety semantics
 
@@ -248,6 +267,12 @@ contract declares nothing: silence is read, and is what made the finding a
   `configuration-unrecorded` there, which at least stops calling it a default.
 - MCP `explain_finding` emitting a finding without validating its bundle. It
   predates this milestone; `analyze_change` validates through the renderer.
+- An Aurora instance in a child module whose `cluster_identifier` comes from a
+  module variable (`cluster = aws_rds_cluster.c.id` passed in) answers
+  `UNKNOWN AWS_DATABASE_CLUSTER_NOT_IN_PLAN` rather than the root module's
+  `WARN`: the cluster join does not follow a module variable. Found by the
+  fourth review; it is milestone 09 correlation behaviour, conservative, and no
+  method is involved.
 
 ## Prerequisites
 
@@ -258,17 +283,22 @@ and the mappers' call sites.
 ## Limitations as built
 
 Written from what the tests measure at the end of the milestone, after the
-adversarial review's fix wave.
+adversarial review's second fix wave.
 
-- **The method follows what the configuration records, not the `after`
-  value.** Real plans showed that a provider writes the default of an unwritten
-  Optional argument into `after` as a known value, and that Terraform carries
-  an unwritten Computed value over from prior state on an update. One
-  mechanism, `declared.Argument`, decides every mapper's method: stated only on
-  a positive record; `provider-default` where the configuration records the
-  argument as unwritten on a new object; `prior-state` where it does so on an
-  update and the argument is Computed; `configuration-unrecorded` everywhere
-  else. The value itself is read exactly as in milestone 09.
+- **The method follows what the configuration records, compared with the
+  prior state, not the `after` value alone.** Real plans showed that a provider
+  writes the default of an unwritten Optional argument into `after` as a known
+  value, that Terraform carries an existing value over on an update, and that
+  under `lifecycle { ignore_changes }` -- which the plan's configuration does
+  not record -- it carries the prior value even of an argument the
+  configuration writes. One mechanism, `declared.Argument`, decides every
+  mapper's method: `configuration-unrecorded` where the plan does not record
+  the writing; `prior-state` where the change keeps the object, `before` and
+  `after` agree at the argument's path, and the configuration records the
+  argument as unwritten, as `null`, or as a constant the carried value
+  contradicts; otherwise `plan-stated-value` for a written value and
+  `provider-default` for an unwritten one. The value itself is read exactly as
+  in milestone 09.
 - **A block is never recorded as unwritten.** Terraform does not record a
   `dynamic` block, so an absent block -- AWS inline `ingress`, Azure
   `security_rule`, GCP `ip_configuration` and `authorized_networks`, a firewall's
@@ -286,25 +316,46 @@ adversarial review's fix wave.
   `provider-default` like one that writes an unrelated flag. A sanitizer that
   strips `expressions` produces the same shape, and its attributes read as
   unwritten too; no verdict reads this, only the method does.
-- **`prior-state` is decided by the change's actions and the schema.** An
-  update that creates nothing, of an argument the mapper knows is Computed. The
-  method does not compare `before` with `after`, so a provider that recomputes
-  an unwritten Computed value on update would still read `prior-state`.
-- **One contradiction is settled as stated.** An argument that is neither
-  Computed nor a block is planned to its default whenever it is unwritten, so a
-  configuration recording it as unwritten beside a non-default value is a shape
-  Terraform cannot produce; the value was written. This is applied where the
-  default is known: AWS rule addresses, the bucket ACL and the block flags'
-  proof of prevention, GCP `source_ranges`, Azure `container_access_type` and
-  separate NSG rule sources, and the environment tags. It is what lets the
-  hand-written fixtures that list only references read their written values as
-  stated. The Azure account gate's default is not measured here, so it takes
-  only what the configuration records.
-- **An argument written as `null` reads as written.** The configuration lists an
-  argument the author wrote as `null`, either as a constant or through a
-  variable that defaults to `null`, exactly as it lists one with a value. The
-  provider then applies its default, and the method reads `plan-stated-value`.
-  The value is still the one milestone 09 read.
+- **`prior-state` is decided by comparing `before` with `after`, not by the
+  schema.** An update or no-op that keeps the object, and a value known and
+  equal on both sides at the argument's path. Where a provider's default equals
+  what the object already had -- a firewall priority of 1000 left unwritten --
+  the value is both, and the method says `prior-state`. An unwritten argument
+  the update moves is `provider-default`: Terraform planned it back to the
+  default (the AWS block flags an update resets, measured).
+- **A value the configuration does not record as written is never stated.** An
+  argument recorded as unwritten, holding a value that is not its documented
+  default and not carried from prior state, is `configuration-unrecorded`. No
+  real plan has shown the shape; the hand-written fixtures whose configuration
+  lists only references do, and read that way. Applied where the default is
+  known: AWS rule addresses, the bucket ACL and the block flags' proof of
+  prevention, Azure `container_access_type` and separate NSG rule sources, GCP
+  `source_ranges` and `disabled`, and the environment tags. The Azure account
+  gate's default is not measured here, so it takes only what the configuration
+  records.
+- **An argument written as `null` reads as unwritten, as far as the plan
+  records it.** A literal `null`, and variables whose value the plan records as
+  `null` -- a root variable in `variables`, a module variable through its call
+  or its default -- read as unwritten, because Terraform treats them so. An
+  argument written only from variables the plan does not resolve reads
+  `configuration-unrecorded`, and so does a `null` passed to a module variable
+  that has a default, because the plan does not record `nullable`. Two shapes
+  are read by their variables rather than evaluated: an expression that makes
+  `null` out of variables that are not -- `var.on ? var.x : null` -- reads as
+  written, and one that makes a value out of variables that are all `null` --
+  `coalesce(var.x, "private")` -- reads as unwritten, which is never stated. An
+  expression that also draws on a resource or a local reads as written, as it
+  did.
+- **A written value `ignore_changes` overrides is detected only as a
+  constant.** The plan records a constant's value, and a constant that is not
+  the value an update carries is `prior-state`. A value written as a reference,
+  a variable or a function, or written in block syntax, records no value to
+  compare with, and on an update that carries the prior value it still reads
+  `plan-stated-value`. The comparison takes Terraform's encoding: an attribute
+  written as blocks records every attribute, `null` where nothing was written,
+  and a list is compared as a set. A provider that normalizes a constant -- a
+  case, a canonical CIDR -- on a value the update keeps would read
+  `prior-state`, never stated; none was found.
 - **A grant on an interpreted document keeps the document's method.** On AWS a
   policy-document grant through a block flag nobody wrote, and on GCP a
   `policy_data` grant beside a `public_access_prevention` nobody wrote, rest on
@@ -318,23 +369,28 @@ adversarial review's fix wave.
   author wrote the argument, not that the plan knows its value; the verdict's
   reading of an unknown prevention is the milestone 09 behaviour the contract
   review recorded as outside this milestone.
-- **An Azure NSG grant takes the method of its granting rules, not of the
-  denies it survived.** GCP's firewall counts the inputs of a deny it applied or
-  skipped on priority; the Azure resolve does not report which deny it weighed.
-- **GCP firewall `disabled` carries no method of its own.** A verdict on an
+- **An Azure NSG grant takes the method of the rules that still open
+  something, not of the denies it survived.** The fourth review found it took
+  every allow from any address, including one a deny cancelled whole; it now
+  takes the best of the rules whose ranges survive. GCP's firewall counts the
+  inputs of every deny it applied or skipped; the Azure resolve does not report
+  which deny it weighed.
+- **A GCP firewall's own `disabled` carries no method.** A verdict on an
   enabled firewall rests on `disabled` being `false`, which the provider
-  defaults when it is unwritten. `disabled` is not cited as evidence, so it
-  takes no part in the method either, and the verdict takes the method of its
-  other inputs.
+  defaults when it is unwritten, and `disabled` is not cited as evidence. A
+  deny skipped because it is disabled does rest the verdict on its `disabled`,
+  as one skipped because it is egress, narrower in source, at a higher priority
+  or on another network rests it on that input.
 - **The hand-written fixtures from before this milestone under-state what they
   write, and cannot be corrected.** Their configurations list only the
   arguments that carry a reference, such as `bucket` or `network`. Correcting
   one changes its plan digest, which the frozen milestone 09 baselines record,
-  so they stay as they are. Where the value is one the contradiction above
-  settles, it reads stated; where it is a block, such as `fw-public`'s `allow`,
-  the finding reads `configuration-unrecorded`. The fixtures added for this
-  milestone, which have no baseline, now record the allow and source their
-  `after` carries.
+  so they stay as they are, and their findings read `configuration-unrecorded`
+  -- what the plan records. Where a test asserts a stated value, it reads a
+  variant whose `configuration` writes it (`sg-public-rule-written`,
+  `private-flags-written`, `nsg-separate-open-written`, the GCP
+  `-prevention-written` variants). The fixtures added for this milestone, which
+  have no baseline, record the arguments their `after` carries.
 - **A plan with no `configuration` section is `configuration-unrecorded`.** It
   read `plan-stated-value` until the review. An absent or unknown value in such
   a plan gets no default, as in milestone 09.
@@ -746,3 +802,148 @@ assert a stated grant now read variants of their fixtures that write
 `public_access_prevention`, which is their premise; the originals assert the
 default. The criterion 3 pairs were made true pairs. No test was deleted or
 skipped.
+
+## Amendment: adversarial review, round 4
+
+A fourth round ran at `3234f72` -- provider reality with real plans
+(Terraform 1.14.0, `hashicorp/aws` 6.67.0, `hashicorp/google` 6.50.0,
+`plan -refresh=false` against hand-written state, nothing applied), mutations
+and claims, and contract coherence. All three returned BLOCK. No verdict was
+wrong, and criterion 8 reproduced; the method again put `plan-stated-value` on
+values nobody under review wrote. D1 and D2 stand; the second fix wave applied
+D1 as written.
+
+### Claims the first fix wave made that turned out false
+
+- *"Terraform plans an unwritten argument that is not Computed to its default
+  on every change, so unwritten beside a non-default value is a shape Terraform
+  cannot produce; the value was written."* `lifecycle { ignore_changes }`
+  carries the prior value into `after` on every update and no-op, and the
+  plan's configuration does not record the lifecycle block. Tags, an ACL, an
+  inline rule set, a firewall source and an IAM member nobody under review
+  wrote read `plan-stated-value` on real-plan BLOCKs. The rule built on the
+  premise (`MethodFor`'s "non-default means stated") is gone; such a value is
+  `configuration-unrecorded`, or `prior-state` where carried.
+- *"prior-state: an update of a Computed argument."* The same plans carry
+  non-Computed arguments too (a GCP priority of 500 read as the documented
+  1000). Carried is now decided by comparing `before` with `after`, and the
+  Computed flag, which then decided nothing anywhere, was removed.
+- *"An argument written as `null` reads as written; the provider then applies
+  its default."* On real plans the provider does not: an update carries the
+  state's value for `publicly_accessible = var.x` and `port = var.x` with `x`
+  defaulting to `null`, exactly as when the argument is omitted, and a create
+  carries `public_access_prevention = var.x` as unknown, exactly as when it is
+  omitted. Both read `plan-stated-value` against `prior-state` and
+  `provider-default` for the omitted form. A `null` write is now no write.
+- *"A source that reaches every address was written wherever the configuration
+  records the resource."* This justified removing GCP `source_ranges` as a
+  firewall input. `ignore_changes = [source_ranges]` carries one nobody wrote;
+  the input is back.
+- *"`provider-default`: ... and the object is new"* while the code returned it
+  on updates. The definition and the code now agree: a value not carried, on a
+  new object or one the plan moves.
+- *Criterion 9, "every killable mutant killed"* held for the wave's own 68
+  mutants, not for the changed lines: about fifteen more non-equivalent mutants
+  survived (ownership gate, Strongest against Weakest at three grants, the
+  granting-only proof filters, the environment's contradiction rule, the
+  fact-path rules). Each now has a test; see the criterion 9 re-measure below.
+- *"The Computed flag on these blocks matters"* -- it was dead on every block.
+- *"`declared.Argument` is the one place that asks"* -- `aws/database.go`
+  hard-coded `provider-default` twice; both now go through it.
+
+Four commit messages of the first wave say something false, and history was
+not rewritten: `f0c1f13`'s subject and body say a firewall verdict rests on its
+source, an input `cc19aee` then removed; `df393bb` says GCP `source_ranges`
+uses `MethodFor`; `cc19aee` gives the false reason quoted above for removing
+it, and does not name the four testdata README edits it carries; `9bf0eac`'s
+subject, "a value nobody wrote is never stated", was false while `MethodFor`
+stood and is true only from the second fix wave.
+
+### Also fixed
+
+- An Azure NSG grant took the best of every allow from any address, including
+  one a deny cancelled whole, so a grant resting only on an unrecorded inline
+  rule read stated. It takes the rules that still open something.
+- A GCP deny skipped because it is egress, disabled, narrower in source or on
+  another network contributed nothing to the verdict's method; each now does.
+- `Weakest` and `Strongest` ranked the empty method as a derived one, so a
+  forgotten method could hide behind a valid one; any method outside the closed
+  set now makes both empty, which fails validation.
+- `public-blob-container-defaulted`, a shape no real plan carries, is removed
+  with the rule it defended.
+- `EVIDENCE-BUNDLE.md` and `docs/MCP.md` say what each method means for a
+  reader and what to do about it; the Markdown line format is unchanged.
+
+### Tests whose assertion changed
+
+The declared unit test that asserted `provider-default` for an unwritten,
+non-Computed argument an update carries now asserts `prior-state`, which is the
+requirement. Three tests that asserted a stated value on a hand-written fixture
+whose configuration lists only references now read a variant whose
+configuration records the value, and the originals assert
+`configuration-unrecorded`: `TestASeparateRuleAddressIsStatedWhereTheConfigurationWritesIt`
+(was `...EvenWhenTheConfigurationListsOnlyItsReferences`),
+`TestAProofOfPreventionRestsOnFlagsSomebodyWrote`, and the separate-rule row of
+`TestANetworkSecurityGroupGrantSaysWhatTheConfigurationRecords`. The
+`public-blob` row of `TestStorageAccessSettingsFollowTheConfiguration` now
+asserts `configuration-unrecorded`, and the `public-blob-container-defaulted`
+row is gone with its fixture. No test was skipped.
+
+### Criterion 8, re-measured after the second fix wave
+
+Binaries built from `git archive 3b50544` and from the second wave's head ran
+`check --format json` on every plan JSON in the tree under the shipped contract
+and the three in `scratchpad/intents/` (all-private, all-public, silent), the
+*after* output normalised as before.
+
+| | count |
+| --- | --- |
+| plans x contracts compared | 304 x 4 = 1216 |
+| identical after normalisation, same exit code and stderr | 1216 |
+| differing | 0 |
+| exit codes, shipped contract (before = after) | 251 x `4`, 37 x `3`, 14 x `0`, 2 x `10` |
+
+`git diff 3b50544 -- internal/verify/testdata/baseline` is empty and no fixture
+with a baseline was touched; the 226 baselines still match. Between the first
+wave's head and this one, across the fixtures both share, the steps that
+changed are the hand-written fixtures that list only references:
+`network.public_ingress` from `plan-stated-value` to `configuration-unrecorded`
+(20 runs: `sg-public-rule`, `sg-rule-every-protocol`, `nsg-inline-unwritten`,
+`nsg-rule-replaced`, `nsg-separate-open`) and `object_storage.public_access`
+from `provider-default` to `configuration-unrecorded` (8 runs: `public-blob`,
+`public-container`). No real plan's step changed. Steps on plan facts across
+the 1216 runs, `resource.cloud` excluded: `plan-stated-value` 789,
+`provider-default` 132, `configuration-unrecorded` 163, `prior-state` 95,
+`documented-table` 72, `policy-document-interpreted` 12, `reference-resolved`
+100.
+
+### Criterion 9, re-measured after the second fix wave
+
+The same harness, against the second wave's head in a separate worktree: 49
+mutants of every method site the wave added or changed (the expression
+evaluator, `Argument`'s decision, `Carried`, `Weakest` and `Strongest`, the
+GCP firewall's source and skip inputs, the Azure grant's surviving rules, the
+AWS switch's absent and unknown branches). On the first run 12 survived; each
+was given a test or, for two, the code was simplified (a redundant `nil`
+guard, a numeric comparison no shape needed); two mutants were malformed and
+re-expressed. Final: all 49 killed.
+
+The first wave's 79 mutants and the fourth review's 93 were re-run: 91 killed,
+44 no longer apply (the text they mutate is gone -- `MethodFor`'s stated rule,
+the Computed flag, `grantMethod`), 9 do not compile for the same reason, and
+28 survive. Every survivor is one of the equivalent or unobservable kinds the
+review itself triaged: the four `Known(false)` methods and the closed-group
+defaults, the `Writing` and `Updates` guards that cannot change an answer, the
+Required flags every fixture writes, the per-flag loop of the AWS proof (all
+four flags share one method), GCP's allow/deny choice (the provider requires
+exactly one), the Azure null-source handling, the ACL and container default
+comparison for a value that grants nothing, and an empty-steps guard another
+check already refuses. Each non-equivalent survivor the review listed --
+`env-isdefault-true`, `aws-ownership-gates-dropped`, `aws-acl-isdefault-true`,
+`aws-net-grant-weakest`, `az-db-strongest`, `gcp-st-member-proof-always`,
+`gcp-st-policy-proof-always`, `aws-net-separate-proof-always` and the three
+fact-path mutants -- is now killed; the Azure grant filters it listed mutate
+code replaced by the surviving-rule rule, whose own mutants are killed; the
+five "not Computed" mutants mutate a flag that no longer exists. Results:
+`scratchpad/w2/mut/{w2b,w2c,prior}-r.json`.
+
