@@ -161,15 +161,15 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 	carried := updates && Carried(change, path)
 	switch writing {
 	case WritingWritten:
-		constant := expression.Evaluation == terraformplan.EvaluationConstant
 		switch {
 		case !updates:
 			return model.MethodStated
-		case constant && expression.Contradicted:
+		case expression.Contradicted:
+			// Only a constant is ever contradicted.
 			return model.MethodPriorState
 		case !carried:
 			return model.MethodStated
-		case !constant || expression.Undecided:
+		case expression.Evaluation != terraformplan.EvaluationConstant || expression.Undecided:
 			// The plan records no value for the write to be shown to be the
 			// one the update keeps. A write the configuration records no
 			// expression for is the zero Expression, which is deferred.
