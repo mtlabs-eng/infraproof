@@ -122,7 +122,10 @@ differ only in `direction`.
 `real-firewall-dynamic-allow.json` is a real plan (Terraform 1.14.0,
 `hashicorp/google` 6.50.0, placeholder token removed) of two firewalls that
 differ only in writing `allow` as a block or as a `dynamic` block, which the
-configuration does not record.
+configuration does not record. `real-firewall-direction-from-state.json` is a
+real update plan, against a hand-written state, of a firewall that writes
+neither `direction` nor `priority`: Terraform carries `direction`, which is
+Computed, and plans `priority` to 1000, so the verdict is `prior-state`.
 
 Every other hand-authored fixture here predates milestone 10, and its
 configuration lists only the arguments that carry a reference (`network`). A

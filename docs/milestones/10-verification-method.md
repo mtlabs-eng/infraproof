@@ -436,12 +436,13 @@ were:
 
 ### Re-measured after the adversarial review's fix wave
 
-The fix wave added 15 provider fixtures, all without a baseline: twelve real
+The fix wave added 17 provider fixtures, all without a baseline: fourteen real
 plans (`real-rds-unwritten-update` and `-create`, `real-sg-ingress-from-state`,
 `real-acl-account-block-empty` and `-one-flag`, `real-sql-ip-configuration-from-state`,
-`real-sql-dynamic-settings`, `real-bucket-prevention-pair` and `-from-state`,
-`real-firewall-dynamic-allow`, `real-sql-ipv4-written` and `-unwritten`), and
-three variants of GCP grant fixtures that write `public_access_prevention`. It edited only the `configuration` block of
+`real-sql-dynamic-settings`, `real-sql-dynamic-authorized-networks`,
+`real-bucket-prevention-pair` and `-from-state`, `real-firewall-dynamic-allow`,
+`real-firewall-direction-from-state`, `real-sql-ipv4-written` and `-unwritten`),
+and three variants of GCP grant fixtures that write `public_access_prevention`. It edited only the `configuration` block of
 the eleven GCP firewall fixtures from this milestone, which have no baseline.
 No baseline and no fixture that has one was touched: `git diff 3b50544 --
 internal/verify/testdata/baseline` is empty, and 226 baselines still match
@@ -456,15 +457,15 @@ normalised as above.
 
 | | count |
 | --- | --- |
-| plans × contracts compared | 271 × 4 = 1084 |
-| identical after normalisation, same exit code and stderr | 1084 |
+| plans × contracts compared | 273 × 4 = 1092 |
+| identical after normalisation, same exit code and stderr | 1092 |
 | differing | 0 |
-| provider fixtures | 240, of which 39 have no baseline |
-| exit codes, shipped contract (before = after) | 226 × `4`, 30 × `3`, 13 × `0`, 2 × `10` |
+| provider fixtures | 242, of which 41 have no baseline |
+| exit codes, shipped contract (before = after) | 228 × `4`, 30 × `3`, 13 × `0`, 2 × `10` |
 
 The two `10`s are malformed-input fixtures and were `10` before. Steps observed
-across the 1084 runs, by method, on plan facts: `plan-stated-value` 1174,
-`provider-default` 124, `configuration-unrecorded` 119, `prior-state` 16,
+across the 1092 runs, by method, on plan facts: `plan-stated-value` 1180,
+`provider-default` 124, `configuration-unrecorded` 123, `prior-state` 20,
 `documented-table` 72, `policy-document-interpreted` 8, `reference-resolved` 92.
 
 ## Criterion 9, measured

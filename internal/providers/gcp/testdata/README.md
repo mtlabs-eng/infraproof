@@ -91,6 +91,7 @@ token removed afterwards; the update plans ran against a hand-written state.
 
 - `real-sql-ip-configuration-from-state.json`: `settings` written with no `ip_configuration`, on an update whose state holds `ipv4_enabled = true` and `0.0.0.0/0`. Both are carried; the plan does not record `ip_configuration`, so both halves are `configuration-unrecorded`.
 - `real-sql-dynamic-settings.json`: two instances, `settings` written as a block and as a resolvable `dynamic` block. The dynamic one records nothing about `settings`.
+- `real-sql-dynamic-authorized-networks.json`: `ip_configuration` written as a block with `ipv4_enabled = true`, and `authorized_networks` as a `dynamic` block, which the configuration does not record: the switch is stated and the allow list `configuration-unrecorded`.
 - `real-sql-ipv4-written.json` and `real-sql-ipv4-unwritten.json`: one instance whose configurations differ only in writing `ipv4_enabled = true`; `after` is identical. The criterion 3 pair.
 - `real-bucket-prevention-pair.json`: two buckets with an `allUsers` member each, one writing `public_access_prevention = "inherited"`. Unwritten, the value is unknown in `after` and the grant is `provider-default`.
 - `real-bucket-prevention-from-state.json`: the unwritten bucket on an update whose state holds `"inherited"`, which Terraform carries: `prior-state`.
