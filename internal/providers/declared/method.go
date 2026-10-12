@@ -105,6 +105,26 @@ func (a Argument) Method(change terraformplan.ResourceChange) model.Method {
 	}
 }
 
+// MethodFor is Method for a value the caller has compared with the provider's
+// documented default -- null, for an argument that has none.
+//
+// It settles one contradiction and nothing else. Terraform plans an unwritten
+// argument that is not Computed to its default on every change, and no dynamic
+// block writes an attribute, so a configuration that records such an argument
+// as unwritten beside a value that is not its default records something
+// Terraform cannot produce. A hand-written plan whose configuration lists only
+// the references is the shape that does it. The value is then one somebody
+// wrote, and the method is stated rather than a default the value is not.
+//
+// An unrecorded argument stays unrecorded, a block stays what the configuration
+// records, and a Computed argument may hold anything an update carries.
+func (a Argument) MethodFor(change terraformplan.ResourceChange, isDefault bool) model.Method {
+	if !isDefault && !a.Computed && !a.Block && a.Writing(change) == WritingUnwritten {
+		return model.MethodStated
+	}
+	return a.Method(change)
+}
+
 // Updates reports that the change keeps an existing object: it has a prior
 // state and creates nothing. A replacement creates a new object, and a new
 // object carries nothing over.

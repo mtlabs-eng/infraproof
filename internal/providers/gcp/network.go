@@ -365,7 +365,11 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		return read
 	}
 	read.anySource = source
-	read.sourceMethod = declared.Argument{Path: "source_ranges"}.Method(change)
+	// Optional, not Computed and without a default: a source the plan carries
+	// is one somebody wrote.
+	sources := change.After.Field("source_ranges")
+	read.sourceMethod = declared.Argument{Path: "source_ranges"}.MethodFor(change,
+		sources.State() != terraformplan.StateKnown || sources.Kind() == terraformplan.KindNull)
 
 	tags, tagsUnread := targetsOf(change, "target_tags")
 	accounts, accountsUnread := targetsOf(change, "target_service_accounts")

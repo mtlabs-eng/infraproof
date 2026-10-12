@@ -281,7 +281,10 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 	}
 	value := acl.After.Field("acl")
 	c.sources = append(c.sources, declared.Source(model.CloudAWS, acl.Address, "acl", value))
-	c.method = declared.Weakest(append([]model.Method{declared.Argument{Path: "acl"}.Method(*acl)}, gates...)...)
+	// `acl` is Optional, not Computed and without a default, so a canned ACL
+	// in the plan is one somebody wrote.
+	aclMethod := declared.Argument{Path: "acl"}.MethodFor(*acl, value.Kind() != terraformplan.KindString)
+	c.method = declared.Weakest(append([]model.Method{aclMethod}, gates...)...)
 
 	switch value.State() {
 	case terraformplan.StateKnown:

@@ -2,6 +2,9 @@ package azure_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
@@ -51,7 +54,13 @@ func TestStorageAccessSettingsFollowTheConfiguration(t *testing.T) {
 		{"public-blob-written", true, model.MethodStated, "both settings written"},
 		{"private-container-written-gate-unwritten", false, model.MethodStated, "private container written, gate unwritten"},
 		{"private-container-unwritten-gate-written", false, model.MethodProviderDefault, "private container unwritten, gate written"},
-		{"public-blob-container-defaulted", true, model.MethodProviderDefault, "gate written, access type unwritten"},
+		// Not a default. container_access_type defaults to "private" and is not
+		// Computed, so Terraform plans an unwritten one as "private": a "blob"
+		// beside a configuration that does not write it is a shape Terraform
+		// cannot produce, and the value is somebody's. Until the adversarial
+		// review this row said provider-default, defending a branch no real
+		// plan reaches.
+		{"public-blob-container-defaulted", true, model.MethodStated, "gate written, a public access type cannot be the default"},
 		{"public-blob-gate-defaulted", true, model.MethodProviderDefault, "access type written, gate unwritten"},
 		{"public-blob", true, model.MethodProviderDefault, "neither setting written"},
 		{"private-account-forbids-written", false, model.MethodStated, "the deciding gate written"},
@@ -118,4 +127,125 @@ func TestAnAccountAloneTakesItsGatesMethod(t *testing.T) {
 			t.Errorf("%s: method = %q, want %q", c.why, got.Method(), c.method)
 		}
 	}
+}
+
+// D2: a firewall rule is joined to its server through server_id, and the join
+// only locates where the grant applies. The grant itself is the rule's start
+// and end address, Required arguments written on the rule's own resource, so it
+// is stated wherever the configuration records the rule.
+func TestADatabaseAdmissionThroughAFirewallRuleIsStated(t *testing.T) {
+	for fixture, address := range map[string]string{
+		"sql-reachable": "azurerm_mssql_server.db",
+		"pg-reachable":  "azurerm_postgresql_flexible_server.db",
+	} {
+		admitted := databaseAt(t, fixture, address).Database.AdmitsAnyAddress
+		if !admitted.IsKnown() || !admitted.Get() || admitted.Method() != model.MethodStated {
+			t.Errorf("%s: method = %q (state %s), want known true %q", fixture, admitted.Method(), admitted.State, model.MethodStated)
+		}
+	}
+}
+
+// The same plans with their configuration stripped: nothing records who wrote
+// the rule, so nothing is stated.
+func TestADatabaseAdmissionInAPlanWithoutConfigurationIsUnrecorded(t *testing.T) {
+	admitted := withoutConfiguration(t, "sql-reachable", "azurerm_mssql_server.db").Database.AdmitsAnyAddress
+	if !admitted.IsKnown() || !admitted.Get() || admitted.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q (state %s), want known true %q", admitted.Method(), admitted.State, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// An inline rule the configuration writes is stated, and so is a separate rule
+// whose source is not null: source_address_prefix is not Computed and has no
+// default, so Terraform plans an unwritten one as null and a source somebody
+// can reach through was written. Without a configuration, neither is recorded;
+// and an inline set the configuration does not record -- Azure carries one
+// across an update, and a dynamic block leaves no record -- is not either.
+func TestANetworkSecurityGroupGrantSaysWhatTheConfigurationRecords(t *testing.T) {
+	cases := []struct {
+		name   string
+		group  func() model.NormalizedResource
+		method model.Method
+	}{
+		{"inline, written", func() model.NormalizedResource {
+			return networkAt(t, "nsg-public-inline")
+		}, model.MethodStated},
+		{"separate rule", func() model.NormalizedResource {
+			return networkAt(t, "nsg-separate-open")
+		}, model.MethodStated},
+		{"inline, no configuration", func() model.NormalizedResource {
+			return withoutConfiguration(t, "nsg-public-inline", "azurerm_network_security_group.web")
+		}, model.MethodConfigurationUnrecorded},
+		{"inline, not recorded", func() model.NormalizedResource {
+			return withStatedRemoved(t, "nsg-public-inline", "azurerm_network_security_group.web", "security_rule")
+		}, model.MethodConfigurationUnrecorded},
+	}
+	for _, c := range cases {
+		ingress := c.group().Network.PublicIngress
+		if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != c.method {
+			t.Errorf("%s: method = %q (state %s), want known true %q", c.name, ingress.Method(), ingress.State, c.method)
+		}
+	}
+}
+
+func networkAt(t *testing.T, fixture string) model.NormalizedResource {
+	t.Helper()
+	found, ok := providers.Normalize(planOf(t, fixture), providers.Default()).At("azurerm_network_security_group.web")
+	if !ok || found.Network == nil {
+		t.Fatalf("%s has no network security group at azurerm_network_security_group.web", fixture)
+	}
+	return found
+}
+
+// withoutConfiguration normalizes a fixture as a plan with no configuration
+// section would arrive: nothing declared, nothing recorded.
+func withoutConfiguration(t *testing.T, fixture, address string) model.NormalizedResource {
+	t.Helper()
+	plan := planOf(t, fixture)
+	for i := range plan.ResourceChanges {
+		plan.ResourceChanges[i].Declared = false
+		plan.ResourceChanges[i].Configured = false
+		plan.ResourceChanges[i].Stated = nil
+	}
+	found, ok := providers.Normalize(plan, providers.Default()).At(address)
+	if !ok {
+		t.Fatalf("%s has no resource at %s", fixture, address)
+	}
+	return found
+}
+
+// withStatedRemoved normalizes a fixture whose configuration does not record
+// one argument of one resource.
+func withStatedRemoved(t *testing.T, fixture, address, argument string) model.NormalizedResource {
+	t.Helper()
+	plan := planOf(t, fixture)
+	for i := range plan.ResourceChanges {
+		if plan.ResourceChanges[i].Address != address {
+			continue
+		}
+		var kept []string
+		for _, name := range plan.ResourceChanges[i].Stated {
+			if name != argument && !strings.HasPrefix(name, argument+".") {
+				kept = append(kept, name)
+			}
+		}
+		plan.ResourceChanges[i].Stated = kept
+	}
+	found, ok := providers.Normalize(plan, providers.Default()).At(address)
+	if !ok {
+		t.Fatalf("%s has no resource at %s", fixture, address)
+	}
+	return found
+}
+
+func planOf(t *testing.T, fixture string) terraformplan.Plan {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", fixture+".json"))
+	if err != nil {
+		t.Fatalf("reading fixture: %v", err)
+	}
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("parsing fixture: %v", err)
+	}
+	return plan
 }

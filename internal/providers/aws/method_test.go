@@ -208,3 +208,14 @@ func normalizeAt(t *testing.T, fixture, address string) model.NormalizedResource
 	}
 	return found
 }
+
+// sg-public-rule's configuration lists only the rule's security_group_id. The
+// address that opens is Optional, not Computed and without a default, so
+// Terraform plans an unwritten one as null: an address that opens was written,
+// and the grant is stated rather than a default no provider has.
+func TestASeparateRuleAddressIsStatedEvenWhenTheConfigurationListsOnlyItsReferences(t *testing.T) {
+	ingress := securityGroup(t, "sg-public-rule").Network.PublicIngress
+	if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != model.MethodStated {
+		t.Errorf("method = %q (state %s), want known true %q", ingress.Method(), ingress.State, model.MethodStated)
+	}
+}

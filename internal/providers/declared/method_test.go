@@ -225,3 +225,37 @@ func TestTheStrongestProofOfADisjunctionWins(t *testing.T) {
 		}
 	}
 }
+
+// Terraform plans an unwritten argument that is not Computed to its documented
+// default on every change, and no dynamic block writes an attribute. So a
+// configuration recording such an argument as unwritten beside a value that is
+// not the default records something Terraform cannot produce, and the value is
+// the one somebody wrote. Only that contradiction is settled this way: an
+// unrecorded argument stays unrecorded, and a Computed one may be carried.
+func TestANonDefaultValueOfAnArgumentNotComputedWasWritten(t *testing.T) {
+	flag := declared.Argument{Path: "flag"}
+	carried := declared.Argument{Path: "flag", Computed: true}
+	rules := declared.Argument{Path: "rule", Block: true}
+	unwritten := entry(`{"name": {"constant_value": "t"}}`)
+
+	cases := map[string]struct {
+		argument  declared.Argument
+		change    terraformplan.ResourceChange
+		isDefault bool
+		want      model.Method
+	}{
+		"unwritten, holding the default": {flag, planned(t, create, noPrior, unwritten), true, model.MethodProviderDefault},
+		"unwritten, holding something else": {flag, planned(t, create, noPrior, unwritten), false, model.MethodStated},
+		"unwritten, on an update, something else": {flag, planned(t, update, hasPrior, unwritten), false, model.MethodStated},
+		"computed, carried from state": {carried, planned(t, update, hasPrior, unwritten), false, model.MethodPriorState},
+		"unrecorded stays unrecorded": {flag, planned(t, create, noPrior, ""), false, model.MethodConfigurationUnrecorded},
+		"a block stays what it records": {rules, planned(t, create, noPrior, unwritten), false, model.MethodConfigurationUnrecorded},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := c.argument.MethodFor(c.change, c.isDefault); got != c.want {
+				t.Errorf("MethodFor = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

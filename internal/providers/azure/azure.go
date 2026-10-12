@@ -20,6 +20,9 @@ const (
 	attrAccessType   = "container_access_type"
 	accessTypePublic = "blob"
 	accessTypeList   = "container"
+	// accessTypeDefault is the provider's documented default for an unwritten
+	// container_access_type, which is Optional and not Computed.
+	accessTypeDefault = "private"
 )
 
 // Mapper normalizes Azure blob containers.
@@ -164,9 +167,9 @@ func accountCapabilities(account terraformplan.ResourceChange, related []terrafo
 		return nil
 	}
 
-	gate, sources, defaulted := accountAllowsPublic(&account)
+	gate, sources, method := accountAllowsPublic(&account)
 	if gate == answerNo {
-		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, methodOf(defaulted), sources...).Canonical()}
+		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, method, sources...).Canonical()}
 	}
 
 	capabilities := &model.ObjectStorageCapabilities{
@@ -199,20 +202,21 @@ const (
 // container. Both the account gate and the container setting must say yes, and
 // either saying no is enough to prove it does not.
 func publicAccess(container terraformplan.ResourceChange, account *terraformplan.ResourceChange) model.Fact[bool] {
-	gate, gateSources, gateDefaulted := accountAllowsPublic(account)
-	setting, settingSources, settingDefaulted := containerIsPublic(container)
+	gate, gateSources, gateMethod := accountAllowsPublic(account)
+	setting, settingSources, settingMethod := containerIsPublic(container)
 
 	sources := append(gateSources, settingSources...)
 
 	// One definite no settles it, whatever the other says.
 	if gate == answerNo {
-		return model.Known(false, methodOf(gateDefaulted), gateSources...).Canonical()
+		return model.Known(false, gateMethod, gateSources...).Canonical()
 	}
 	if setting == answerNo {
-		return model.Known(false, methodOf(settingDefaulted), settingSources...).Canonical()
+		return model.Known(false, settingMethod, settingSources...).Canonical()
 	}
 	if gate == answerYes && setting == answerYes {
-		return model.Known(true, methodOf(gateDefaulted || settingDefaulted), sources...).Canonical()
+		// Both are needed, so the grant is only as strong as the weaker.
+		return model.Known(true, declared.Weakest(gateMethod, settingMethod), sources...).Canonical()
 	}
 
 	if gate == answerRedacted || setting == answerRedacted {
@@ -225,51 +229,57 @@ func publicAccess(container terraformplan.ResourceChange, account *terraformplan
 // not contain is not an account that permits nothing; it is an account nobody
 // here can see.
 //
-// The bool says the value read is the provider's default rather than something
-// the author wrote, so a fact resting on it is not stated.
-func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model.Provenance, bool) {
+// The method says how the value read was established: a fact resting on a gate
+// nobody wrote rests on the provider's default. The gate is Optional and not
+// Computed, and its default is not one this build has measured, so only what
+// the configuration records decides it.
+func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model.Provenance, model.Method) {
 	if account == nil {
-		return answerUnknown, nil, false
+		return answerUnknown, nil, ""
 	}
-	defaulted := declared.Unwritten(*account, attrAllowPublic)
+	method := declared.Argument{Path: attrAllowPublic}.Method(*account)
 
 	value := account.After.Field(attrAllowPublic)
 	sources := []model.Provenance{declared.Source(model.CloudAzure, account.Address, attrAllowPublic, value)}
 	switch {
 	case value.Kind() == terraformplan.KindBool:
 		if value.Bool() {
-			return answerYes, sources, defaulted
+			return answerYes, sources, method
 		}
-		return answerNo, sources, defaulted
+		return answerNo, sources, method
 	case value.State() == terraformplan.StateRedacted:
-		return answerRedacted, sources, defaulted
+		return answerRedacted, sources, method
 	default:
 		// Absent is not the provider default, and a readable value of the wrong
 		// kind is not an answer either: Bool returns false for both, and false
 		// here is what proves a container private.
-		return answerUnknown, sources, defaulted
+		return answerUnknown, sources, method
 	}
 }
 
 // containerIsPublic reads the container's access level. blob exposes the blobs;
 // container additionally exposes the listing.
 //
-// The bool says the value read is the provider's default; see accountAllowsPublic.
-func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance, bool) {
-	defaulted := declared.Unwritten(container, attrAccessType)
+// The method says how the value read was established; see accountAllowsPublic.
+// The default is "private", so a public access type the configuration records
+// as unwritten is one Terraform cannot have planned: it was written, and it is
+// stated rather than a default it is not.
+func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance, model.Method) {
 	value := container.After.Field(attrAccessType)
+	method := declared.Argument{Path: attrAccessType}.MethodFor(container,
+		value.Kind() != terraformplan.KindString || value.Text() == accessTypeDefault)
 	sources := []model.Provenance{declared.Source(model.CloudAzure, container.Address, attrAccessType, value)}
 
 	switch {
 	case value.Kind() == terraformplan.KindString:
 		if value.Text() == accessTypePublic || value.Text() == accessTypeList {
-			return answerYes, sources, defaulted
+			return answerYes, sources, method
 		}
-		return answerNo, sources, defaulted
+		return answerNo, sources, method
 	case value.State() == terraformplan.StateRedacted:
-		return answerRedacted, sources, defaulted
+		return answerRedacted, sources, method
 	default:
-		return answerUnknown, sources, defaulted
+		return answerUnknown, sources, method
 	}
 }
 
@@ -330,13 +340,3 @@ func (m Mapper) Environment(change terraformplan.ResourceChange) model.Fact[stri
 	return declared.Environment(change, attrTags, model.CloudAzure)
 }
 
-// methodOf is how a fact that rests on one argument was established: the
-// provider's default when the configuration does not write it, stated when it
-// does. It follows the configuration, not the plan's after state, because a
-// provider writes the default of an unwritten argument there as a known value.
-func methodOf(defaulted bool) model.Method {
-	if defaulted {
-		return model.MethodProviderDefault
-	}
-	return model.MethodStated
-}

@@ -79,14 +79,22 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	var rules []inbound
 	unread := !noInlineRules &&
 		inline.State() != terraformplan.StateKnown && inline.State() != terraformplan.StateAbsent
+	// `security_rule` is a block the provider carries across an update, so an
+	// inline set the configuration does not record -- left in state, or
+	// written as a dynamic block -- reads as such rather than as stated.
+	inlineMethod := declared.Argument{Path: attrSecurityRule, Block: true, Computed: true}.Method(subject)
 	for i := range inline.Len() {
 		path := fmt.Sprintf("%s[%d]", attrSecurityRule, i)
-		rules = append(rules, readRule(subject.Address, path, inline.At(i)))
+		rule := readRule(subject.Address, path, inline.At(i))
+		rule.method = inlineMethod
+		rules = append(rules, rule)
 	}
 
 	separate := securityRules(related)
-	for _, rule := range separate {
-		rules = append(rules, readRule(rule.Address, "", rule.After))
+	for _, change := range separate {
+		rule := readRule(change.Address, "", change.After)
+		rule.method = separateSource(change)
+		rules = append(rules, rule)
 	}
 
 	for _, rule := range rules {
@@ -138,7 +146,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	case unread:
 		capabilities.PublicIngress = model.Unknown[bool](cited...)
 	case len(opened) > 0:
-		capabilities.PublicIngress = model.Known(true, model.MethodStated, cited...)
+		capabilities.PublicIngress = model.Known(true, grantMethod(rules), cited...)
 		if !stated {
 			// A grant is provable from part of a rule set, and this is that
 			// part. What is not here is a deny at a lower priority, which would
@@ -150,7 +158,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		// Every rule in the set was read and none of them opens anything. The
 		// platform's own default denies inbound traffic no rule allows, so a set
 		// with no allow from any address permits none.
-		capabilities.PublicIngress = model.Known(false, model.MethodStated, cited...)
+		capabilities.PublicIngress = model.Known(false, inlineMethod, cited...)
 	default:
 		capabilities.PublicIngress = model.Unknown[bool](cited...)
 		capabilities.Unresolved = append(capabilities.Unresolved, incompleteSet())
@@ -223,6 +231,41 @@ type inbound struct {
 	anyDestination bool
 	unread         bool
 	cited          []model.Provenance
+	// method is how the rule's source was established, which is what a grant
+	// from any address rests on.
+	method model.Method
+}
+
+// grantMethod is the method of a grant: the best established of the rules
+// allowing ingress from every address, since any one of them is a grant. The
+// denies a grant survived do not enter it, a limitation recorded in milestone
+// 10: GCP's firewall counts a deny it applied, and this does not.
+func grantMethod(rules []inbound) model.Method {
+	var proofs []model.Method
+	for _, rule := range rules {
+		if rule.allow && rule.inbound && rule.anySource && !rule.unread {
+			proofs = append(proofs, rule.method)
+		}
+	}
+	return declared.Strongest(proofs...)
+}
+
+// separateSource is how a separate rule's source was established. Neither
+// source field is Computed and neither has a default, so Terraform plans an
+// unwritten one as null: a source that is there was written, whatever a
+// configuration listing only the rule's references says.
+func separateSource(change terraformplan.ResourceChange) model.Method {
+	var methods []model.Method
+	for _, field := range []string{"source_address_prefix", "source_address_prefixes"} {
+		value := change.After.Field(field)
+		if value.State() == terraformplan.StateKnown && value.Kind() != terraformplan.KindNull {
+			methods = append(methods, declared.Argument{Path: field}.MethodFor(change, false))
+		}
+	}
+	if len(methods) == 0 {
+		return declared.Argument{Path: "source_address_prefix"}.Method(change)
+	}
+	return declared.Strongest(methods...)
 }
 
 // resolve reads the ordered set and returns what it leaves open.
