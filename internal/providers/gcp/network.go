@@ -66,7 +66,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	rule := readFirewall(subject)
 	// Every input the verdict rests on, each with how it was established. The
 	// verdict is only as strong as the weakest of them.
-	rests := []model.Method{rule.blocksMethod, rule.directionMethod, rule.priorityMethod}
+	rests := []model.Method{rule.blocksMethod, rule.directionMethod, rule.priorityMethod, rule.sourceMethod}
 	capabilities := model.NetworkCapabilities{Unresolved: m.ingressGaps(subject)}
 
 	if rule.unread {
@@ -90,17 +90,34 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 				continue
 			}
 			deny := readFirewall(candidate)
-			switch {
-			case deny.unread || deny.disabled || !deny.inbound || len(deny.denies) == 0:
+			if deny.unread || len(deny.denies) == 0 {
 				continue
-			case !deny.anySource:
+			}
+			// A deny skipped is skipped on the strength of its own inputs, and
+			// the verdict rests on them as it does on a deny it applies. Each
+			// ground below suffices alone, so the skip is as strong as the
+			// best established of those that hold.
+			var skippedOn []model.Method
+			if deny.disabled {
+				skippedOn = append(skippedOn, deny.disabledMethod)
+			}
+			if !deny.inbound {
+				skippedOn = append(skippedOn, deny.directionMethod)
+			}
+			if !deny.anySource {
 				// A deny reaches only the addresses it names. One scoped to a
 				// private range, or to a tag, says nothing about traffic from
 				// the internet -- and using it to cancel a grant open to the
 				// world reported PASS, with no finding and no unknown, for a
 				// port open to everyone. Azure's resolve has always required
 				// this; nothing proved either of them did.
+				skippedOn = append(skippedOn, deny.sourceMethod)
+			}
+			if len(skippedOn) > 0 {
+				rests = append(rests, declared.Strongest(skippedOn...))
 				continue
+			}
+			switch {
 			case deny.priority > rule.priority:
 				// Above this rule in the ordering, so it never reaches traffic
 				// this rule has already permitted. Equal is not above: a deny
@@ -118,6 +135,9 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 				continue
 			}
 			if !together {
+				// Skipped because the two networks differ, which rests on
+				// both of them.
+				rests = append(rests, rule.networkMethod, deny.networkMethod)
 				continue
 			}
 			if !coversTargets(deny, rule) {
@@ -129,7 +149,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			}
 
 			cited = append(cited, deny.cited...)
-			rests = append(rests, deny.blocksMethod, deny.directionMethod, deny.priorityMethod)
+			rests = append(rests, deny.blocksMethod, deny.directionMethod, deny.priorityMethod, deny.sourceMethod)
 			remaining, byProtocol = subtract(remaining, deny.denies, byProtocol)
 		}
 	}
@@ -247,14 +267,20 @@ type firewallRule struct {
 	priorityMethod model.Method
 	// blocksMethod is how the allow or deny blocks were established: a block
 	// the configuration does not record may be a dynamic one.
-	//
-	// source_ranges carries no method of its own. It is not Computed and has no
-	// default, so a source that reaches every address was written wherever the
-	// configuration records the resource at all, and where it does not, every
-	// other input is unrecorded too. A mutation run showed the input changed
-	// no method, so it was removed.
 	blocksMethod model.Method
-	cited        []model.Provenance
+	// sourceMethod is how source_ranges was established. A verdict rests on
+	// whether the source reaches every address. It was removed once, on the
+	// premise that a source reaching every address was written wherever the
+	// configuration records the resource; lifecycle { ignore_changes } carries
+	// one nobody wrote, and the fourth review measured it on a real plan.
+	sourceMethod model.Method
+	// disabledMethod is how a disabled firewall's disabled was established,
+	// which a deny skipped for it rests on. Empty for an enabled one.
+	disabledMethod model.Method
+	// networkMethod is how network was established, which a deny skipped as
+	// being on another network rests on.
+	networkMethod model.Method
+	cited         []model.Provenance
 }
 
 // protocolPorts is one allow or deny block.
@@ -269,6 +295,12 @@ var (
 	priorityArgument = declared.Argument{Path: "priority"}
 	// directionArgument is Optional and Computed.
 	directionArgument = declared.Argument{Path: "direction", Computed: true}
+	// sourceArgument is Optional and not Computed, with no default.
+	sourceArgument = declared.Argument{Path: "source_ranges"}
+	// disabledArgument is Optional and not Computed, defaulting to false.
+	disabledArgument = declared.Argument{Path: "disabled"}
+	// networkArgument is Required.
+	networkArgument = declared.Argument{Path: attrNetwork, Required: true}
 )
 
 // readFirewall reads one firewall resource.
@@ -277,7 +309,8 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		return declared.Source(model.CloudGCP, change.Address, field, change.After.Field(field))
 	}
 	read := firewallRule{priority: defaultPriority, inbound: true,
-		cited: []model.Provenance{cite("priority"), cite("source_ranges")}}
+		cited:         []model.Provenance{cite("priority"), cite("source_ranges")},
+		networkMethod: networkArgument.Method(change)}
 
 	priority := change.After.Field("priority")
 	switch priority.State() {
@@ -354,6 +387,9 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	case terraformplan.StateAbsent:
 	case terraformplan.StateKnown:
 		read.disabled = disabled.Kind() == terraformplan.KindBool && disabled.Bool()
+		if read.disabled {
+			read.disabledMethod = disabledArgument.MethodFor(change, false)
+		}
 	default:
 		// `disabled` is Optional and not Computed, and a real plan emits null for
 		// an omitted one -- which is absent, handled above. An unknown value is
@@ -370,6 +406,9 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		return read
 	}
 	read.anySource = source
+	ranges := change.After.Field("source_ranges")
+	read.sourceMethod = sourceArgument.MethodFor(change, ranges.Kind() == terraformplan.KindNull ||
+		(ranges.Kind() == terraformplan.KindArray && ranges.Len() == 0))
 
 	tags, tagsUnread := targetsOf(change, "target_tags")
 	accounts, accountsUnread := targetsOf(change, "target_service_accounts")

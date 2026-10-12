@@ -95,3 +95,39 @@ token removed afterwards; the update plans ran against a hand-written state.
 - `real-sql-ipv4-written.json` and `real-sql-ipv4-unwritten.json`: one instance whose configurations differ only in writing `ipv4_enabled = true`; `after` is identical. The criterion 3 pair.
 - `real-bucket-prevention-pair.json`: two buckets with an `allUsers` member each, one writing `public_access_prevention = "inherited"`. Unwritten, the value is unknown in `after` and the grant is `provider-default`.
 - `real-bucket-prevention-from-state.json`: the unwritten bucket on an update whose state holds `"inherited"`, which Terraform carries: `prior-state`.
+
+## Real plans added by milestone 10's fourth review
+
+Same tooling: Terraform 1.14.0, `hashicorp/google` 6.50.0, `plan -refresh=false`
+against a hand-written state where the change is an update, nothing applied,
+the placeholder token removed afterwards.
+
+- `real-ignore-changes.json`: `lifecycle { ignore_changes }` on three resources,
+  a plan of "no changes". The bucket writes `public_access_prevention =
+  "enforced"` and the state holds `"inherited"` and `labels.environment =
+  prod`; the member writes `user:alice@example.com` and the state holds
+  `allUsers`; the firewall writes `source_ranges = ["10.0.0.0/8"]` and the state
+  holds `0.0.0.0/0`. Every `after` is the state's, and the configuration does not
+  record `lifecycle`: each value is `prior-state`.
+- `real-firewall-source-ignored.json`: a firewall that writes no `source_ranges`,
+  with `ignore_changes = [source_ranges]` and `0.0.0.0/0` in state.
+- `real-firewall-priority-ignored.json`: a firewall that writes no `priority`,
+  with `ignore_changes = [priority]` and 500 in state -- not the documented 1000.
+- `real-bucket-prevention-null-variable.json`: a create writing
+  `public_access_prevention = var.public_access_prevention`, the variable
+  defaulting to `null`. The plan's `variables` records `null`, and `after`
+  carries the argument as unknown exactly as when it is omitted: the provider's
+  default.
+
+## Skipped-deny fixtures added by the fourth review
+
+Hand-authored, by a script editing only the fields named here, from
+`fw-deny-above-direction-omitted`: `web` writes everything at priority 1000, and
+`block` denies everything at priority 100 on an update whose `before` equals its
+`after`. Each pair makes the deny skip on one ground: `-egress-` (direction),
+`-disabled-`, `-source-` (a source narrower than every address) and `-network-`
+(a literal network other than `web`'s). In `-carried` the configuration does not
+record that ground, or records a constant the state overrides, as
+`ignore_changes` leaves it; in `-written` it writes it.
+`fw-deny-disabled-written-egress-carried` skips on two grounds, a written
+`disabled` and a carried direction.
