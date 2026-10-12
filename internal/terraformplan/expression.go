@@ -50,7 +50,8 @@ type Expression struct {
 	// The comparison follows Terraform's encoding of a constant: an attribute
 	// written as blocks records every attribute, null where nothing was
 	// written, so a null matches anything; a list is compared as a set; a
-	// number and a string match by their text. An unknown or withheld value is
+	// number, a string and a bool match by their text, as Terraform converts a
+	// constant to the argument's type. An unknown or withheld value is
 	// never contradicted -- there is nothing to compare with.
 	Contradicted bool
 }
@@ -298,10 +299,14 @@ func valueAtPath(value Value, path string) (Value, bool) {
 // configuration records. It answers true wherever it cannot compare: the
 // question it serves is whether the value is provably not the one written.
 func constantMatches(constant any, value Value) bool {
-	if constant == nil || value.State() != StateKnown {
+	if value.State() != StateKnown {
 		return true
 	}
 	switch typed := constant.(type) {
+	case nil:
+		// Nothing written here: an attribute written as blocks records every
+		// attribute, null where the author wrote none.
+		return true
 	case []any:
 		if value.Kind() != KindArray || value.Len() != len(typed) {
 			return false
@@ -346,11 +351,11 @@ func constantMatches(constant any, value Value) bool {
 		}
 		switch value.Kind() {
 		case KindString:
-			return sameScalar(text, value.Text())
+			return text == value.Text()
 		case KindNumber:
-			return sameScalar(text, string(value.Number()))
+			return text == string(value.Number())
 		case KindBool:
-			return sameScalar(text, strconv.FormatBool(value.Bool()))
+			return text == strconv.FormatBool(value.Bool())
 		default:
 			return false
 		}
@@ -368,16 +373,4 @@ func scalarText(constant any) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-// sameScalar compares two scalars by their text, and two numbers by their
-// value: Terraform converts a constant to the argument's type, and the plan
-// may spell the converted value differently.
-func sameScalar(a, b string) bool {
-	if a == b {
-		return true
-	}
-	x, errX := strconv.ParseFloat(a, 64)
-	y, errY := strconv.ParseFloat(b, 64)
-	return errX == nil && errY == nil && x == y
 }

@@ -137,3 +137,11 @@ record that ground, or records a constant the state overrides, as
 `ignore_changes` leaves it; in `-written` it writes it.
 `fw-deny-disabled-written-egress-carried` skips on two grounds, a written
 `disabled` and a carried direction.
+
+`fw-deny-network-subject-carried` is `fw-deny-network-written` with `web` an
+update whose `before` equals its `after` while its configuration writes another
+network. `fw-denied-lower-source-carried` is `fw-denied-lower-direction-omitted`
+with the deny's direction written and the deny an update keeping
+`0.0.0.0/0` while its configuration writes `10.0.0.0/8`; the deny is applied.
+`fw-deny-source-tags-only` is `fw-deny-source-written` with the deny a create
+scoped by `source_tags`, its `source_ranges` unwritten and empty.

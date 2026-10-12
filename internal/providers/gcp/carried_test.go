@@ -84,6 +84,12 @@ func TestADenySkippedRestsTheVerdictOnWhyItWasSkipped(t *testing.T) {
 		{"fw-deny-network-carried", model.MethodPriorState},
 		{"fw-deny-network-written", model.MethodStated},
 		{"fw-deny-disabled-written-egress-carried", model.MethodStated},
+		// Two networks differ only if both are what they say: web's own is
+		// kept from state while its configuration writes another.
+		{"fw-deny-network-subject-carried", model.MethodPriorState},
+		// A deny scoped by a tag writes no source_ranges, and on a new
+		// firewall the empty list is the provider's default.
+		{"fw-deny-source-tags-only", model.MethodProviderDefault},
 	}
 	for _, c := range cases {
 		got := firewall(t, c.fixture).Network.PublicIngress
@@ -114,5 +120,15 @@ func TestOnlyABindingThatGrantsIsAProof(t *testing.T) {
 		if !got.IsKnown() || !got.Get() || got.Method() != c.want {
 			t.Errorf("%s: %s method = %q, want known true %q", c.fixture, got.State, got.Method(), c.want)
 		}
+	}
+}
+
+// A deny the verdict applies rests it on the deny's source as well: one that
+// reaches every address only because the state says so cancels the grant on
+// the state's word.
+func TestADenyAppliedThroughACarriedSourceIsPriorState(t *testing.T) {
+	got := firewall(t, "fw-denied-lower-source-carried").Network.PublicIngress
+	if !got.IsKnown() || got.Get() || got.Method() != model.MethodPriorState {
+		t.Errorf("%s method = %q, want known false %q", got.State, got.Method(), model.MethodPriorState)
 	}
 }

@@ -85,6 +85,14 @@ func TestAnExpressionSaysWhatItEvaluatesToOffline(t *testing.T) {
 			`{"v": {"value": {"on": null}}}`, `{"flag": {"references": ["var.v.on", "var.v"]}}`, `{}`, `{}`, `{}`,
 			"x_thing.t", EvaluationNull,
 		},
+		"an attribute of a root variable recorded as null itself": {
+			`{"v": {"value": null}}`, `{"flag": {"references": ["var.v.on", "var.v"]}}`, `{}`, `{}`, `{}`,
+			"x_thing.t", EvaluationUnresolved,
+		},
+		"an element of a root variable": {
+			`{"v": {"value": [null]}}`, `{"flag": {"references": ["var.v[0]", "var.v"]}}`, `{}`, `{}`, `{}`,
+			"x_thing.t", EvaluationUnresolved,
+		},
 		"two root variables, one null and one not": {
 			`{"a": {"value": null}, "b": {"value": true}}`, `{"flag": {"references": ["var.a", "var.b"]}}`,
 			`{}`, `{}`, `{}`,
@@ -209,6 +217,14 @@ func TestAConstantNotInAfterIsContradicted(t *testing.T) {
 			`{"settings": [{"ip": [{"enabled": true}]}]}`,
 			"settings.ip.enabled", true,
 		},
+		// A static block beside a dynamic one: the configuration records one
+		// block and the plan carries two, so no single value is the one
+		// written.
+		"one block recorded, two planned": {
+			`{"rule": [{"port": {"constant_value": 22}}]}`,
+			`{"rule": [{"port": 80}, {"port": 22}]}`,
+			"rule.port", false,
+		},
 		"a reference cannot be compared": {
 			`{"acl": {"references": ["x_other.o.acl", "x_other.o"]}}`, `{"acl": "public-read"}`, "acl", false,
 		},
@@ -256,6 +272,34 @@ func TestNoRecordedValueIsRetained(t *testing.T) {
 	for _, suffix := range []string{"-var", "-const", "-call", "-default"} {
 		if found := findCanary(reflect.ValueOf(plan), "plan", canary+suffix); found != "" {
 			t.Errorf("a recorded value was retained at %s", found)
+		}
+	}
+}
+
+// A value the plan does not know, or withholds, is never contradicted: there is
+// nothing to compare the constant with.
+func TestAValueThePlanDoesNotShowIsNeverContradicted(t *testing.T) {
+	raw := `{
+	  "format_version": "1.2",
+	  "resource_changes": [{"address": "x_thing.t", "mode": "managed", "type": "x_thing", "name": "t",
+	    "provider_name": "registry.terraform.io/hashicorp/x",
+	    "change": {"actions": ["update"], "before": {"acl": "a", "tag": "a"}, "after": {"acl": null, "tag": "b"},
+	               "after_unknown": {"acl": true}, "after_sensitive": {"tag": true}}}],
+	  "configuration": {"root_module": {"resources": [{"address": "x_thing.t", "mode": "managed",
+	    "type": "x_thing", "name": "t", "provider_config_key": "x",
+	    "expressions": {"acl": {"constant_value": "private"}, "tag": {"constant_value": "private"}}}]}}
+	}`
+	plan, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for _, path := range []string{"acl", "tag"} {
+		got, found := plan.ResourceChanges[0].Expression(path)
+		if !found || got.Evaluation != EvaluationConstant {
+			t.Fatalf("%s: %+v, found %v", path, got, found)
+		}
+		if got.Contradicted {
+			t.Errorf("%s: a value the plan does not show was contradicted", path)
 		}
 	}
 }

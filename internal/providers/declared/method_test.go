@@ -99,6 +99,16 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			flag, planned(t, noOp, hasPrior, entry(`{"flag": {"constant_value": false}}`)),
 			model.MethodPriorState,
 		},
+		// Not carried, so whatever the provider made of the constant, the
+		// plan is applying what the author wrote.
+		"written as another constant, on a create": {
+			flag, planned(t, create, noPrior, entry(`{"flag": {"constant_value": false}}`)),
+			model.MethodStated,
+		},
+		"written as another constant, on an update that moves it": {
+			flag, planned(t, update, changed, entry(`{"flag": {"constant_value": false}}`)),
+			model.MethodStated,
+		},
 		"written from a resource, carried": {
 			flag, planned(t, noOp, hasPrior, entry(`{"flag": {"references": ["x_other.o.flag", "x_other.o"]}}`)),
 			model.MethodStated,
@@ -383,6 +393,31 @@ func TestADeclaredEnvironmentSaysWhatTheConfigurationRecords(t *testing.T) {
 			fact := declared.Environment(c.change, "tags", model.CloudAWS)
 			if !fact.IsKnown() || fact.Method() != c.want {
 				t.Errorf("%s method = %q, want known %q", fact.State, fact.Method(), c.want)
+			}
+		})
+	}
+}
+
+// Carried means the whole value at the path is the one the object had: an
+// object that gains or loses a key, or a list that changes, is not carried.
+func TestCarriedComparesTheWholeValue(t *testing.T) {
+	cases := map[string]struct {
+		before, after string
+		want          bool
+	}{
+		"the same map":           {`{"tags": {"a": "1"}}`, `{"tags": {"a": "1"}}`, true},
+		"a map that gains a key": {`{"tags": {"a": "1"}}`, `{"tags": {"a": "1", "b": "2"}}`, false},
+		"a map that loses a key": {`{"tags": {"a": "1", "b": "2"}}`, `{"tags": {"a": "1"}}`, false},
+		"another value":          {`{"tags": {"a": "1"}}`, `{"tags": {"a": "2"}}`, false},
+		"a list that grows":      {`{"tags": ["a"]}`, `{"tags": ["a", "b"]}`, false},
+		"the same list":          {`{"tags": ["a", "b"]}`, `{"tags": ["a", "b"]}`, true},
+		"absent on both sides":   {`{}`, `{}`, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := plannedWith(t, update, c.before, c.after, "", `{}`)
+			if got := declared.Carried(change, "tags"); got != c.want {
+				t.Errorf("Carried = %v, want %v", got, c.want)
 			}
 		})
 	}
