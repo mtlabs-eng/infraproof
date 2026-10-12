@@ -55,7 +55,7 @@
           "network": "default",
           "priority": 100,
           "disabled": false,
-          "source_ranges": [],
+          "source_ranges": null,
           "source_tags": [
             "bastion"
           ],

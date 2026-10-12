@@ -90,6 +90,7 @@ func TestADenySkippedRestsTheVerdictOnWhyItWasSkipped(t *testing.T) {
 		// A deny scoped by a tag writes no source_ranges, and on a new
 		// firewall the empty list is the provider's default.
 		{"fw-deny-source-tags-only", model.MethodProviderDefault},
+		{"fw-deny-source-tags-only-empty", model.MethodProviderDefault},
 	}
 	for _, c := range cases {
 		got := firewall(t, c.fixture).Network.PublicIngress

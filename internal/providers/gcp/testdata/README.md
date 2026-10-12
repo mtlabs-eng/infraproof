@@ -144,4 +144,5 @@ network. `fw-denied-lower-source-carried` is `fw-denied-lower-direction-omitted`
 with the deny's direction written and the deny an update keeping
 `0.0.0.0/0` while its configuration writes `10.0.0.0/8`; the deny is applied.
 `fw-deny-source-tags-only` is `fw-deny-source-written` with the deny a create
-scoped by `source_tags`, its `source_ranges` unwritten and empty.
+scoped by `source_tags`, its `source_ranges` unwritten and `null`, which is what
+a real create plan of such a firewall carries; `-empty` holds `[]` instead.
