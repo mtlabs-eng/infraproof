@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.2",
+  "schema_version": "1.3",
   "decision": "UNKNOWN",
   "summary": "Public access could not be determined from the supplied plan.",
   "subject": {
@@ -36,6 +36,16 @@
           "resource_address": "aws_s3_bucket.assets",
           "path": "resource_changes[].change.after.policy",
           "redacted": true
+        }
+      ],
+      "verification_steps": [
+        {
+          "fact": "contract.object_storage.exposure",
+          "method": "intent-comparison"
+        },
+        {
+          "fact": "object_storage.policy_document",
+          "method": "plan-stated-value"
         }
       ],
       "remediation": "Supply the policy through a non-sensitive attribute, or accept the UNKNOWN result."

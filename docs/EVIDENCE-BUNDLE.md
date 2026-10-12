@@ -8,7 +8,7 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
 
 ```json
 {
-  "schema_version": "1.2",
+  "schema_version": "1.3",
   "decision": "BLOCK",
   "summary": "The requested private storage change enables public access.",
   "subject": {
@@ -65,6 +65,10 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
           }
         }
       ],
+      "verification_steps": [
+        { "fact": "contract.object_storage.exposure", "method": "intent-comparison" },
+        { "fact": "object_storage.public_access", "method": "plan-stated-value" }
+      ],
       "remediation": "Disable public access using the provider-supported controls."
     }
   ],
@@ -102,6 +106,8 @@ The Evidence Bundle is the canonical, machine-readable result of an InfraProof v
 - `intent_digest` is the same over the intent contract. A path names where a contract was read from, not which contract it was, so without it two different contracts at one path produce identical evidence.
 - Both digests are `sha256:` followed by sixty-four lowercase hexadecimal characters, and a bundle carrying anything else is invalid.
 - Timestamps are omitted from canonical golden output unless supplied externally.
+- `verification_steps` is the verification method every finding owes: one step per fact the verdict rests on, each a fact path and how it was established. A bundle declaring `1.3` or later carries at least one on every finding. A step carries no value. Steps are ordered by fact, then method, and take part in the total order of findings.
+- A verification method is never load-bearing. No decision, disposition or exit code depends on one.
 
 ## Enumerations
 
@@ -137,6 +143,14 @@ Verification status:
 VERIFIED | PARTIAL | NOT_AVAILABLE | FAILED
 ```
 
+Verification method:
+
+```text
+plan-stated-value | provider-default | policy-document-interpreted | reference-resolved | documented-table | plan-action | intent-comparison
+```
+
+A step's fact is a capability path for a plan fact, and `contract.<field>` for the comparison with the intent contract. `policy-document-interpreted` is distinct from `plan-stated-value` because it rests on this build's reading of a policy grammar.
+
 Unknown record:
 
 ```text
@@ -164,7 +178,7 @@ Exact codes are part of the public interface and require tests before release.
 
 ## Compatibility
 
-- Minor `1.x` additions must be backward-compatible. `location` arrived in `1.2`, on `resource` and on each evidence reference; a bundle of any version is valid without it. `intent_digest` arrived in `1.1`: a bundle declaring an earlier minor version predates the field and is valid without it, and one carrying the field must carry a well-formed one whatever version it declares.
+- Minor `1.x` additions must be backward-compatible. `verification_steps` arrived in `1.3`: a bundle declaring an earlier minor version is valid without it, and one carrying it must carry it well-formed whatever version it declares. `location` arrived in `1.2`, on `resource` and on each evidence reference; a bundle of any version is valid without it. `intent_digest` arrived in `1.1`: a bundle declaring an earlier minor version predates the field and is valid without it, and one carrying the field must carry a well-formed one whatever version it declares.
 - Consumers must ignore unknown fields within the same major version.
 - Breaking field or semantic changes require a new major version.
 

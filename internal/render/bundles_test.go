@@ -122,6 +122,7 @@ func redactedBundle() evidence.Bundle {
 			VerificationSteps: []evidence.VerificationStep{
 				// The plan itself marks the document sensitive.
 				{Fact: "object_storage.policy_document", Method: evidence.MethodPlanStatedValue},
+				{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
 			},
 		}},
 		Unknowns: []evidence.Unknown{{

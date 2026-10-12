@@ -132,6 +132,7 @@ func TestJSONDoesNotMutateInput(t *testing.T) {
 		Claim:       "An informational observation.",
 		Remediation: "No remediation required.",
 		VerificationSteps: []evidence.VerificationStep{
+			{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
 			{Fact: "object_storage.versioning", Method: evidence.MethodPlanStatedValue},
 		},
 		Evidence: []evidence.EvidenceRef{},
@@ -158,6 +159,7 @@ func TestJSONOrdersFindingsCanonically(t *testing.T) {
 		Claim:       "An informational observation.",
 		Remediation: "No remediation required.",
 		VerificationSteps: []evidence.VerificationStep{
+			{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
 			{Fact: "object_storage.versioning", Method: evidence.MethodPlanStatedValue},
 		},
 		Evidence: []evidence.EvidenceRef{},
@@ -209,6 +211,7 @@ func TestJSONRendersNilEvidenceAsArray(t *testing.T) {
 		Claim:       "An informational observation.",
 		Remediation: "No remediation required.",
 		VerificationSteps: []evidence.VerificationStep{
+			{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
 			{Fact: "object_storage.versioning", Method: evidence.MethodPlanStatedValue},
 		},
 		Evidence: nil,
