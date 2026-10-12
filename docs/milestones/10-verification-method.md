@@ -78,9 +78,18 @@ the bundle only as an unknown.
   mixes at most one input that is not stated. A site that would mix two is a
   finding the plan must report, not something to settle by inventing an order
   of strength in a public format.
-- **`PortInferred` is absorbed.** `Port.Method == documented-table` replaces it,
-  and `DATABASE_PORT_INFERRED` reads the method instead of the boolean, unchanged
-  in what it reports.
+- **A disjunctive grant takes the method of the proof the mapper cites.** AWS
+  storage settles on the first unblocked granting channel, the ACL before the
+  policy; GCP storage on any granting binding. A grant proven by a stated value
+  is `plan-stated-value` even when an interpreted policy document also grants,
+  because the stated proof is the one the finding cites.
+- **`PortInferred` stays.** Measured while planning: Azure's port comes from a
+  table keyed on the resource type, so its method is `documented-table`, and the
+  Azure mapper documents that port as certain rather than a default -- which is
+  why `PortInferred` is false there. The method says where a value came from;
+  `PortInferred` says whether the deployment could differ from it. Folding one
+  into the other would make `DATABASE_PORT_INFERRED` claim an Azure port is a
+  default. `DATABASE_PORT_INFERRED` keeps reading `PortInferred`.
 
 ## Shape
 
@@ -125,12 +134,14 @@ contract declares nothing: silence is read, and is what made the finding a
   - GCP network: a rule whose `direction` is defaulted is `provider-default`.
     Its citation is unchanged: `direction` is still not cited, because adding
     evidence would change bundles that criterion 8 holds fixed.
-  - AWS network: unwritten `ingress` read as no inline rules is
-    `provider-default`.
   - Azure database: the port derived from the resource type is
     `documented-table`.
   - AWS and GCP storage: a grant found by reading a policy document is
     `policy-document-interpreted`.
+  Measured while planning: AWS unwritten `ingress` only suppresses an unread
+  set. `Known(false)` requires the set to be stated and `Known(true)` rests on a
+  stated separate rule, so the default never decides a KNOWN fact and every AWS
+  network fact is `plan-stated-value`.
 - `EVIDENCE-BUNDLE.md`, `docs/examples/evidence-bundle.json`, `ARCHITECTURE.md`
   and `PRODUCT.md` where they describe a finding.
 
@@ -157,9 +168,9 @@ contract declares nothing: silence is read, and is what made the finding a
 3. For the two provider defaults that can produce a finding -- GCP
    `ipv4_enabled` and GCP `direction` -- a pair of fixtures, the argument written
    and the argument unwritten, produces findings that differ in the method of
-   that step and **nowhere else**. The two AWS defaults resolve to `Known(false)`
-   and can never produce a finding; a mapper test asserts their method on the
-   fact instead.
+   that step and **nowhere else**.
+   The AWS `publicly_accessible` default resolves to `Known(false)` and can
+   never produce a finding; a mapper test asserts its method on the fact instead.
 4. On AWS, where the port can enter a verdict, an engine-derived port is
    `documented-table` and a stated port is `plan-stated-value`, in the step. On
    Azure and GCP the port reaches no decision (a milestone 09 limitation), so a
@@ -170,10 +181,12 @@ contract declares nothing: silence is read, and is what made the finding a
    `reference-resolved` and the gate's own method.
 7. A `KNOWN` fact with no method cannot be constructed, and one with the zero
    method fails validation.
-8. No verdict changes. With `verification_steps` removed and `schema_version`
-   restored, every bundle this build produces for every committed plan fixture is
-   byte-identical to the one `3b50544` produces -- `DATABASE_PORT_INFERRED`
-   included. This is the criterion that makes re-recording 226 baselines safe.
+8. No verdict changes. The 226 baselines recorded at `3b50544` are not
+   re-recorded: the baseline test removes `verification_steps` and restores
+   `schema_version: "1.2"` before comparing, so every one of them still matches
+   byte for byte -- `DATABASE_PORT_INFERRED` included. The plan fixtures with no
+   baseline are compared by building binaries at `3b50544` and at the end of
+   this milestone, as milestone 09 did.
 9. Replacing any one `provider-default`, `documented-table` or
    `policy-document-interpreted` assignment with `plan-stated-value` breaks at
    least one test, measured by hand and recorded here.
@@ -194,8 +207,9 @@ contract declares nothing: silence is read, and is what made the finding a
   unknown is a statement that a method could not be completed.
 - Any policy that reads the method: blocking only on stated values, treating a
   default as a warning, or configuring `UNKNOWN`.
-- An automatic baseline-recording flag. The re-recording is done by a throwaway
-  script outside the repository, and criterion 8 is what makes it trustworthy.
+- Re-recording the baselines, or an automatic recording flag. They stay the
+  milestone 09 verdict baseline, and criterion 8 compares against them as they
+  are.
 
 ## Prerequisites
 
