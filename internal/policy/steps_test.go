@@ -339,3 +339,18 @@ func TestAJoinThatOnlyLocatesAGrantIsNotReferenceResolved(t *testing.T) {
 		step("database.admitted_by", evidence.MethodPlanStatedValue),
 		step("database.public_endpoint", evidence.MethodPlanStatedValue))
 }
+
+// The new methods reach a finding. real-rds-unwritten-update is a real update
+// plan whose Aurora instance writes neither publicly_accessible nor port, both
+// carried from state; the group in front of it opens 5432 alone, so the port
+// decided.
+func TestValuesCarriedFromStateArePriorStateInTheSteps(t *testing.T) {
+	result := evaluateDatabase(t, "aws", "real-rds-unwritten-update", requiringPrivate())
+	assertSteps(t, stepsOf(t, result, policy.RuleDatabasePublicReachable, "aws_rds_cluster_instance.i"),
+		step("contract.database.exposure", evidence.MethodIntentComparison),
+		step("database.admitted_by", evidence.MethodReferenceResolved),
+		step("database.port", evidence.MethodPriorState),
+		step("database.public_endpoint", evidence.MethodPriorState),
+		step("network.public_ingress", evidence.MethodPlanStatedValue),
+	)
+}
