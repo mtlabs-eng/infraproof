@@ -320,3 +320,22 @@ func TestAnUnusablePortBehindAGateOpenOnEveryPortNamesNoPortStep(t *testing.T) {
 		}
 	}
 }
+
+// D2: reference-resolved means a value obtainable only by resolving a
+// reference -- the security groups a database reaches through
+// vpc_security_group_ids. A grant written on its own ACL, IAM or firewall
+// resource is stated; the reference that joins it to a bucket or a server only
+// locates where it applies, and does not relabel it.
+func TestAJoinThatOnlyLocatesAGrantIsNotReferenceResolved(t *testing.T) {
+	assertSteps(t, stepsOf(t, evaluate(t, "aws", "public-acl-flags-written"), policy.RuleStoragePublic, "aws_s3_bucket.assets"),
+		step("contract.object_storage.exposure", evidence.MethodIntentComparison),
+		step("object_storage.public_access", evidence.MethodPlanStatedValue))
+	assertSteps(t, stepsOf(t, evaluate(t, "gcp", "public-iam-member-prevention-written"), policy.RuleStoragePublic, "google_storage_bucket.assets"),
+		step("contract.object_storage.exposure", evidence.MethodIntentComparison),
+		step("object_storage.public_access", evidence.MethodPlanStatedValue))
+	assertSteps(t, stepsOf(t, evaluateDatabase(t, "azure", "sql-reachable", requiringPrivate()),
+		policy.RuleDatabasePublicReachable, "azurerm_mssql_server.db"),
+		step("contract.database.exposure", evidence.MethodIntentComparison),
+		step("database.admitted_by", evidence.MethodPlanStatedValue),
+		step("database.public_endpoint", evidence.MethodPlanStatedValue))
+}
