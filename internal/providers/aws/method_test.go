@@ -219,3 +219,13 @@ func TestASeparateRuleAddressIsStatedEvenWhenTheConfigurationListsOnlyItsReferen
 		t.Errorf("method = %q (state %s), want known true %q", ingress.Method(), ingress.State, model.MethodStated)
 	}
 }
+
+// The proof of prevention rests on four flags read as true. None is Computed
+// and each defaults to false, so a true was written even where a hand-written
+// configuration lists only the block's bucket -- which private.json does.
+func TestAProofOfPreventionRestsOnFlagsSomebodyWrote(t *testing.T) {
+	access := bucket(t, "private").ObjectStorage.PublicAccess
+	if !access.IsKnown() || access.Get() || access.Method() != model.MethodStated {
+		t.Errorf("method = %q (state %s), want known false %q", access.Method(), access.State, model.MethodStated)
+	}
+}

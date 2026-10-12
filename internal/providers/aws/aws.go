@@ -236,16 +236,20 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	// plan also blocks the routes it cannot see — a policy or ACL applied
 	// outside this change.
 	//
-	// The proof rests on flags read as true. Every flag defaults to false, so a
-	// true is one somebody wrote, and this stays stated. The hand-written
-	// fixtures that omit a true flag from their configuration are a fixture
-	// shortcut, recorded in the testdata README, not a shape a plan produces.
+	// The proof rests on flags read as true. Every flag defaults to false and
+	// none is Computed, so a true is one somebody wrote -- stated, even beside
+	// a hand-written configuration that omits it -- unless the plan records
+	// nothing about the block's configuration at all.
 	if blocksEveryRoute(block) || blocksEveryRoute(account) {
 		proven := block
 		if !blocksEveryRoute(proven) {
 			proven = account
 		}
-		return model.Known(false, model.MethodStated, blockProvenance(proven)...).Canonical()
+		var methods []model.Method
+		for _, flag := range []string{"block_public_acls", "ignore_public_acls", "block_public_policy", "restrict_public_buckets"} {
+			methods = append(methods, declared.Argument{Path: flag}.MethodFor(*proven, false))
+		}
+		return model.Known(false, declared.Weakest(methods...), blockProvenance(proven)...).Canonical()
 	}
 	return model.Unknown[bool](sources...).Canonical()
 }
