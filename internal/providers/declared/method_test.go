@@ -434,6 +434,13 @@ func TestADeclaredEnvironmentSaysWhatTheConfigurationRecords(t *testing.T) {
 			`{"name": "t", "tags": {"environment": "prod", "team": "a"}}`,
 			`{"name": "t", "tags": {"environment": "prod", "team": "b"}}`,
 			entry(`{"tags": {"constant_value": {"environment": "staging", "team": "b"}}}`), `{}`), model.MethodPriorState},
+		// ignore_changes = [tags["team"]]: the map is contradicted at a key
+		// the declaration is not read from, and the key it is read from is
+		// the constant written.
+		"written and kept at the key, another key kept against its constant": {plannedWith(t, noOp,
+			`{"name": "t", "tags": {"environment": "prod", "team": "a"}}`,
+			`{"name": "t", "tags": {"environment": "prod", "team": "a"}}`,
+			entry(`{"tags": {"constant_value": {"environment": "prod", "team": "b"}}}`), `{}`), model.MethodStated},
 		// Two keys of the name with one value: the declaration rests on both.
 		"two keys of the name, one kept against its constant": {plannedWith(t, noOp,
 			`{"name": "t", "tags": {"environment": "prod", "Environment": "prod"}}`,
@@ -488,8 +495,10 @@ func TestCarriedComparesTheWholeValue(t *testing.T) {
 // rule as an attribute: on an update that keeps the blocks, constants are
 // compared with what the plan keeps -- stated where they are it, prior-state
 // where they are not -- and an attribute written as anything the plan does not
-// evaluate leaves nothing to compare, so the block is unrecorded. A new object,
-// or an update that moves the blocks, applies what the configuration writes.
+// evaluate leaves nothing to compare, so the block is unrecorded. An attribute
+// the block does not write, or writes as null, matches only an empty value. A
+// new object, or an update that moves the blocks, applies what the
+// configuration writes.
 func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
 	rules := declared.Argument{Path: "rule", Block: true}
 	inner := declared.Argument{Path: "settings.ip", Block: true}

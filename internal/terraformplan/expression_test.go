@@ -346,9 +346,10 @@ func TestAValueThePlanDoesNotShowIsNeverContradicted(t *testing.T) {
 // configuration records about the block is read from all of them at once.
 // It is a constant only where every attribute inside it, at every depth, is
 // one, and the constants are contradicted where the planned blocks are not,
-// one for one, blocks matching the written ones on the attributes written in
-// them -- the planned block carries every attribute, the written one only those
-// the author wrote.
+// one for one, blocks matching the written ones -- the planned block carries
+// every attribute, the written one only those the author wrote, and Terraform
+// plans the others empty, so an attribute nobody wrote that the plan holds a
+// value for is a contradiction.
 func TestABlockIsRecordedFromEverythingWrittenInIt(t *testing.T) {
 	const two = `{"rule": [{"port": 22, "cidr": "0.0.0.0/0"}, {"port": 80, "cidr": "0.0.0.0/0"}],
 	              "settings": [{"ip": [{"enabled": true, "cidr": "0.0.0.0/0"}], "mode": {"x": 1}}],
