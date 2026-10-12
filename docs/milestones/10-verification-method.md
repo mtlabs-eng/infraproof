@@ -228,11 +228,41 @@ Written from what the tests measure at the end of the milestone.
   showed that a provider writes the default of an unwritten Optional argument
   into `after` as a known value. A known value whose argument the configuration
   does not write is therefore `provider-default`, and the value itself is read
-  exactly as before. This applies to AWS `publicly_accessible`, GCP
-  `ipv4_enabled` and `direction`, and Azure `public_network_access_enabled`,
+  exactly as before. This applies to AWS `publicly_accessible` and the four S3
+  Block Public Access flags, GCP `ipv4_enabled`, firewall `direction` and
+  firewall `priority`, and Azure `public_network_access_enabled`,
   `allow_nested_items_to_be_public` and `container_access_type`. For the Azure
   container, a `false` takes the method of whichever setting settled it, and a
-  `true` is `provider-default` if either setting was defaulted.
+  `true` is `provider-default` if either setting was defaulted. An AWS ACL grant
+  is `provider-default` when a bucket or account block flag that answered "not
+  blocked" is unwritten. A bucket with no block resource at all has no flag
+  that could be unwritten, so it reads as before.
+- **An argument written as `null` reads as written.** The configuration lists an
+  argument the author wrote as `null`, either as a constant or through a
+  variable that defaults to `null`, exactly as it lists one with a value. The
+  provider then applies its default, and the method reads `plan-stated-value`.
+  The value is still the one milestone 09 read.
+- **The AWS policy channel is the one measured site that mixes two inputs that
+  are not stated.** A policy-document grant through a block flag nobody wrote
+  rests on the defaulted flag and on the interpreted document. As the product
+  decisions require, it is reported here and not resolved by an order of
+  strength: the method stays `policy-document-interpreted`, and the defaulted
+  flag does not show. The ACL channel has one non-stated input and takes it.
+  The AWS proof of prevention (`Known(false)` from a block) stays
+  `plan-stated-value`. It rests on flags read as `true`, every flag defaults to
+  `false`, so a `true` in a real plan is one somebody wrote.
+- **GCP firewall `disabled` carries no method of its own.** A verdict on an
+  enabled firewall rests on `disabled` being `false`, which the provider
+  defaults when it is unwritten. `disabled` is not cited as evidence, so it
+  takes no part in the method either, and the verdict takes the method of its
+  other inputs.
+- **The hand-written fixtures from before this milestone under-state what they
+  write.** Their configurations list only the arguments that carry a reference,
+  such as `bucket` or `network`, or a few more on Azure. So a value they set in
+  `after`, which the fixture meant as written, reads as unwritten, and a step on
+  it may say `provider-default`. The verdicts are unaffected. The fixtures added
+  for this milestone write what their pairs need. Each provider's testdata
+  README says which fixtures do this.
 - **A plan with no `configuration` section cannot tell.** Without it, nothing
   records what the author wrote, so a known value is reported as
   `plan-stated-value` even when the provider defaulted it. An absent or unknown
@@ -258,11 +288,16 @@ Written from what the tests measure at the end of the milestone.
   `provider-default`.** The configuration JSON does not represent dynamic blocks,
   so the switch reads as unwritten. Only the method is affected: the value is
   the one milestone 09 read.
-- **A GCP firewall whose own direction is defaulted labels its verdict
-  `provider-default` even when the verdict does not rest on direction.** The
-  same happens when a deny with a defaulted direction is applied and subtracts
-  nothing. This over-attributes the default. It never hides one, and no verdict
-  depends on it.
+- **A GCP firewall whose own direction or priority is defaulted labels its
+  verdict `provider-default` even when the verdict does not rest on it.** A
+  firewall's own priority matters only against a deny, yet a defaulted one
+  marks the verdict even when no deny was compared. The same happens when a
+  deny with a defaulted direction or priority is applied and subtracts nothing.
+  This over-attributes the default. It never hides one, and no verdict depends
+  on it. A deny's defaulted priority counts when the deny is skipped for
+  ordering above the rule, or when it is applied. A deny skipped for another
+  reason, such as its network or targets, does not count, because the verdict
+  does not rest on its priority.
 - **A database admission settled `false` through gates is labelled
   `reference-resolved`, even when the mapper's own fact was known `false`.** It
   never reaches a bundle. A known `false` admission produces no finding and no
@@ -296,6 +331,24 @@ on every plan under `internal/providers/*/testdata` and
 | differing | 0 |
 | exit codes (before = after) | 182 × `4`, 21 × `3`, 13 × `0`; none `10` or `11` |
 | fixtures added during milestone 10, so absent at `3b50544` | 15 |
+
+Re-measured after the final review's fixes, which added nine fixtures and
+edited only the `configuration` block of five more:
+
+| | count |
+| --- | --- |
+| plan fixtures compared | 225 |
+| identical after normalisation, same exit code and stderr | 225 |
+| differing | 0 |
+| exit codes (before = after) | 189 × `4`, 23 × `3`, 13 × `0`; none `10` or `11` |
+
+The nine added are AWS `public-acl-flags-written` and
+`public-acl-account-flags-defaulted`, and GCP `fw-priority-written`,
+`fw-priority-omitted`, `fw-priority-unwritten`,
+`fw-deny-above-priority-unwritten`, `fw-denied-lower-priority-unwritten`,
+`fw-public-priority-written` and `fw-public-direction-computed`. The five edited
+are AWS `public-acl-and-policy`, which now writes its block flags, and GCP's four
+`-direction-` fixtures, which now write `priority`.
 
 Every fixture that existed at `3b50544` also has a baseline. The 15 new ones are
 the only plan fixtures here with no baseline, and the *before* binary reads
@@ -340,7 +393,17 @@ site:
   `TestStorageAccessSettingsFollowTheConfiguration`, and
   `TestAnAccountAloneTakesItsGatesMethod` (azure).
 
-The re-measure is below.
+The re-measure is below. The final review then found two sites that still
+presented a default as stated: the AWS block flags and the GCP firewall
+`priority`. Their rows were measured the same way after the fix, and so were
+the rows of every other site in `aws/aws.go` and `gcp/network.go`. The GCP
+direction's known and unknown unwritten rows had stopped breaking anything.
+`fw-public` and `real-firewalls` also leave `priority` unwritten, so the
+priority now made their verdicts `provider-default` without the direction.
+Two fixtures that write `priority`, `fw-public-priority-written` and
+`fw-public-direction-computed`, make each row break a test again. The rows for
+other files were not re-run. Only tests were added since, so each still breaks
+at least what it lists, and possibly more.
 
 | site | mutation | broke |
 | --- | --- | --- |
@@ -348,15 +411,25 @@ The re-measure is below.
 | `aws/database.go` `publicly_accessible`, known and unwritten | stated | aws: `TestAKnownSwitchNobodyWroteIsTheProvidersDefault` |
 | `aws/database.go` `publicly_accessible`, unknown and unwritten | stated | aws: `TestAComputedSwitchNobodyWroteIsTheProvidersDefault` |
 | `aws/database.go` engine-derived port | stated | aws: `TestAnEngineDerivedPortIsFromTheTable`; policy: `TestADatabaseBehindAnOpenGroupNamesTheHopAndTheGate` |
-| `aws/aws.go` policy channel | stated | aws: `TestAPolicyGrantIsInterpreted`; policy: `TestAPolicyDocumentGrantIsInterpretedInTheStep` |
+| `aws/aws.go` policy channel | stated | aws: `TestAPolicyGrantIsInterpreted`, `TestAPolicyGrantThroughDefaultedFlagsStaysInterpreted`; policy: `TestAPolicyDocumentGrantIsInterpretedInTheStep` |
+| `aws/aws.go` ACL channel through a defaulted flag | stated | aws: `TestAnACLGrantThroughDefaultedBucketFlagsIsTheProvidersDefault`, `TestAnACLGrantThroughDefaultedAccountFlagsIsTheProvidersDefault`; policy: `TestTheBlockFlagDefaultChangesTheACLStep` |
+| `aws/aws.go` ACL channel, bucket block `defaulted` | false | aws: `TestAnACLGrantThroughDefaultedBucketFlagsIsTheProvidersDefault`; policy: `TestTheBlockFlagDefaultChangesTheACLStep` |
+| `aws/aws.go` ACL channel, account block `defaulted` | false | aws: `TestAnACLGrantThroughDefaultedAccountFlagsIsTheProvidersDefault` |
+| `aws/aws.go` `blockedBy` known `false` and unwritten | false | aws: `TestAnACLGrantThroughDefaultedBucketFlagsIsTheProvidersDefault`, `TestAnACLGrantThroughDefaultedAccountFlagsIsTheProvidersDefault`; policy: `TestTheBlockFlagDefaultChangesTheACLStep` |
+| `aws/aws.go` policy channel discards `defaulted` | `provider-default` | aws: `TestAPolicyGrantIsInterpreted`, `TestAPolicyGrantThroughDefaultedFlagsStaysInterpreted`; policy: `TestAPolicyDocumentGrantIsInterpretedInTheStep` |
 | `gcp/database.go` `ipv4_enabled`, known and unwritten | stated | gcp: `TestAnUnwrittenIPv4SwitchIsTheProvidersDefault`; policy: `TestTheIPv4DefaultChangesOneStepAndNothingElse` |
 | `gcp/database.go` `ipv4_enabled`, default branch | stated | gcp: `TestAnAbsentIPv4SwitchIsTheProvidersDefault` |
 | `gcp/database.go` version-derived port | stated | gcp: `TestAVersionDerivedPortIsFromTheTable` |
-| `gcp/network.go` firewall method | stated | gcp: `TestAKnownDirectionNobodyWroteIsTheProvidersDefault`, `TestAnOmittedDirectionIsTheProvidersDefault`, `TestAnUnknownUnwrittenDirectionIsTheProvidersDefault`, `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault`; policy: `TestTheDirectionDefaultChangesOneStepAndNothingElse` |
-| `gcp/network.go` deny direction (`defaulted \|\| deny.directionDefaulted`) | drop the deny | gcp: `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault` |
+| `gcp/network.go` firewall method | stated | gcp: `TestAKnownDirectionNobodyWroteIsTheProvidersDefault`, `TestAnOmittedDirectionIsTheProvidersDefault`, `TestAnUnknownUnwrittenDirectionIsTheProvidersDefault`, `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault`, `TestAnOmittedPriorityIsTheProvidersDefault`, `TestAKnownPriorityNobodyWroteIsTheProvidersDefault`, `TestADenySkippedOnADefaultedPriorityIsTheProvidersDefault`, `TestADenyAppliedOnADefaultedPriorityIsTheProvidersDefault`; policy: `TestTheDirectionDefaultChangesOneStepAndNothingElse` |
+| `gcp/network.go` deny direction (`defaulted \|\| deny.directionDefaulted`) | drop `\|\| deny.directionDefaulted` | gcp: `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault` |
 | `gcp/network.go` direction absent | false | gcp: `TestAnOmittedDirectionIsTheProvidersDefault`, `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault`; policy: `TestTheDirectionDefaultChangesOneStepAndNothingElse` |
-| `gcp/network.go` direction known and unwritten | false | gcp: `TestAKnownDirectionNobodyWroteIsTheProvidersDefault`; policy: `TestTheDirectionDefaultChangesOneStepAndNothingElse` |
-| `gcp/network.go` direction unknown and unwritten | false | gcp: `TestAnUnknownUnwrittenDirectionIsTheProvidersDefault` |
+| `gcp/network.go` direction known and unwritten | false | gcp: `TestAKnownDirectionNobodyWroteIsTheDefaultWithAWrittenPriority` |
+| `gcp/network.go` direction unknown and unwritten | false | gcp: `TestAnUnknownUnwrittenDirectionIsTheDefaultWithAWrittenPriority` |
+| `gcp/network.go` subject's `priorityDefaulted` | false | gcp: `TestAnOmittedPriorityIsTheProvidersDefault`, `TestAKnownPriorityNobodyWroteIsTheProvidersDefault` |
+| `gcp/network.go` priority absent | false | gcp: `TestAnOmittedPriorityIsTheProvidersDefault` |
+| `gcp/network.go` priority known and unwritten | false | gcp: `TestAKnownPriorityNobodyWroteIsTheProvidersDefault`, `TestADenySkippedOnADefaultedPriorityIsTheProvidersDefault`, `TestADenyAppliedOnADefaultedPriorityIsTheProvidersDefault` |
+| `gcp/network.go` deny skipped above the rule, its `priorityDefaulted` | drop | gcp: `TestADenySkippedOnADefaultedPriorityIsTheProvidersDefault` |
+| `gcp/network.go` deny applied (`\|\| deny.priorityDefaulted`) | drop `\|\| deny.priorityDefaulted` | gcp: `TestADenyAppliedOnADefaultedPriorityIsTheProvidersDefault` |
 | `gcp/gcp.go` `policy_data` | stated | gcp: `TestAPolicyDataGrantIsInterpreted` |
 | `gcp/gcp.go` `statedGrant`, member arm | force `false` | gcp: `TestAMemberGrantIsStated`, `TestAGrantProvenTwiceTakesTheStatedProof` |
 | `gcp/gcp.go` `statedGrant`, binding arm | force `false` | gcp: `TestABindingGrantIsStated` |
@@ -390,5 +463,4 @@ assign the method of a `Known(false)` admission. The database rule handles a kno
 `false` admission before it builds any finding, and it builds no finding and no
 step from it. The withdrawn branch produces an unknown, which carries no steps. A test
 would have to reach into the policy package's internals to pin a method nothing
-emits, so none was added. The first row is the over-attribution listed under the
-limitations above.
+emits, so none was added.

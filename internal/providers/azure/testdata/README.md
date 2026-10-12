@@ -110,3 +110,12 @@ method has to be the container's rather than the gate's.
 not -- the shape a real plan takes, since the provider defaults the gate to
 `true` -- and the grant is only as strong as the gate, so the method is the
 provider's default.
+
+The storage fixtures that predate milestone 10 do not write their storage
+settings in the configuration: `public-blob`, `public-container`,
+`private-container`, `private-account-forbids` and the others set
+`allow_nested_items_to_be_public` and `container_access_type` in `after` only,
+so both read as unwritten. A step on them may say `provider-default` for a value
+the fixture meant as written. The edits above write what each pair needs, and
+only those fixtures say which half is stated. The database fixtures do write
+`public_network_access_enabled`, except where a fixture above says otherwise.
