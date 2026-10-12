@@ -133,3 +133,48 @@ func TestABindingGrantIsStated(t *testing.T) {
 		t.Errorf("method = %q, want known true %q", access.Method(), model.MethodStated)
 	}
 }
+
+// The priority pair. Every firewall writes its direction, so direction is not
+// what can make a method the default. `web` is open because the deny sits above
+// it at 1001, so the verdict rests on both priorities.
+func TestAWrittenPriorityIsStated(t *testing.T) {
+	got := firewall(t, "fw-priority-written").Network.PublicIngress
+	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodStated {
+		t.Errorf("web = %s, method = %q, want known true %q", got.State, got.Method(), model.MethodStated)
+	}
+}
+
+// `web` carries no priority at all, and the mapper applies the documented 1000.
+func TestAnOmittedPriorityIsTheProvidersDefault(t *testing.T) {
+	got := firewall(t, "fw-priority-omitted").Network.PublicIngress
+	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodProviderDefault {
+		t.Errorf("web = %s, method = %q, want known true %q", got.State, got.Method(), model.MethodProviderDefault)
+	}
+}
+
+// A real plan carries the default 1000 as a known value; the configuration says
+// nobody wrote it.
+func TestAKnownPriorityNobodyWroteIsTheProvidersDefault(t *testing.T) {
+	got := firewall(t, "fw-priority-unwritten").Network.PublicIngress
+	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodProviderDefault {
+		t.Errorf("web = %s, method = %q, want known true %q", got.State, got.Method(), model.MethodProviderDefault)
+	}
+}
+
+// `web` writes its priority. The deny is skipped because its priority, which
+// nobody wrote, puts it above `web`, so the open verdict rests on that default.
+func TestADenySkippedOnADefaultedPriorityIsTheProvidersDefault(t *testing.T) {
+	got := firewall(t, "fw-deny-above-priority-unwritten").Network.PublicIngress
+	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodProviderDefault {
+		t.Errorf("web = %s, method = %q, want known true %q", got.State, got.Method(), model.MethodProviderDefault)
+	}
+}
+
+// `web` writes its priority. The deny that cancels it applies because of a
+// priority nobody wrote, so the closed verdict rests on that default.
+func TestADenyAppliedOnADefaultedPriorityIsTheProvidersDefault(t *testing.T) {
+	got := firewall(t, "fw-denied-lower-priority-unwritten").Network.PublicIngress
+	if !got.IsKnown() || got.Get() || got.Method() != model.MethodProviderDefault {
+		t.Errorf("web = %s, method = %q, want known false %q", got.State, got.Method(), model.MethodProviderDefault)
+	}
+}

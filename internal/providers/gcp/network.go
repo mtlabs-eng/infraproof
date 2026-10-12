@@ -64,7 +64,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange) model.NetworkCapabilities {
 
 	rule := readFirewall(subject)
-	defaulted := rule.directionDefaulted
+	defaulted := rule.directionDefaulted || rule.priorityDefaulted
 	capabilities := model.NetworkCapabilities{Unresolved: m.ingressGaps(subject)}
 
 	if rule.unread {
@@ -103,6 +103,10 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 				// Above this rule in the ordering, so it never reaches traffic
 				// this rule has already permitted. Equal is not above: a deny
 				// takes precedence over an allow of the same priority.
+				//
+				// The skip rests on the deny's priority, so a defaulted one is
+				// what the verdict rests on.
+				defaulted = defaulted || deny.priorityDefaulted
 				continue
 			}
 
@@ -123,7 +127,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			}
 
 			cited = append(cited, deny.cited...)
-			defaulted = defaulted || deny.directionDefaulted
+			defaulted = defaulted || deny.directionDefaulted || deny.priorityDefaulted
 			remaining, byProtocol = subtract(remaining, deny.denies, byProtocol)
 		}
 	}
@@ -237,7 +241,11 @@ type firewallRule struct {
 	// directionDefaulted reports that direction was unwritten and read as the
 	// provider's INGRESS default, so a verdict resting on this rule rests on it.
 	directionDefaulted bool
-	cited              []model.Provenance
+	// priorityDefaulted reports that priority was unwritten and read as the
+	// provider's documented 1000, so a verdict resting on the ordering rests on
+	// it.
+	priorityDefaulted bool
+	cited             []model.Provenance
 }
 
 // protocolPorts is one allow or deny block.
@@ -259,6 +267,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	case terraformplan.StateAbsent:
 		// The provider documents 1000 for an unstated priority, so an absent
 		// field is a value rather than a gap.
+		read.priorityDefaulted = true
 	case terraformplan.StateKnown:
 		value, err := priority.Number().Int64()
 		if priority.Kind() != terraformplan.KindNumber || err != nil {
@@ -266,6 +275,9 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 			return read
 		}
 		read.priority = int(value)
+		// A real plan carries the default as a known 1000; the configuration
+		// says whether anybody wrote it.
+		read.priorityDefaulted = declared.Unwritten(change, "priority")
 	default:
 		// `priority` is Optional and not Computed: the authoritative schema says
 		// so, and a real plan confirms it by emitting 1000 for an omitted one.

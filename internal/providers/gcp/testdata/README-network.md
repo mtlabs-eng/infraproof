@@ -103,3 +103,16 @@ Each fixture is one question:
 | `fw-public-direction-written` | `fw-public` with `direction = "INGRESS"` written in the configuration, so the same value is stated |
 | `fw-denied-lower-direction-omitted` | `fw-denied-lower` with `web`'s `direction` written and the cancelling deny `block`'s omitted, so `web`'s closed verdict is the provider's default only because of the deny's own direction |
 | `fw-deny-above-direction-omitted` | `fw-deny-above` with `web`'s `direction` written and the deny `block`'s omitted: the deny is skipped for priority and never applied, so `web` stays open and stated |
+| `fw-priority-written` | `fw-default-priority-open` with `direction` and `priority` written on both firewalls and `web` at 1000: the deny at 1001 is above `web`, which stays open and stated |
+| `fw-priority-omitted` | the same with `web`'s `priority` absent from `after` and from the configuration: the mapper applies the documented 1000, so the open verdict is the provider's default |
+| `fw-priority-unwritten` | the same with `web`'s `priority` known 1000 in `after` and unwritten, the shape a real plan emits for the default |
+| `fw-deny-above-priority-unwritten` | `fw-priority-written` with the deny `block`'s `priority` (1001) unwritten: the skip rests on the deny's default, so `web`'s open verdict is the provider's default |
+| `fw-denied-lower-priority-unwritten` | `fw-denied-lower` with `direction` written on both and `priority` written on `web` only: the deny at 100 applies on a priority nobody wrote, so `web`'s closed verdict is the provider's default |
+
+The four `-direction-` fixtures above also write `priority` on every firewall,
+so that only `direction` decides their method.
+
+Every other hand-authored fixture here predates milestone 10, and its
+configuration lists only the arguments that carry a reference (`network`). A
+`priority` or `direction` it sets in `after` therefore reads as unwritten, so a
+step on it may say `provider-default` for a value the fixture meant as written.

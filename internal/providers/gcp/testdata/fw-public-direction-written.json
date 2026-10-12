@@ -57,6 +57,9 @@
             },
             "direction": {
               "constant_value": "INGRESS"
+            },
+            "priority": {
+              "constant_value": 1000
             }
           }
         }
