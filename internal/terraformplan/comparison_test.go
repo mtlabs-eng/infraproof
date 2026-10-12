@@ -91,6 +91,14 @@ func TestAComparisonThePlanCannotCompleteIsUndecided(t *testing.T) {
 			`{"acl": "private"}`, `{}`, `{}`, "acl", false, false, false},
 		"one element withheld": {`{"ranges": {"constant_value": ["10.0.0.0/8", "192.168.0.0/16"]}}`,
 			`{"ranges": ["10.0.0.0/8", "x"]}`, `{}`, `{"ranges": [false, true]}`, "ranges", false, false, true},
+		"one element withheld, compared first": {`{"ranges": {"constant_value": ["192.168.0.0/16", "10.0.0.0/8"]}}`,
+			`{"ranges": ["10.0.0.0/8", "x"]}`, `{}`, `{"ranges": [false, true]}`, "ranges", false, false, true},
+		// The pairing exists -- 22 with the first, 80 with the second -- through
+		// values the plan withholds; pairing 22 with the second would leave
+		// 80 contradicted.
+		"a pairing through withheld values": {`{"rules": {"constant_value": [{"port": 22, "cidr": "a"}, {"port": 80, "cidr": "b"}]}}`,
+			`{"rules": [{"port": 22, "cidr": "x"}, {"port": 1, "cidr": "x"}]}`, `{}`,
+			`{"rules": [{"cidr": true}, {"port": true, "cidr": true}]}`, "rules", false, false, true},
 		"one element withheld, another contradicted": {`{"ranges": {"constant_value": ["10.0.0.0/8", "192.168.0.0/16"]}}`,
 			`{"ranges": ["0.0.0.0/0", "x"]}`, `{}`, `{"ranges": [false, true]}`, "ranges", false, true, false},
 		"a count the plan does not keep": {`{"ranges": {"constant_value": ["10.0.0.0/8"]}}`,
@@ -101,6 +109,16 @@ func TestAComparisonThePlanCannotCompleteIsUndecided(t *testing.T) {
 			`{"ingress": [{"from": 22, "note": "x"}]}`, `{}`, `{"ingress": [{"note": true}]}`, "ingress", false, false, true},
 		"a block one attribute of which is withheld": {`{"allow": [{"protocol": {"constant_value": "tcp"}}]}`,
 			`{"allow": [{"protocol": "tcp", "ports": ["22"]}]}`, `{}`, `{"allow": [{"ports": true}]}`, "allow", true, false, true},
+		// A static block beside a dynamic one: one recorded, two planned, so
+		// no single planned value is the one written.
+		"a path that names no single value": {`{"rule": [{"port": {"constant_value": 22}}]}`,
+			`{"rule": [{"port": 80}, {"port": 22}]}`, `{}`, `{}`, "rule.port", false, false, true},
+		"blocks the plan does not know": {`{"allow": [{"protocol": {"constant_value": "tcp"}}]}`,
+			`{"allow": null}`, `{"allow": true}`, `{}`, "allow", true, false, true},
+		"one of two blocks the plan does not know": {`{"allow": [{"protocol": {"constant_value": "tcp"}}, {"protocol": {"constant_value": "udp"}}]}`,
+			`{"allow": [{"protocol": "tcp"}, null]}`, `{"allow": [false, true]}`, `{}`, "allow", true, false, true},
+		"a block the plan does not hold": {`{"allow": [{"protocol": {"constant_value": "tcp"}}]}`,
+			`{}`, `{}`, `{}`, "allow", true, true, false},
 		"a block one attribute of which is unknown": {`{"allow": [{"protocol": {"constant_value": "tcp"}}]}`,
 			`{"allow": [{"protocol": null}]}`, `{"allow": [{"protocol": true}]}`, `{}`, "allow", true, false, true},
 	}
@@ -245,18 +263,23 @@ func TestAValueIsCarriedWhateverItsSensitivity(t *testing.T) {
 		path                                                         []string
 		want                                                         bool
 	}{
-		"a map, one key sensitive":                  {kept, kept, marked, marked, `{}`, []string{"tags"}, true},
-		"the sensitive key itself":                  {kept, kept, marked, marked, `{}`, []string{"tags", "owner"}, true},
-		"a key beside a sensitive one that moves":   {kept, moved, marked, marked, `{}`, []string{"tags", "environment"}, true},
-		"the map, its sensitive key moved":          {kept, moved, marked, marked, `{}`, []string{"tags"}, false},
-		"a sensitive key that moves":                {kept, moved, marked, marked, `{}`, []string{"tags", "owner"}, false},
-		"marked only after":                         {kept, kept, `{}`, marked, `{}`, []string{"tags"}, true},
-		"a list, one element sensitive":             {kept, kept, marked, marked, `{}`, []string{"rules"}, true},
-		"a list, the sensitive element moved":       {kept, moved, marked, marked, `{}`, []string{"rules"}, false},
-		"not marked":                                {kept, kept, `{}`, `{}`, `{}`, []string{"tags"}, true},
-		"not yet known":                             {kept, `{"tags": {"environment": "prod"}}`, `{}`, `{}`, `{"tags": {"owner": true}}`, []string{"tags"}, false},
-		"not yet known, null on both sides":         {`{"tags": null}`, `{"tags": null}`, `{}`, `{}`, `{"tags": true}`, []string{"tags"}, false},
-		"absent before":                             {`{}`, kept, `{}`, `{}`, `{}`, []string{"tags"}, false},
+		"a map, one key sensitive":                {kept, kept, marked, marked, `{}`, []string{"tags"}, true},
+		"the sensitive key itself":                {kept, kept, marked, marked, `{}`, []string{"tags", "owner"}, true},
+		"a key beside a sensitive one that moves": {kept, moved, marked, marked, `{}`, []string{"tags", "environment"}, true},
+		"the map, its sensitive key moved":        {kept, moved, marked, marked, `{}`, []string{"tags"}, false},
+		"a sensitive key that moves":              {kept, moved, marked, marked, `{}`, []string{"tags", "owner"}, false},
+		"marked only after":                       {kept, kept, `{}`, marked, `{}`, []string{"tags"}, true},
+		"a list, one element sensitive":           {kept, kept, marked, marked, `{}`, []string{"rules"}, true},
+		"a list, the sensitive element moved":     {kept, moved, marked, marked, `{}`, []string{"rules"}, false},
+		"not marked":                              {kept, kept, `{}`, `{}`, `{}`, []string{"tags"}, true},
+		"not yet known":                           {kept, `{"tags": {"environment": "prod"}}`, `{}`, `{}`, `{"tags": {"owner": true}}`, []string{"tags"}, false},
+		"not yet known, null on both sides":       {`{"tags": null}`, `{"tags": null}`, `{}`, `{}`, `{"tags": true}`, []string{"tags"}, false},
+		"absent before":                           {`{}`, kept, `{}`, `{}`, `{}`, []string{"tags"}, false},
+		// No prior value at the place is not a null one.
+		"absent before, null after": {`{}`, `{"tags": null}`, `{}`, `{}`, `{}`, []string{"tags"}, false},
+		// A mask can name a key the planned value omits; nothing is planned
+		// there to be kept.
+		"named only by a mask after":                {`{"tags": null}`, `{}`, `{}`, `{"tags": true}`, `{}`, []string{"tags"}, false},
 		"no prior state":                            {`null`, kept, `{}`, `{}`, `{}`, []string{"tags"}, false},
 		"before not an object":                      {`{"tags": "x"}`, kept, `{}`, `{}`, `{}`, []string{"tags", "environment"}, false},
 		"before a list that is not the planned one": {`{"rules": [{"port": 22}]}`, kept, `{}`, `{}`, `{}`, []string{"rules"}, false},
@@ -282,5 +305,12 @@ func TestAValueIsCarriedWhateverItsSensitivity(t *testing.T) {
 	rules := change.After.Field("rules")
 	if !rules.At(0).Carried() || rules.At(1).Carried() {
 		t.Errorf("elements: %v %v, want true false", rules.At(0).Carried(), rules.At(1).Carried())
+	}
+	// An element not yet known is not carried, even where the plan writes
+	// null for it on both sides.
+	change = parse(t, `{"rules": [null, 1]}`, `{"rules": [null, 1]}`, `{}`, `{}`, `{"rules": [true, false]}`)
+	rules = change.After.Field("rules")
+	if rules.At(0).Carried() || !rules.At(1).Carried() {
+		t.Errorf("elements: %v %v, want false true", rules.At(0).Carried(), rules.At(1).Carried())
 	}
 }

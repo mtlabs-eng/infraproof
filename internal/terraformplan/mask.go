@@ -314,28 +314,26 @@ func markCarried(value Value, before any, beforePresent bool, after any, afterPr
 		return value
 	}
 	value.carried = beforePresent && afterPresent && !unknown.marks() && reflect.DeepEqual(before, after)
-	if value.sensitive || value.unknown {
-		// Nothing was kept beneath it to mark.
-		return value
-	}
+	// A withheld node kept nothing beneath it, and has no kind to descend by.
+	// A prior value of another shape holds nothing at the places below.
 	switch value.kind {
 	case KindObject:
-		beforeObject, beforeIsObject := before.(map[string]any)
+		beforeObject, _ := before.(map[string]any)
 		afterObject, _ := after.(map[string]any)
 		object := make(map[string]Value, len(value.object))
 		for name, child := range value.object {
 			childBefore, inBefore := beforeObject[name]
 			childAfter, inAfter := afterObject[name]
-			object[name] = markCarried(child, childBefore, beforeIsObject && inBefore, childAfter, inAfter, unknown.field(name))
+			object[name] = markCarried(child, childBefore, inBefore, childAfter, inAfter, unknown.field(name))
 		}
 		value.object = object
 	case KindArray:
-		beforeArray, beforeIsArray := before.([]any)
+		beforeArray, _ := before.([]any)
 		afterArray, _ := after.([]any)
 		array := make([]Value, len(value.array))
 		for i, child := range value.array {
 			var childBefore, childAfter any
-			inBefore := beforeIsArray && i < len(beforeArray)
+			inBefore := i < len(beforeArray)
 			if inBefore {
 				childBefore = beforeArray[i]
 			}

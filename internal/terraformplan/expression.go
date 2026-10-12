@@ -366,8 +366,8 @@ func empty(value Value) bool {
 }
 
 // matchSet pairs each of count written elements with a distinct element of a
-// planned list, greedily: a planned element that matches first, one the plan
-// does not show otherwise. A written element left with neither contradicts;
+// planned list, greedily: the first planned element that matches, or else the
+// first the plan does not show. A written element left with neither contradicts;
 // one paired with an element the plan does not show leaves the answer
 // undecided. Greedy pairing can miss a pairing that exists, which reads as a
 // contradiction, never as a match.
@@ -382,9 +382,6 @@ func matchSet(count int, value Value, compare func(i int, planned Value) compari
 			}
 			if candidate := compare(i, value.At(j)); candidate < best {
 				best, at = candidate, j
-				if candidate == matched {
-					break
-				}
 			}
 		}
 		if at < 0 {

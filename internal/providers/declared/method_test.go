@@ -562,6 +562,11 @@ func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
 			model.MethodConfigurationUnrecorded},
 		"an attribute of a repeated block, on a create": {leaf, noPrior, two, create, constants,
 			model.MethodStated},
+		// Written once -- a static block beside a dynamic one -- and planned
+		// twice: no single planned value is the one written.
+		"an attribute of a block written once, planned twice, carried": {leaf, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`),
+			model.MethodConfigurationUnrecorded},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

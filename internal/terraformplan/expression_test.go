@@ -400,6 +400,10 @@ func TestABlockIsRecordedFromEverythingWrittenInIt(t *testing.T) {
 			"settings.ip", EvaluationConstant, true},
 		"the outer block, through the inner": {`{}`, `{"settings": [{"ip": [{"cidr": {"constant_value": "10.0.0.0/8"}}]}]}`,
 			"settings", EvaluationConstant, true},
+		// Contradicted through the inner block alone: everything else the
+		// outer block holds is written.
+		"the outer block, only the inner contradicted": {`{}`, `{"settings": [{"mode": {"x": {"constant_value": 1}}, "ip": [{"enabled": {"constant_value": true}, "cidr": {"constant_value": "10.0.0.0/8"}}]}]}`,
+			"settings", EvaluationConstant, true},
 		"the outer block, a reference in the inner": {`{}`, `{"settings": [{"ip": [{"cidr": {"references": ["local.c"]}}]}]}`,
 			"settings", EvaluationDeferred, false},
 		"a single block inside a block": {`{}`, `{"settings": [{"mode": {"x": {"constant_value": 1}}, "ip": [{"enabled": {"constant_value": true}, "cidr": {"constant_value": "0.0.0.0/0"}}]}]}`,
