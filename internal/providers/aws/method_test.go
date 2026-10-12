@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers"
 )
 
 func TestAnUnwrittenSwitchIsTheProvidersDefault(t *testing.T) {
@@ -227,5 +228,24 @@ func TestAProofOfPreventionRestsOnFlagsSomebodyWrote(t *testing.T) {
 	access := bucket(t, "private").ObjectStorage.PublicAccess
 	if !access.IsKnown() || access.Get() || access.Method() != model.MethodStated {
 		t.Errorf("method = %q (state %s), want known false %q", access.Method(), access.State, model.MethodStated)
+	}
+}
+
+// The same plan without its configuration records nothing about who wrote the
+// flags, so the proof is not stated.
+func TestAProofOfPreventionWithoutConfigurationIsUnrecorded(t *testing.T) {
+	parsed := plan(t, "private")
+	for i := range parsed.ResourceChanges {
+		parsed.ResourceChanges[i].Declared = false
+		parsed.ResourceChanges[i].Configured = false
+		parsed.ResourceChanges[i].Stated = nil
+	}
+	found, ok := providers.Normalize(parsed, providers.Default()).At("aws_s3_bucket.assets")
+	if !ok || found.ObjectStorage == nil {
+		t.Fatal("no bucket at aws_s3_bucket.assets")
+	}
+	access := found.ObjectStorage.PublicAccess
+	if !access.IsKnown() || access.Get() || access.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q (state %s), want known false %q", access.Method(), access.State, model.MethodConfigurationUnrecorded)
 	}
 }
