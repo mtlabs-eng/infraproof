@@ -109,9 +109,28 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			flag, planned(t, update, changed, entry(`{"flag": {"constant_value": false}}`)),
 			model.MethodStated,
 		},
+		// The plan records no value for a reference, so on an update that
+		// keeps the value nothing separates the write from a value
+		// ignore_changes kept: unrecorded, by the decision recorded in
+		// milestone 10, even where the write is what the object had.
 		"written from a resource, carried": {
 			flag, planned(t, noOp, hasPrior, entry(`{"flag": {"references": ["x_other.o.flag", "x_other.o"]}}`)),
+			model.MethodConfigurationUnrecorded,
+		},
+		"written from a resource, on a create": {
+			flag, planned(t, create, noPrior, entry(`{"flag": {"references": ["x_other.o.flag", "x_other.o"]}}`)),
 			model.MethodStated,
+		},
+		// ignore_changes keeps the prior value, so a value the update moves
+		// is the configuration's.
+		"written from a resource, on an update that moves it": {
+			flag, planned(t, update, changed, entry(`{"flag": {"references": ["x_other.o.flag", "x_other.o"]}}`)),
+			model.MethodStated,
+		},
+		// A function of constants records neither a value nor a reference.
+		"written as a function, carried": {
+			flag, planned(t, noOp, hasPrior, entry(`{"flag": {}}`)),
+			model.MethodConfigurationUnrecorded,
 		},
 		"written as null, on a create": {
 			flag, planned(t, create, noPrior, entry(`{"flag": {"constant_value": null}}`)),
@@ -126,8 +145,20 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 				`{"v": {"value": null}}`),
 			model.MethodPriorState,
 		},
-		"written as a variable recorded with a value": {
+		// The plan records the variable's value, not what the expression
+		// makes of it: `!var.v` is recorded exactly as `var.v`.
+		"written as a variable recorded with a value, carried": {
 			flag, plannedWith(t, update, hasPrior, current, entry(`{"flag": {"references": ["var.v"]}}`),
+				`{"v": {"value": true}}`),
+			model.MethodConfigurationUnrecorded,
+		},
+		"written as a variable recorded with a value, on a create": {
+			flag, plannedWith(t, create, noPrior, current, entry(`{"flag": {"references": ["var.v"]}}`),
+				`{"v": {"value": true}}`),
+			model.MethodStated,
+		},
+		"written as a variable recorded with a value, moved": {
+			flag, plannedWith(t, update, changed, current, entry(`{"flag": {"references": ["var.v"]}}`),
 				`{"v": {"value": true}}`),
 			model.MethodStated,
 		},
@@ -243,6 +274,12 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 		"required, inside a block written": {
 			requiredNested, planned(t, create, noPrior, entry(`{"settings": [{"tier": {"constant_value": "a"}}]}`)),
 			model.MethodStated,
+		},
+		// Written, but the configuration records no expression to compare
+		// with the value the update keeps.
+		"required, an entry without expressions, carried": {
+			required, planned(t, update, hasPrior, entry("")),
+			model.MethodConfigurationUnrecorded,
 		},
 		"required, written as another constant, carried": {
 			required, planned(t, noOp, hasPrior, entry(`{"flag": {"constant_value": false}}`)),
@@ -418,6 +455,85 @@ func TestCarriedComparesTheWholeValue(t *testing.T) {
 			change := plannedWith(t, update, c.before, c.after, "", `{}`)
 			if got := declared.Carried(change, "tags"); got != c.want {
 				t.Errorf("Carried = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Block syntax is decided by the attributes written inside the block, the same
+// rule as an attribute: on an update that keeps the blocks, constants are
+// compared with what the plan keeps -- stated where they are it, prior-state
+// where they are not -- and an attribute written as anything the plan does not
+// evaluate leaves nothing to compare, so the block is unrecorded. A new object,
+// or an update that moves the blocks, applies what the configuration writes.
+func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
+	rules := declared.Argument{Path: "rule", Block: true}
+	inner := declared.Argument{Path: "settings.ip", Block: true}
+	leaf := declared.Argument{Path: "rule.port"}
+	const (
+		two      = `{"rule": [{"port": 22, "cidr": "0.0.0.0/0"}, {"port": 80, "cidr": "0.0.0.0/0"}]}`
+		moved    = `{"rule": [{"port": 22, "cidr": "10.0.0.0/8"}, {"port": 80, "cidr": "0.0.0.0/0"}]}`
+		nestedIP = `{"settings": [{"ip": [{"enabled": true, "cidr": "0.0.0.0/0"}]}]}`
+	)
+	constants := entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`)
+	cases := map[string]struct {
+		argument      declared.Argument
+		before, after string
+		actions       string
+		configuration string
+		want          model.Method
+	}{
+		"constants, carried, in another order": {rules, two, two, noOp, constants, model.MethodStated},
+		"constants, on a create":               {rules, noPrior, two, create, constants, model.MethodStated},
+		"constants the plan does not keep": {rules, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 443}}, {"port": {"constant_value": 22}}]}`),
+			model.MethodPriorState},
+		"a constant inside a block the plan does not keep": {rules, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}, "cidr": {"constant_value": "10.0.0.0/8"}}]}`),
+			model.MethodPriorState},
+		"more blocks written than kept": {rules, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}}, {"port": {"constant_value": 22}}]}`),
+			model.MethodPriorState},
+		// ignore_changes keeps a block the author no longer writes.
+		"fewer blocks written than kept": {rules, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`),
+			model.MethodPriorState},
+		"null inside a block is no write": {rules, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 80}, "cidr": {"constant_value": null}}, {"port": {"constant_value": 22}}]}`),
+			model.MethodStated},
+		"a variable inside a block, carried": {rules, two, two, noOp,
+			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"references": ["var.p"]}}]}`),
+			model.MethodConfigurationUnrecorded},
+		"a reference inside a block, carried": {rules, two, two, update,
+			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"constant_value": 22}, "cidr": {"references": ["local.c"]}}]}`),
+			model.MethodConfigurationUnrecorded},
+		"a reference inside a block, on a create": {rules, noPrior, two, create,
+			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"references": ["local.p"]}}]}`),
+			model.MethodStated},
+		"a reference inside a block, moved": {rules, moved, two, update,
+			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"references": ["local.p"]}}]}`),
+			model.MethodStated},
+		"a block inside a block, constants, carried": {inner, nestedIP, nestedIP, noOp,
+			entry(`{"settings": [{"ip": [{"cidr": {"constant_value": "0.0.0.0/0"}}]}]}`),
+			model.MethodStated},
+		"a block inside a block, contradicted": {inner, nestedIP, nestedIP, noOp,
+			entry(`{"settings": [{"ip": [{"cidr": {"constant_value": "10.0.0.0/8"}}]}]}`),
+			model.MethodPriorState},
+		"a block inside a block, a reference, carried": {inner, nestedIP, nestedIP, noOp,
+			entry(`{"settings": [{"ip": [{"cidr": {"references": ["var.c"]}}]}]}`),
+			model.MethodConfigurationUnrecorded},
+		// An attribute written in more than one block has no one expression to
+		// compare, so where the plan keeps it, nothing says it was the write.
+		"an attribute of a repeated block, carried": {leaf, two, two, noOp, constants,
+			model.MethodConfigurationUnrecorded},
+		"an attribute of a repeated block, on a create": {leaf, noPrior, two, create, constants,
+			model.MethodStated},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := plannedWith(t, c.actions, c.before, c.after, c.configuration, `{}`)
+			if got := c.argument.Method(change); got != c.want {
+				t.Errorf("Method = %q, want %q", got, c.want)
 			}
 		})
 	}

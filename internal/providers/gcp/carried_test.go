@@ -133,3 +133,58 @@ func TestADenyAppliedThroughACarriedSourceIsPriorState(t *testing.T) {
 		t.Errorf("%s method = %q, want known false %q", got.State, got.Method(), model.MethodPriorState)
 	}
 }
+
+// A value written by a reference, a variable or a function is one whose value
+// the plan does not record. Where an update keeps the value the object had, the
+// plan cannot separate the author's write from a value ignore_changes kept from
+// state, so the method is configuration-unrecorded -- with ignore_changes and,
+// by the decision recorded in milestone 10, without it. Block syntax is decided
+// by the attributes inside the block: one written from a variable makes the
+// block unrecorded; constants are compared with the value kept, as a constant
+// in attribute syntax is.
+func TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue(t *testing.T) {
+	cases := []struct {
+		fixture, address, why string
+		fact                  func(model.NormalizedResource) model.Fact[bool]
+		want                  model.Method
+	}{
+		{"real-reference-write-ignored", "google_storage_bucket.b", "a member and a prevention written from variables",
+			func(r model.NormalizedResource) model.Fact[bool] { return r.ObjectStorage.PublicAccess },
+			model.MethodConfigurationUnrecorded},
+		{"real-reference-write-ignored", "google_compute_firewall.fw", "a source written from a local",
+			func(r model.NormalizedResource) model.Fact[bool] { return r.Network.PublicIngress },
+			model.MethodConfigurationUnrecorded},
+		// The allow block writes 443 in constants and the state holds 22.
+		{"real-reference-write-ignored", "google_compute_firewall.blocks", "constant blocks the state overrides",
+			func(r model.NormalizedResource) model.Fact[bool] { return r.Network.PublicIngress },
+			model.MethodPriorState},
+		{"real-block-reference-unchanged", "google_compute_firewall.fw", "a block with a port written from a variable",
+			func(r model.NormalizedResource) model.Fact[bool] { return r.Network.PublicIngress },
+			model.MethodConfigurationUnrecorded},
+		{"real-block-reference-unchanged", "google_compute_firewall.const", "the same block in constants",
+			func(r model.NormalizedResource) model.Fact[bool] { return r.Network.PublicIngress },
+			model.MethodStated},
+		{"real-sql-networks-carried", "google_sql_database_instance.ref", "a network written from a variable",
+			func(r model.NormalizedResource) model.Fact[bool] { return r.Database.AdmitsAnyAddress },
+			model.MethodConfigurationUnrecorded},
+		{"real-sql-networks-carried", "google_sql_database_instance.const", "the same network in constants",
+			func(r model.NormalizedResource) model.Fact[bool] { return r.Database.AdmitsAnyAddress },
+			model.MethodStated},
+		// The network writes 10.0.0.0/8 in constants and the state holds
+		// 0.0.0.0/0.
+		{"real-sql-networks-carried", "google_sql_database_instance.ignored", "a constant network the state overrides",
+			func(r model.NormalizedResource) model.Fact[bool] { return r.Database.AdmitsAnyAddress },
+			model.MethodPriorState},
+	}
+	for _, c := range cases {
+		r, ok := methodAt(t, c.fixture, c.address)
+		if !ok {
+			t.Fatalf("%s has no %s", c.fixture, c.address)
+		}
+		got := c.fact(r)
+		if !got.IsKnown() || !got.Get() || got.Method() != c.want {
+			t.Errorf("%s, %s: %s %v method = %q, want known true %q",
+				c.fixture, c.why, got.State, got.IsKnown() && got.Get(), got.Method(), c.want)
+		}
+	}
+}

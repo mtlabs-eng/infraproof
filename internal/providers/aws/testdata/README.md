@@ -174,3 +174,21 @@ the two credential arguments and every password value removed afterwards.
   inline rule, beside a separate rule that writes `10.0.0.0/8` with
   `ignore_changes = [cidr_ipv4]` and `0.0.0.0/0` on 443 in state, and a third
   rule that opens 80 to `10.0.0.0/8` only.
+- `real-reference-write-ignored.json`: `real-ignore-changes`'s state and
+  lifecycle blocks with every overridden value written by something the plan
+  does not evaluate: the bucket `tags = { environment = var.environment }`
+  (`dev`), the ACL `acl = var.acl` (`private`), and the group's inline rule
+  `cidr_blocks = [local.cidr]` (`10.0.0.0/8`). The configuration records only
+  the references; every `after` is the state's.
+- `real-reference-write-unchanged.json`: no `ignore_changes`. Against the same
+  state, `tags` from a variable holding `prod`, `acl = lower(var.acl)` holding
+  `public-read` -- recorded exactly as `var.acl` -- and an inline rule from a
+  variable holding `0.0.0.0/0`, each equal to the state's, so the plan is a
+  no-op; beside group `const`, the same rule written as constants.
+- `real-reference-write-moved.json`: the same writes against a state holding
+  `environment = dev`, `private` and 22 from `10.0.0.0/8`: the update moves each
+  value to the configuration's.
+- `real-function-write-unchanged.json`: a bucket writing
+  `tags = { environment = lower("PROD") }`, which the configuration records as
+  `{}` -- neither a value nor a reference -- against a state holding
+  `environment = prod`; a no-op.

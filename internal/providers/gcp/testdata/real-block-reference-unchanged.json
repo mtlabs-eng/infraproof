@@ -1,0 +1,617 @@
+{
+ "format_version": "1.2",
+ "terraform_version": "1.14.0",
+ "variables": {
+  "port": {
+   "value": "22"
+  }
+ },
+ "planned_values": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_compute_firewall.const",
+     "mode": "managed",
+     "type": "google_compute_firewall",
+     "name": "const",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 1,
+     "values": {
+      "allow": [
+       {
+        "ports": [
+         "22"
+        ],
+        "protocol": "tcp"
+       }
+      ],
+      "creation_timestamp": "2024-01-01T00:00:00Z",
+      "deny": [],
+      "description": "",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "enable_logging": null,
+      "id": "projects/fake-project/global/firewalls/const",
+      "log_config": [],
+      "name": "const",
+      "network": "https://www.googleapis.com/compute/v1/projects/fake-project/global/networks/default",
+      "params": [],
+      "priority": 1000,
+      "project": "fake-project",
+      "self_link": "https://www.googleapis.com/compute/v1/projects/fake-project/global/firewalls/const",
+      "source_ranges": [
+       "0.0.0.0/0"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": [],
+      "timeouts": null
+     },
+     "sensitive_values": {
+      "allow": [
+       {
+        "ports": [
+         false
+        ]
+       }
+      ],
+      "deny": [],
+      "destination_ranges": [],
+      "log_config": [],
+      "params": [],
+      "source_ranges": [
+       false
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": []
+     }
+    },
+    {
+     "address": "google_compute_firewall.fw",
+     "mode": "managed",
+     "type": "google_compute_firewall",
+     "name": "fw",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 1,
+     "values": {
+      "allow": [
+       {
+        "ports": [
+         "22"
+        ],
+        "protocol": "tcp"
+       }
+      ],
+      "creation_timestamp": "2024-01-01T00:00:00Z",
+      "deny": [],
+      "description": "",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "enable_logging": null,
+      "id": "projects/fake-project/global/firewalls/fw",
+      "log_config": [],
+      "name": "fw",
+      "network": "https://www.googleapis.com/compute/v1/projects/fake-project/global/networks/default",
+      "params": [],
+      "priority": 1000,
+      "project": "fake-project",
+      "self_link": "https://www.googleapis.com/compute/v1/projects/fake-project/global/firewalls/fw",
+      "source_ranges": [
+       "0.0.0.0/0"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": [],
+      "timeouts": null
+     },
+     "sensitive_values": {
+      "allow": [
+       {
+        "ports": [
+         false
+        ]
+       }
+      ],
+      "deny": [],
+      "destination_ranges": [],
+      "log_config": [],
+      "params": [],
+      "source_ranges": [
+       false
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": []
+     }
+    }
+   ]
+  }
+ },
+ "resource_changes": [
+  {
+   "address": "google_compute_firewall.const",
+   "mode": "managed",
+   "type": "google_compute_firewall",
+   "name": "const",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "allow": [
+      {
+       "ports": [
+        "22"
+       ],
+       "protocol": "tcp"
+      }
+     ],
+     "creation_timestamp": "2024-01-01T00:00:00Z",
+     "deny": [],
+     "description": "",
+     "destination_ranges": [],
+     "direction": "INGRESS",
+     "disabled": false,
+     "enable_logging": null,
+     "id": "projects/fake-project/global/firewalls/const",
+     "log_config": [],
+     "name": "const",
+     "network": "https://www.googleapis.com/compute/v1/projects/fake-project/global/networks/default",
+     "params": [],
+     "priority": 1000,
+     "project": "fake-project",
+     "self_link": "https://www.googleapis.com/compute/v1/projects/fake-project/global/firewalls/const",
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": [],
+     "source_tags": [],
+     "target_service_accounts": [],
+     "target_tags": [],
+     "timeouts": null
+    },
+    "after": {
+     "allow": [
+      {
+       "ports": [
+        "22"
+       ],
+       "protocol": "tcp"
+      }
+     ],
+     "creation_timestamp": "2024-01-01T00:00:00Z",
+     "deny": [],
+     "description": "",
+     "destination_ranges": [],
+     "direction": "INGRESS",
+     "disabled": false,
+     "enable_logging": null,
+     "id": "projects/fake-project/global/firewalls/const",
+     "log_config": [],
+     "name": "const",
+     "network": "https://www.googleapis.com/compute/v1/projects/fake-project/global/networks/default",
+     "params": [],
+     "priority": 1000,
+     "project": "fake-project",
+     "self_link": "https://www.googleapis.com/compute/v1/projects/fake-project/global/firewalls/const",
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": [],
+     "source_tags": [],
+     "target_service_accounts": [],
+     "target_tags": [],
+     "timeouts": null
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "allow": [
+      {
+       "ports": [
+        false
+       ]
+      }
+     ],
+     "deny": [],
+     "destination_ranges": [],
+     "log_config": [],
+     "params": [],
+     "source_ranges": [
+      false
+     ],
+     "source_service_accounts": [],
+     "source_tags": [],
+     "target_service_accounts": [],
+     "target_tags": []
+    },
+    "after_sensitive": {
+     "allow": [
+      {
+       "ports": [
+        false
+       ]
+      }
+     ],
+     "deny": [],
+     "destination_ranges": [],
+     "log_config": [],
+     "params": [],
+     "source_ranges": [
+      false
+     ],
+     "source_service_accounts": [],
+     "source_tags": [],
+     "target_service_accounts": [],
+     "target_tags": []
+    }
+   }
+  },
+  {
+   "address": "google_compute_firewall.fw",
+   "mode": "managed",
+   "type": "google_compute_firewall",
+   "name": "fw",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "allow": [
+      {
+       "ports": [
+        "22"
+       ],
+       "protocol": "tcp"
+      }
+     ],
+     "creation_timestamp": "2024-01-01T00:00:00Z",
+     "deny": [],
+     "description": "",
+     "destination_ranges": [],
+     "direction": "INGRESS",
+     "disabled": false,
+     "enable_logging": null,
+     "id": "projects/fake-project/global/firewalls/fw",
+     "log_config": [],
+     "name": "fw",
+     "network": "https://www.googleapis.com/compute/v1/projects/fake-project/global/networks/default",
+     "params": [],
+     "priority": 1000,
+     "project": "fake-project",
+     "self_link": "https://www.googleapis.com/compute/v1/projects/fake-project/global/firewalls/fw",
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": [],
+     "source_tags": [],
+     "target_service_accounts": [],
+     "target_tags": [],
+     "timeouts": null
+    },
+    "after": {
+     "allow": [
+      {
+       "ports": [
+        "22"
+       ],
+       "protocol": "tcp"
+      }
+     ],
+     "creation_timestamp": "2024-01-01T00:00:00Z",
+     "deny": [],
+     "description": "",
+     "destination_ranges": [],
+     "direction": "INGRESS",
+     "disabled": false,
+     "enable_logging": null,
+     "id": "projects/fake-project/global/firewalls/fw",
+     "log_config": [],
+     "name": "fw",
+     "network": "https://www.googleapis.com/compute/v1/projects/fake-project/global/networks/default",
+     "params": [],
+     "priority": 1000,
+     "project": "fake-project",
+     "self_link": "https://www.googleapis.com/compute/v1/projects/fake-project/global/firewalls/fw",
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": [],
+     "source_tags": [],
+     "target_service_accounts": [],
+     "target_tags": [],
+     "timeouts": null
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "allow": [
+      {
+       "ports": [
+        false
+       ]
+      }
+     ],
+     "deny": [],
+     "destination_ranges": [],
+     "log_config": [],
+     "params": [],
+     "source_ranges": [
+      false
+     ],
+     "source_service_accounts": [],
+     "source_tags": [],
+     "target_service_accounts": [],
+     "target_tags": []
+    },
+    "after_sensitive": {
+     "allow": [
+      {
+       "ports": [
+        false
+       ]
+      }
+     ],
+     "deny": [],
+     "destination_ranges": [],
+     "log_config": [],
+     "params": [],
+     "source_ranges": [
+      false
+     ],
+     "source_service_accounts": [],
+     "source_tags": [],
+     "target_service_accounts": [],
+     "target_tags": []
+    }
+   }
+  }
+ ],
+ "prior_state": {
+  "format_version": "1.0",
+  "terraform_version": "1.14.0",
+  "values": {
+   "root_module": {
+    "resources": [
+     {
+      "address": "google_compute_firewall.const",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "const",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "schema_version": 1,
+      "values": {
+       "allow": [
+        {
+         "ports": [
+          "22"
+         ],
+         "protocol": "tcp"
+        }
+       ],
+       "creation_timestamp": "2024-01-01T00:00:00Z",
+       "deny": [],
+       "description": "",
+       "destination_ranges": [],
+       "direction": "INGRESS",
+       "disabled": false,
+       "enable_logging": null,
+       "id": "projects/fake-project/global/firewalls/const",
+       "log_config": [],
+       "name": "const",
+       "network": "https://www.googleapis.com/compute/v1/projects/fake-project/global/networks/default",
+       "params": [],
+       "priority": 1000,
+       "project": "fake-project",
+       "self_link": "https://www.googleapis.com/compute/v1/projects/fake-project/global/firewalls/const",
+       "source_ranges": [
+        "0.0.0.0/0"
+       ],
+       "source_service_accounts": [],
+       "source_tags": [],
+       "target_service_accounts": [],
+       "target_tags": [],
+       "timeouts": null
+      },
+      "sensitive_values": {
+       "allow": [
+        {
+         "ports": [
+          false
+         ]
+        }
+       ],
+       "deny": [],
+       "destination_ranges": [],
+       "log_config": [],
+       "params": [],
+       "source_ranges": [
+        false
+       ],
+       "source_service_accounts": [],
+       "source_tags": [],
+       "target_service_accounts": [],
+       "target_tags": []
+      }
+     },
+     {
+      "address": "google_compute_firewall.fw",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "fw",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "schema_version": 1,
+      "values": {
+       "allow": [
+        {
+         "ports": [
+          "22"
+         ],
+         "protocol": "tcp"
+        }
+       ],
+       "creation_timestamp": "2024-01-01T00:00:00Z",
+       "deny": [],
+       "description": "",
+       "destination_ranges": [],
+       "direction": "INGRESS",
+       "disabled": false,
+       "enable_logging": null,
+       "id": "projects/fake-project/global/firewalls/fw",
+       "log_config": [],
+       "name": "fw",
+       "network": "https://www.googleapis.com/compute/v1/projects/fake-project/global/networks/default",
+       "params": [],
+       "priority": 1000,
+       "project": "fake-project",
+       "self_link": "https://www.googleapis.com/compute/v1/projects/fake-project/global/firewalls/fw",
+       "source_ranges": [
+        "0.0.0.0/0"
+       ],
+       "source_service_accounts": [],
+       "source_tags": [],
+       "target_service_accounts": [],
+       "target_tags": [],
+       "timeouts": null
+      },
+      "sensitive_values": {
+       "allow": [
+        {
+         "ports": [
+          false
+         ]
+        }
+       ],
+       "deny": [],
+       "destination_ranges": [],
+       "log_config": [],
+       "params": [],
+       "source_ranges": [
+        false
+       ],
+       "source_service_accounts": [],
+       "source_tags": [],
+       "target_service_accounts": [],
+       "target_tags": []
+      }
+     }
+    ]
+   }
+  }
+ },
+ "configuration": {
+  "provider_config": {
+   "google": {
+    "name": "google",
+    "full_name": "registry.terraform.io/hashicorp/google",
+    "version_constraint": "6.50.0",
+    "expressions": {
+     "project": {
+      "constant_value": "fake-project"
+     },
+     "region": {
+      "constant_value": "us-central1"
+     }
+    }
+   }
+  },
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_compute_firewall.const",
+     "mode": "managed",
+     "type": "google_compute_firewall",
+     "name": "const",
+     "provider_config_key": "google",
+     "expressions": {
+      "allow": [
+       {
+        "ports": {
+         "constant_value": [
+          "22"
+         ]
+        },
+        "protocol": {
+         "constant_value": "tcp"
+        }
+       }
+      ],
+      "direction": {
+       "constant_value": "INGRESS"
+      },
+      "name": {
+       "constant_value": "const"
+      },
+      "network": {
+       "constant_value": "default"
+      },
+      "priority": {
+       "constant_value": 1000
+      },
+      "source_ranges": {
+       "constant_value": [
+        "0.0.0.0/0"
+       ]
+      }
+     },
+     "schema_version": 1
+    },
+    {
+     "address": "google_compute_firewall.fw",
+     "mode": "managed",
+     "type": "google_compute_firewall",
+     "name": "fw",
+     "provider_config_key": "google",
+     "expressions": {
+      "allow": [
+       {
+        "ports": {
+         "references": [
+          "var.port"
+         ]
+        },
+        "protocol": {
+         "constant_value": "tcp"
+        }
+       }
+      ],
+      "direction": {
+       "constant_value": "INGRESS"
+      },
+      "name": {
+       "constant_value": "fw"
+      },
+      "network": {
+       "constant_value": "default"
+      },
+      "priority": {
+       "constant_value": 1000
+      },
+      "source_ranges": {
+       "constant_value": [
+        "0.0.0.0/0"
+       ]
+      }
+     },
+     "schema_version": 1
+    }
+   ],
+   "variables": {
+    "port": {
+     "default": "22"
+    }
+   }
+  }
+ },
+ "timestamp": "2026-10-12T21:10:53Z",
+ "applyable": false,
+ "complete": true,
+ "errored": false
+}

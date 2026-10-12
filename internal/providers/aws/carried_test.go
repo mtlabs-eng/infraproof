@@ -88,3 +88,41 @@ func TestAnACLTheConfigurationDoesNotRecordIsUnrecorded(t *testing.T) {
 	wantMethod(t, "an ACL listed only by its bucket", bucketFromBlock(t, flags, "public-read"),
 		model.MethodConfigurationUnrecorded)
 }
+
+// A value written by a reference, a variable or a function is one whose value
+// the plan does not record: `lower(var.acl)` is recorded exactly as `var.acl`.
+// Where an update keeps the value the object had, nothing in the plan separates
+// the author's write from a value `lifecycle { ignore_changes }` kept from
+// state, so the method is configuration-unrecorded, not stated -- with
+// ignore_changes and, by the decision recorded in milestone 10, without it: a
+// write that evaluates to what the object already had loses "stated" too.
+func TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue(t *testing.T) {
+	for _, fixture := range []string{"real-reference-write-ignored", "real-reference-write-unchanged"} {
+		b := at(t, fixture, "aws_s3_bucket.b")
+		wantMethod(t, fixture+": an ACL written from a variable", b.ObjectStorage.PublicAccess,
+			model.MethodConfigurationUnrecorded)
+		wantMethod(t, fixture+": tags written from a variable", b.Environment, model.MethodConfigurationUnrecorded)
+		wantMethod(t, fixture+": an inline rule written from a reference",
+			at(t, fixture, "aws_security_group.web").Network.PublicIngress, model.MethodConfigurationUnrecorded)
+	}
+	// A function of constants records neither a value nor a reference.
+	wantMethod(t, "tags written by a function", at(t, "real-function-write-unchanged", "aws_s3_bucket.b").Environment,
+		model.MethodConfigurationUnrecorded)
+	// The same rule written as constants: the plan records the value, and the
+	// value the update keeps is it.
+	wantMethod(t, "an inline rule written as constants",
+		at(t, "real-reference-write-unchanged", "aws_security_group.const").Network.PublicIngress, model.MethodStated)
+}
+
+// The same writes on an update that moves each value to the configuration's.
+// ignore_changes keeps the prior value, so a value the update moves is not one
+// it kept: the plan is applying what the configuration evaluates to. The plan
+// does not record that value, so this is the one place a write it does not
+// evaluate is still stated -- on the strength of the move, not of a comparison.
+func TestAWriteThePlanDoesNotEvaluateIsStatedWhereTheUpdateMovesTheValue(t *testing.T) {
+	b := at(t, "real-reference-write-moved", "aws_s3_bucket.b")
+	wantMethod(t, "an ACL moved to a variable's value", b.ObjectStorage.PublicAccess, model.MethodStated)
+	wantMethod(t, "tags moved to a variable's value", b.Environment, model.MethodStated)
+	wantMethod(t, "an inline rule moved to a variable's value",
+		at(t, "real-reference-write-moved", "aws_security_group.web").Network.PublicIngress, model.MethodStated)
+}

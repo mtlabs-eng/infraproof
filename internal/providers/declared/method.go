@@ -87,10 +87,20 @@ func (a Argument) Writing(change terraformplan.ResourceChange) Writing {
 //     fallback of "stated" is exactly the defect this method exists to remove.
 //     So is an argument written only from variables the plan does not resolve,
 //     since one of them may be null.
-//   - Written with a value: stated, unless the change keeps an existing object,
-//     the plan carries the prior value, and the configuration records a
-//     constant that is not it -- ignore_changes kept the state, and the value is
-//     prior-state.
+//   - Written with a value, on a new object or where the plan moves the value:
+//     stated. ignore_changes keeps the prior value, so a value the plan moves is
+//     the one the configuration evaluates to.
+//   - Written with a value, where the change keeps an existing object and the
+//     plan carries the prior value: ignore_changes may have kept it, and the
+//     configuration does not record the lifecycle block. Stated only where the
+//     configuration records a constant -- in block syntax, every attribute
+//     written in the block -- and the value carried is it; prior-state where
+//     it is not. Anything else -- a reference, a variable, a function, an
+//     attribute written in several blocks, a write the configuration records
+//     no expression for -- records no value to compare with the one carried,
+//     and is configuration-unrecorded: a write that evaluates to what the
+//     object already had is unrecorded too, which is the cost of the decision
+//     recorded in milestone 10.
 //   - Unwritten, or written as an expression that evaluates to null, which
 //     Terraform treats exactly as unwritten: prior-state where the change keeps
 //     an existing object and the plan carries its prior value; otherwise the
@@ -116,6 +126,10 @@ func (a Argument) MethodFor(change terraformplan.ResourceChange, isDefault bool)
 func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) model.Method {
 	writing := a.Writing(change)
 	expression, recorded := change.Expression(a.Path)
+	if !recorded {
+		// Block syntax: what is written inside the block.
+		expression, recorded = change.Block(a.Path)
+	}
 	if writing == WritingWritten && recorded {
 		switch expression.Evaluation {
 		case terraformplan.EvaluationNull:
@@ -128,7 +142,15 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 	carried := Updates(change) && Carried(change, a.Path)
 	switch writing {
 	case WritingWritten:
-		if carried && recorded && expression.Contradicted {
+		switch {
+		case !carried:
+			return model.MethodStated
+		case expression.Evaluation != terraformplan.EvaluationConstant:
+			// The plan records no value for the write to be compared with
+			// the one the update keeps. A write the configuration records no
+			// expression for is the zero Expression, which is deferred.
+			return model.MethodConfigurationUnrecorded
+		case expression.Contradicted:
 			return model.MethodPriorState
 		}
 		return model.MethodStated

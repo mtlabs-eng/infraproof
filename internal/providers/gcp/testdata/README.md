@@ -124,6 +124,22 @@ the placeholder token removed afterwards.
 - `real-carried-member-beside-private-policy.json`: the reverse, on an update: a
   member that writes one user with `ignore_changes = [member]` and `allUsers`
   in state, beside a policy document naming one user.
+- `real-reference-write-ignored.json`: `real-ignore-changes`'s state and
+  lifecycle blocks with each overridden value written by something the plan
+  does not evaluate -- `public_access_prevention = var.prevention`
+  (`enforced`), `member = var.member` (one user), `source_ranges =
+  local.ranges` (`10.0.0.0/8`) -- beside firewall `blocks`, which writes its
+  `allow` in constants (tcp 443) with `ignore_changes = [allow]` and tcp 22 in
+  state. A plan of "no changes"; every `after` is the state's.
+- `real-block-reference-unchanged.json`: no `ignore_changes`. Firewall `fw`
+  writes `allow { ports = [var.port] }`, the variable holding the state's `22`;
+  firewall `const` writes the same block in constants. A plan of "no changes".
+- `real-sql-networks-carried.json`: three Cloud SQL instances whose state
+  authorizes `0.0.0.0/0`: `ref` writes the network's `value = var.cidr`
+  (`0.0.0.0/0`), `const` writes `"0.0.0.0/0"`, and `ignored` writes
+  `"10.0.0.0/8"` with `ignore_changes` on
+  `settings[0].ip_configuration[0].authorized_networks`. Each plan keeps the
+  state's network.
 
 ## Skipped-deny fixtures added by the fourth review
 
