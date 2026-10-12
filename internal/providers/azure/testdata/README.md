@@ -88,3 +88,11 @@ will not acquire to answer a question.
 core rather than provider behaviour: the actions grammar was measured on AWS and
 GCP, and a reference naming no instance is the correlator's own shape, pinned by
 tests in `internal/providers/declared`.
+
+`sql-switch-defaulted`, `public-blob-written`, `public-blob-container-defaulted`
+and `private-account-forbids-written` are edits of `sql-reachable`, `public-blob`
+(twice) and `private-account-forbids`, and they change only the `configuration`
+block: the `after` values stay. They exist for the verification method, which
+follows what the configuration writes. The first leaves `public_network_access_enabled`
+out of the configuration while the plan still states it; the others write the
+storage settings the originals leave out, or write only the account's.

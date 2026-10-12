@@ -164,9 +164,9 @@ func accountCapabilities(account terraformplan.ResourceChange, related []terrafo
 		return nil
 	}
 
-	gate, sources := accountAllowsPublic(&account)
+	gate, sources, defaulted := accountAllowsPublic(&account)
 	if gate == answerNo {
-		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, model.MethodStated, sources...).Canonical()}
+		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, methodOf(defaulted), sources...).Canonical()}
 	}
 
 	capabilities := &model.ObjectStorageCapabilities{
@@ -199,20 +199,20 @@ const (
 // container. Both the account gate and the container setting must say yes, and
 // either saying no is enough to prove it does not.
 func publicAccess(container terraformplan.ResourceChange, account *terraformplan.ResourceChange) model.Fact[bool] {
-	gate, gateSources := accountAllowsPublic(account)
-	setting, settingSources := containerIsPublic(container)
+	gate, gateSources, gateDefaulted := accountAllowsPublic(account)
+	setting, settingSources, settingDefaulted := containerIsPublic(container)
 
 	sources := append(gateSources, settingSources...)
 
 	// One definite no settles it, whatever the other says.
 	if gate == answerNo {
-		return model.Known(false, model.MethodStated, gateSources...).Canonical()
+		return model.Known(false, methodOf(gateDefaulted), gateSources...).Canonical()
 	}
 	if setting == answerNo {
-		return model.Known(false, model.MethodStated, settingSources...).Canonical()
+		return model.Known(false, methodOf(settingDefaulted), settingSources...).Canonical()
 	}
 	if gate == answerYes && setting == answerYes {
-		return model.Known(true, model.MethodStated, sources...).Canonical()
+		return model.Known(true, methodOf(gateDefaulted || settingDefaulted), sources...).Canonical()
 	}
 
 	if gate == answerRedacted || setting == answerRedacted {
@@ -224,45 +224,52 @@ func publicAccess(container terraformplan.ResourceChange, account *terraformplan
 // accountAllowsPublic reads the account-level gate. An account this plan does
 // not contain is not an account that permits nothing; it is an account nobody
 // here can see.
-func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model.Provenance) {
+//
+// The bool says the value read is the provider's default rather than something
+// the author wrote, so a fact resting on it is not stated.
+func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model.Provenance, bool) {
 	if account == nil {
-		return answerUnknown, nil
+		return answerUnknown, nil, false
 	}
+	defaulted := declared.Unwritten(*account, attrAllowPublic)
 
 	value := account.After.Field(attrAllowPublic)
 	sources := []model.Provenance{declared.Source(model.CloudAzure, account.Address, attrAllowPublic, value)}
 	switch {
 	case value.Kind() == terraformplan.KindBool:
 		if value.Bool() {
-			return answerYes, sources
+			return answerYes, sources, defaulted
 		}
-		return answerNo, sources
+		return answerNo, sources, defaulted
 	case value.State() == terraformplan.StateRedacted:
-		return answerRedacted, sources
+		return answerRedacted, sources, defaulted
 	default:
 		// Absent is not the provider default, and a readable value of the wrong
 		// kind is not an answer either: Bool returns false for both, and false
 		// here is what proves a container private.
-		return answerUnknown, sources
+		return answerUnknown, sources, defaulted
 	}
 }
 
 // containerIsPublic reads the container's access level. blob exposes the blobs;
 // container additionally exposes the listing.
-func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance) {
+//
+// The bool says the value read is the provider's default; see accountAllowsPublic.
+func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance, bool) {
+	defaulted := declared.Unwritten(container, attrAccessType)
 	value := container.After.Field(attrAccessType)
 	sources := []model.Provenance{declared.Source(model.CloudAzure, container.Address, attrAccessType, value)}
 
 	switch {
 	case value.Kind() == terraformplan.KindString:
 		if value.Text() == accessTypePublic || value.Text() == accessTypeList {
-			return answerYes, sources
+			return answerYes, sources, defaulted
 		}
-		return answerNo, sources
+		return answerNo, sources, defaulted
 	case value.State() == terraformplan.StateRedacted:
-		return answerRedacted, sources
+		return answerRedacted, sources, defaulted
 	default:
-		return answerUnknown, sources
+		return answerUnknown, sources, defaulted
 	}
 }
 
@@ -321,4 +328,15 @@ func (Mapper) Bindings() []declared.Binding {
 // vocabulary, so a control resource is asked the same question as a subject.
 func (m Mapper) Environment(change terraformplan.ResourceChange) model.Fact[string] {
 	return declared.Environment(change, attrTags, model.CloudAzure)
+}
+
+// methodOf is how a fact that rests on one argument was established: the
+// provider's default when the configuration does not write it, stated when it
+// does. It follows the configuration, not the plan's after state, because a
+// provider writes the default of an unwritten argument there as a known value.
+func methodOf(defaulted bool) model.Method {
+	if defaulted {
+		return model.MethodProviderDefault
+	}
+	return model.MethodStated
 }

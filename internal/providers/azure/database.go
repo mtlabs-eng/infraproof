@@ -85,7 +85,9 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 	if value.State() != terraformplan.StateKnown || value.Kind() != terraformplan.KindBool {
 		return model.Unknown[bool](cited)
 	}
-	return model.Known(value.Bool(), model.MethodStated, cited)
+	// Follows the configuration: a plan states the default of an argument nobody
+	// wrote as a known value, and that is still a default.
+	return model.Known(value.Bool(), methodOf(declared.Unwritten(subject, attrPublicNetwork)), cited)
 }
 
 // allowList reads the server's firewall rules and answers whether any of them
@@ -310,7 +312,8 @@ func uncorrelated(subject terraformplan.ResourceChange,
 // listeningPort reads the port from the resource type, because on this cloud the
 // engine *is* the type: there is no engine attribute and no `port` attribute
 // either, so the port is certain rather than inferred from a table of defaults.
-// That is why PortInferred stays false here.
+// That is why PortInferred stays false here, and why the method is still
+// documented-table: the value comes from portOf, a table this build keeps.
 //
 // A type portOf does not name leaves the port undetermined rather than taking
 // another type's, which the rule then reports as an approximation.
@@ -319,5 +322,5 @@ func listeningPort(subject terraformplan.ResourceChange) model.Fact[int] {
 	if port == 0 {
 		return model.Unknown[int](portCitation(subject))
 	}
-	return model.Known(port, model.MethodStated, portCitation(subject))
+	return model.Known(port, model.MethodDocumentedTable, portCitation(subject))
 }
