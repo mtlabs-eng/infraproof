@@ -716,3 +716,61 @@ func TestASingleNestedBlockIsABlockAndNotAnExpression(t *testing.T) {
 		t.Fatal("the security group this database names is no longer in its references")
 	}
 }
+
+// Terraform omits the expressions object for a resource whose body writes no
+// argument: an empty body, one that is only dynamic blocks, one that is only a
+// lifecycle block or meta-arguments. Measured with Terraform 1.14 on
+// `resource "aws_s3_account_public_access_block" "acct" {}`. Such an entry
+// records nothing about which blocks were written, so Configured stays false --
+// but it does record that the resource is declared, which a plan with no
+// configuration and a resource missing from it do not. Only the first can say
+// that a top-level attribute, which no dynamic block can produce, is unwritten.
+func TestAnEntryWithoutExpressionsIsDeclaredButNotConfigured(t *testing.T) {
+	change := func(configuration string) ResourceChange {
+		t.Helper()
+		plan, err := Parse([]byte(`{
+		  "format_version": "1.2",
+		  "resource_changes": [
+		    {
+		      "address": "aws_s3_account_public_access_block.acct", "mode": "managed",
+		      "type": "aws_s3_account_public_access_block", "name": "acct",
+		      "provider_name": "registry.terraform.io/hashicorp/aws",
+		      "change": {"actions": ["create"], "before": null,
+		                 "after": {"block_public_acls": false}}
+		    }
+		  ]` + configuration + `
+		}`))
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		return changeAt(t, plan, "aws_s3_account_public_access_block.acct")
+	}
+
+	empty := change(`, "configuration": {"root_module": {"resources": [{
+	    "address": "aws_s3_account_public_access_block.acct", "mode": "managed",
+	    "type": "aws_s3_account_public_access_block", "name": "acct",
+	    "provider_config_key": "aws", "schema_version": 0}]}}`)
+	if !empty.Declared || empty.Configured || empty.Stated != nil {
+		t.Errorf("an entry without expressions: declared = %v, configured = %v, stated = %v; "+
+			"want declared, not configured, nothing stated", empty.Declared, empty.Configured, empty.Stated)
+	}
+
+	written := change(`, "configuration": {"root_module": {"resources": [{
+	    "address": "aws_s3_account_public_access_block.acct", "mode": "managed",
+	    "type": "aws_s3_account_public_access_block", "name": "acct",
+	    "provider_config_key": "aws",
+	    "expressions": {"block_public_policy": {"constant_value": false}}}]}}`)
+	if !written.Declared || !written.Configured {
+		t.Errorf("an entry with expressions: declared = %v, configured = %v", written.Declared, written.Configured)
+	}
+
+	if none := change(""); none.Declared {
+		t.Error("a plan with no configuration reports its resource as declared")
+	}
+	missing := change(`, "configuration": {"root_module": {"resources": [{
+	    "address": "aws_s3_bucket.other", "mode": "managed", "type": "aws_s3_bucket",
+	    "name": "other", "provider_config_key": "aws"}]}}`)
+	if missing.Declared {
+		t.Error("a resource the configuration omits is reported as declared")
+	}
+}

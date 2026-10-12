@@ -256,8 +256,13 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 // exit 0, with no findings, on a firewall opening SSH to 0.0.0.0/0: the deny's
 // unknown direction was defaulted to INGRESS and cancelled the grant.
 //
-// An empty expressions object is a different thing and is recorded: the author
-// wrote a resource with no arguments, which is an answer.
+// The same shape is what Terraform emits for an empty body: measured with
+// Terraform 1.14, `resource "aws_s3_account_public_access_block" "acct" {}`
+// produces an entry with no expressions key, not an empty object. An empty body
+// and a dynamic-only body are therefore indistinguishable here, and both stay
+// unrecorded; ResourceChange.Declared keeps the one thing the entry does say.
+// An empty expressions object, which a hand-written plan can carry, is read as
+// recorded: the author wrote a resource with no arguments.
 func recordsArguments(fields map[string]any) bool {
 	raw, present := fields["expressions"]
 	if !present || raw == nil {
@@ -594,6 +599,7 @@ func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
 		change.ProviderAlias = plan.ProviderConfigs[configured.providerConfigKey].Alias
 		change.DeclaredRepeated = configured.repeated
 		change.References = configured.references
+		change.Declared = true
 		change.Configured = configured.recorded
 		change.Stated = configured.stated
 		change.Opaque = configured.opaque

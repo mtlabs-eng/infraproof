@@ -189,6 +189,20 @@ type ResourceChange struct {
 	// is a different question. A review stripped the expressions objects from a
 	// plan and got PASS, exit 0, on a firewall opening SSH to 0.0.0.0/0.
 	Configured bool
+	// Declared reports that the plan's configuration block has an entry for
+	// this resource, whether or not the entry recorded its arguments.
+	//
+	// Terraform omits the expressions object for a body that writes no
+	// argument at all -- an empty body, or one holding only dynamic blocks, a
+	// lifecycle block or meta-arguments -- so an entry that is Declared and not
+	// Configured says one thing for certain: no top-level attribute is written,
+	// because a dynamic block can only produce blocks. It says nothing about
+	// blocks. Configured implies Declared.
+	//
+	// It decides only how a value's verification method is reported, never a
+	// value: a default applied on its strength would be applied on the
+	// strength of a shape a sanitizer that strips expressions also produces.
+	Declared bool
 	// Stated are the configuration arguments this resource's configuration
 	// writes, sorted, nil when Configured is false.
 	//

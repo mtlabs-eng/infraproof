@@ -60,6 +60,13 @@ const (
 	// MethodDocumentedTable means the value comes from a closed, documented table
 	// in this build.
 	MethodDocumentedTable Method = "documented-table"
+	// MethodPriorState means the argument is unwritten, the change updates an
+	// existing object, and the value is the one Terraform carried from prior
+	// state.
+	MethodPriorState Method = "prior-state"
+	// MethodConfigurationUnrecorded means the plan does not record whether the
+	// author wrote the argument.
+	MethodConfigurationUnrecorded Method = "configuration-unrecorded"
 )
 
 // Provenance locates where a normalized fact came from. Three clouds reach the
