@@ -113,3 +113,23 @@ func TestAGrantProvenTwiceTakesTheStatedProof(t *testing.T) {
 		t.Errorf("method = %q, want %q", access.Method(), model.MethodStated)
 	}
 }
+
+// `implicit` writes `settings` and no `ip_configuration`, and the plan carries no
+// switch for it at all. The public IP is Google's default, so the method is too.
+func TestAnAbsentIPv4SwitchIsTheProvidersDefault(t *testing.T) {
+	db := instance(t, "real-databases", "implicit").Database
+	if !db.PublicEndpoint.IsKnown() || !db.PublicEndpoint.Get() {
+		t.Fatalf("endpoint = %s; the provider default is a public IP", db.PublicEndpoint.State)
+	}
+	if db.PublicEndpoint.Method() != model.MethodProviderDefault {
+		t.Errorf("method = %q, want %q", db.PublicEndpoint.Method(), model.MethodProviderDefault)
+	}
+}
+
+// A binding's members are stated in the plan, so a grant proven by one is stated.
+func TestABindingGrantIsStated(t *testing.T) {
+	access := bucket(t, "public-iam-binding").ObjectStorage.PublicAccess
+	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodStated {
+		t.Errorf("method = %q, want known true %q", access.Method(), model.MethodStated)
+	}
+}
