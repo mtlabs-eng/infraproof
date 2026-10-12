@@ -261,9 +261,10 @@ func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model
 // container additionally exposes the listing.
 //
 // The method says how the value read was established; see accountAllowsPublic.
-// The default is "private", so a public access type the configuration records
-// as unwritten is one Terraform cannot have planned: it was written, and it is
-// stated rather than a default it is not.
+// The default is "private", so a public access type the configuration does not
+// record as written, on a container that is not carrying it from state, is a
+// value the plan does not record anybody writing: unrecorded, not a default it
+// is not, and never stated.
 func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance, model.Method) {
 	value := container.After.Field(attrAccessType)
 	method := declared.Argument{Path: attrAccessType}.MethodFor(container,

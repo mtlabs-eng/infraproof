@@ -167,16 +167,23 @@ func (c Cloud) Valid() bool {
 type VerificationMethod string
 
 const (
-	// MethodPlanStatedValue means the value is stated in the plan.
+	// MethodPlanStatedValue means the plan's configuration records that the
+	// author wrote the argument with a value, and the plan carries that value.
+	// The policy also assigns it to resource.cloud, which it reads from a
+	// change's provider_name through this build's provider-name table.
 	MethodPlanStatedValue VerificationMethod = "plan-stated-value"
-	// MethodProviderDefault means the argument is unwritten and the value is the
-	// provider's documented default.
+	// MethodProviderDefault means the configuration records the argument as
+	// unwritten, or written as null, and the value is not one carried from
+	// prior state: the provider's documented default, on a new object or where
+	// the plan moves the value to it.
 	MethodProviderDefault VerificationMethod = "provider-default"
 	// MethodPolicyDocumentInterpreted means the value results from this build's
 	// reading of a JSON policy document.
 	MethodPolicyDocumentInterpreted VerificationMethod = "policy-document-interpreted"
-	// MethodReferenceResolved means the fact joins two resources through
-	// configuration references.
+	// MethodReferenceResolved means the value is obtainable only by resolving a
+	// reference: the security groups a database reaches through
+	// vpc_security_group_ids. A grant written on its own resource and joined to
+	// what it applies to by a reference is stated; the join only locates it.
 	MethodReferenceResolved VerificationMethod = "reference-resolved"
 	// MethodDocumentedTable means the value comes from a closed, documented table
 	// in this build.
@@ -187,9 +194,12 @@ const (
 	// MethodIntentComparison means the fact is the comparison with the intent
 	// contract.
 	MethodIntentComparison VerificationMethod = "intent-comparison"
-	// MethodPriorState means the argument is unwritten, the change updates an
-	// existing object, and the value is the one Terraform carried from its prior
-	// state: neither written by the author nor the provider's default.
+	// MethodPriorState means the change keeps an existing object, the plan
+	// carries the value the object had, and the configuration does not record
+	// the author writing it: unwritten, written as null, or written as a
+	// constant the carried value contradicts, which is what
+	// lifecycle { ignore_changes } leaves. Neither written by the author nor
+	// the provider's default.
 	MethodPriorState VerificationMethod = "prior-state"
 	// MethodConfigurationUnrecorded means the plan does not record whether the
 	// author wrote the argument, so its absence from the configuration proves

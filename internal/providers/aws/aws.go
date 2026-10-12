@@ -237,9 +237,9 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	// outside this change.
 	//
 	// The proof rests on flags read as true. Every flag defaults to false and
-	// none is Computed, so a true is one somebody wrote -- stated, even beside
-	// a hand-written configuration that omits it -- unless the plan records
-	// nothing about the block's configuration at all.
+	// none is Computed, so a true the configuration does not record as written
+	// is prior state where an update carries it and unrecorded otherwise --
+	// never stated.
 	if blocksEveryRoute(block) || blocksEveryRoute(account) {
 		proven := block
 		if !blocksEveryRoute(proven) {
@@ -286,7 +286,7 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 	value := acl.After.Field("acl")
 	c.sources = append(c.sources, declared.Source(model.CloudAWS, acl.Address, "acl", value))
 	// `acl` is Optional, not Computed and without a default, so a canned ACL
-	// in the plan is one somebody wrote.
+	// the configuration does not record as written is not a default either.
 	aclMethod := declared.Argument{Path: "acl"}.MethodFor(*acl, value.Kind() != terraformplan.KindString)
 	c.method = declared.Weakest(append([]model.Method{aclMethod}, gates...)...)
 
@@ -308,8 +308,10 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 func policyChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
 	// A defaulted flag is discarded here on purpose. A policy grant through a
 	// defaulted flag rests on two inputs that are not stated, the default and the
-	// interpreted document, and the spec reports such a site rather than inventing
-	// an order of strength between them: the method stays the document's.
+	// interpreted document. An order of strength exists (declared.Weakest), and
+	// the product decision recorded in milestone 10 is still that the method
+	// stays the document's: the document is what the finding cites, and a
+	// reader should see when a verdict rests on this build's reading of one.
 	bucketBlocked, _ := blockedBy(block, "block_public_policy", "restrict_public_buckets")
 	accountBlocked, _ := blockedBy(account, "block_public_policy", "restrict_public_buckets")
 	c := channel{method: model.MethodPolicyDocument, blocked: strongest(bucketBlocked, accountBlocked)}

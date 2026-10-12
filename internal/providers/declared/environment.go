@@ -105,8 +105,10 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 		return model.Unknown[string](source)
 	case readable:
 		// The labels are Optional, not Computed and without a default on every
-		// provider here, so a declaration in the plan is one somebody wrote --
-		// unless the plan does not record the resource's configuration at all.
+		// provider here: stated where the configuration writes them, prior
+		// state where an update carries them (ignore_changes on tags is
+		// common), and otherwise a value the plan does not record anybody
+		// writing.
 		return model.Known(stated, Argument{Path: attribute}.MethodFor(change, false), source)
 	}
 

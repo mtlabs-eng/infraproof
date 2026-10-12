@@ -46,23 +46,28 @@ const (
 type Method string
 
 const (
-	// MethodStated means the plan states the value.
+	// MethodStated means the plan's configuration records that the author
+	// wrote the argument with a value, and the plan carries that value.
 	MethodStated Method = "plan-stated-value"
-	// MethodProviderDefault means the argument is unwritten and the value is the
-	// provider's documented default.
+	// MethodProviderDefault means the configuration records the argument as
+	// unwritten, or written as null, and the value is not carried from prior
+	// state: the provider's documented default.
 	MethodProviderDefault Method = "provider-default"
 	// MethodPolicyDocument means the value is this build's reading of a JSON
 	// policy document.
 	MethodPolicyDocument Method = "policy-document-interpreted"
-	// MethodReferenceResolved means the value joins two resources through
-	// configuration references.
+	// MethodReferenceResolved means the value is obtainable only by resolving a
+	// reference, such as the security groups a database reaches through
+	// vpc_security_group_ids. A join that only locates a grant written on its
+	// own resource is not one.
 	MethodReferenceResolved Method = "reference-resolved"
 	// MethodDocumentedTable means the value comes from a closed, documented table
 	// in this build.
 	MethodDocumentedTable Method = "documented-table"
-	// MethodPriorState means the argument is unwritten, the change updates an
-	// existing object, and the value is the one Terraform carried from prior
-	// state.
+	// MethodPriorState means the change keeps an existing object, the plan
+	// carries the value it had, and the configuration does not record the
+	// author writing it -- unwritten, written as null, or written as a constant
+	// the carried value contradicts, as lifecycle { ignore_changes } leaves it.
 	MethodPriorState Method = "prior-state"
 	// MethodConfigurationUnrecorded means the plan does not record whether the
 	// author wrote the argument.

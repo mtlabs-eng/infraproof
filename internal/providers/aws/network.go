@@ -231,9 +231,9 @@ func (o openness) and(other openness) openness {
 
 // openedBy is the method of a separate rule's grant: the best established of
 // the address arguments that admitted every address. Each is Optional, not
-// Computed and without a default, so an unwritten one is planned to null and
-// cannot open anything: one that opens was written, whatever a configuration
-// listing only the rule's references says.
+// Computed and without a default, so one that opens on a new rule without the
+// configuration recording it is unrecorded, and one an update carries from
+// state is prior state.
 func openedBy(rule terraformplan.ResourceChange, opened []string) model.Method {
 	methods := make([]model.Method, 0, len(opened))
 	for _, path := range opened {

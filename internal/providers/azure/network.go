@@ -240,9 +240,9 @@ type inbound struct {
 }
 
 // separateSource is how a separate rule's source was established. Neither
-// source field is Computed and neither has a default, so Terraform plans an
-// unwritten one as null: a source that is there was written, whatever a
-// configuration listing only the rule's references says.
+// source field is Computed and neither has a default, so a source on a new rule
+// that the configuration does not record as written is unrecorded, and one an
+// update carries from state is prior state.
 func separateSource(change terraformplan.ResourceChange) model.Method {
 	var methods []model.Method
 	for _, field := range []string{"source_address_prefix", "source_address_prefixes"} {
