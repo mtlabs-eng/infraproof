@@ -71,12 +71,17 @@ bucket `acl`, `policy` and `grant` arguments, and any control applied outside
 the plan.
 
 Every finding says how each fact behind it was established. A `BLOCK` resting
-on a provider default or on this build's reading of a policy document says so,
-and a reader who trusts only what the plan states can see which findings those
-are. A value the plan carries for an argument nobody wrote counts as a default,
-because providers write their defaults into the plan; a plan exported without
-its configuration cannot show that, and such a value reads as stated. The
-method decides nothing.
+on a provider default, on a value carried from prior state, or on this build's
+reading of a policy document says so, and a reader who trusts only what the
+plan states can see which findings those are. A value is stated only where the
+plan's configuration records that the author wrote it. A value the plan carries
+for an argument nobody wrote is the provider's default on a new object and the
+value carried from prior state on an update, because providers write their
+defaults into the plan and Terraform keeps an unwritten computed value across
+an update. Where the configuration does not record the argument at all -- a
+plan exported without it, or a dynamic block, which Terraform does not record
+-- the method says that, rather than reading as stated. The method decides
+nothing.
 
 For network exposure the claim is narrower still, and deliberately so. A finding
 says the change **permits ingress from any address**, not that anything becomes
