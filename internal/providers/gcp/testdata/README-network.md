@@ -99,3 +99,6 @@ Each fixture is one question:
 | `fw-unknown-priority` | a priority the plan has not determined, so nothing can be ordered against it |
 | `fw-icmp-deny-one-port` | a deny limited to one port, which cannot reach a protocol that has none |
 | `fw-default-priority-tied` | a deny at 1000 against an unstated priority, which pins the default exactly |
+| `fw-public-direction-omitted` | `fw-public` with `direction` absent from `after` and from the configuration: the INGRESS default, so the verdict's method is the provider's default |
+| `fw-public-direction-written` | `fw-public` with `direction = "INGRESS"` written in the configuration, so the same value is stated |
+| `fw-denied-lower-direction-omitted` | `fw-denied-lower` whose cancelling deny omits `direction`, so the closed verdict rests on a defaulted direction |

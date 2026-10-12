@@ -46,6 +46,7 @@ refusal is covered where the table lives.
 | `sql-replaced` | a replacement, whose `after` is complete because the instance exists when the change is done |
 | `sql-dynamic-unresolvable` | a `dynamic "ip_configuration"` whose `for_each` nobody can resolve, which the plan records identically to an instance writing no `ip_configuration` at all |
 | `sql-unreadable-and-unknown-networks` | the two ways an allow list cannot be read: an address the provider accepts and this build cannot parse, and a `dynamic "authorized_networks"` leaving the whole set unknown while the block stays readable |
+| `real-databases-ipv4-unwritten.json` | `ip_configuration` written with an allow list for everyone, `ipv4_enabled` not: the provider's public-IP default decides a finding. Real `terraform plan` output, Terraform 1.14, `hashicorp/google` v6, `-refresh=false`, placeholder credentials (the `credentials` argument removed afterwards). Measured: `ipv4_enabled` is KNOWN `true` in `after`, absent from `after_unknown`, and absent from the configuration, so only the configuration says the provider wrote it. |
 
 A fixture encoding the `ip_configuration` block as unknown **and** written was
 removed rather than kept as a guard. Measured against the provider, a
@@ -73,3 +74,11 @@ shapes in it were measured rather than imagined: the provider accepts
 `dynamic "authorized_networks"` over an unresolvable `for_each` emits
 `after_unknown…authorized_networks: true` while `ip_configuration` itself stays
 readable -- which is a different shape from the block being unknown.
+
+## Hand-authored method fixtures
+
+Milestone 10 records how each known value was established. Each of these pins one
+method decision; `fw-*` rows are in `README-network.md`.
+
+- `public-iam-policy-data.json`: a `google_storage_bucket_iam_policy` whose `policy_data` is a known document granting `allUsers`, so the grant is this build's reading of a document.
+- `public-member-and-policy-data.json`: `public-iam-member.json` plus the same policy document on the same bucket, so the stated member grant outranks the interpreted one.

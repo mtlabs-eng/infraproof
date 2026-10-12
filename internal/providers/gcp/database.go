@@ -118,13 +118,18 @@ func publicEndpoint(subject terraformplan.ResourceChange, config terraformplan.V
 	value := config.Field(attrIPv4Enabled)
 
 	if value.State() == terraformplan.StateKnown && value.Kind() == terraformplan.KindBool {
+		// The method follows the configuration: the provider writes its default
+		// into the plan as a known value, and that is still a default.
+		if wroteSettings(subject) && declared.Unwritten(subject, pathIPv4Enabled) {
+			return model.Known(value.Bool(), model.MethodProviderDefault, cited)
+		}
 		return model.Known(value.Bool(), model.MethodStated, cited)
 	}
 	if wroteSettings(subject) && declared.Unwritten(subject, pathIPv4Enabled) {
 		// Nobody wrote it inside a block the author did write, so the provider's
 		// documented default applies: Cloud SQL gives an instance a public IP
 		// unless asked not to.
-		return model.Known(true, model.MethodStated, cited)
+		return model.Known(true, model.MethodProviderDefault, cited)
 	}
 	return model.Unknown[bool](cited)
 }
@@ -286,5 +291,5 @@ func listeningPort(subject terraformplan.ResourceChange) model.Fact[int] {
 	if !named {
 		return model.Unknown[int](cited)
 	}
-	return model.Known(port, model.MethodStated, cited)
+	return model.Known(port, model.MethodDocumentedTable, cited)
 }

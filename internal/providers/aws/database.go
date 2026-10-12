@@ -133,6 +133,11 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 		if value.Kind() != terraformplan.KindBool {
 			return model.Unknown[bool](cited)
 		}
+		// The method follows the configuration: a real plan emits the default
+		// as a known value when nobody wrote it, and that is still a default.
+		if declared.Unwritten(subject, attrPubliclyAccessible) {
+			return model.Known(value.Bool(), model.MethodProviderDefault, cited)
+		}
 		return model.Known(value.Bool(), model.MethodStated, cited)
 	default:
 		if declared.Unwritten(subject, attrPubliclyAccessible) {

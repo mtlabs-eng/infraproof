@@ -63,3 +63,11 @@ func TestAGrantProvenTwiceTakesTheStatedProof(t *testing.T) {
 		t.Errorf("method = %q, want %q", access.Method(), model.MethodStated)
 	}
 }
+
+// A real plan emits publicly_accessible as known false when nobody wrote it.
+func TestAKnownSwitchNobodyWroteIsTheProvidersDefault(t *testing.T) {
+	endpoint := database(t, "real-databases", "aws_db_instance.private").Database.PublicEndpoint
+	if !endpoint.IsKnown() || endpoint.Get() || endpoint.Method() != model.MethodProviderDefault {
+		t.Errorf("method = %q (state %s), want %q", endpoint.Method(), endpoint.State, model.MethodProviderDefault)
+	}
+}

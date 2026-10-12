@@ -64,6 +64,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange) model.NetworkCapabilities {
 
 	rule := readFirewall(subject)
+	defaulted := rule.directionDefaulted
 	capabilities := model.NetworkCapabilities{Unresolved: m.ingressGaps(subject)}
 
 	if rule.unread {
@@ -122,6 +123,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			}
 
 			cited = append(cited, deny.cited...)
+			defaulted = defaulted || deny.directionDefaulted
 			remaining, byProtocol = subtract(remaining, deny.denies, byProtocol)
 		}
 	}
@@ -129,15 +131,19 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	opened := openRanges(remaining, rule)
 	capabilities.OpenToAnyAddress = opened
 
+	method := model.MethodStated
+	if defaulted {
+		method = model.MethodProviderDefault
+	}
 	switch {
 	case len(opened) > 0:
-		capabilities.PublicIngress = model.Known(true, model.MethodStated, cited...)
+		capabilities.PublicIngress = model.Known(true, method, cited...)
 	default:
 		// Every rule of this firewall was read. The platform denies inbound
 		// traffic no rule allows, so a firewall that opens nothing to any
 		// address permits nothing from any address -- whatever another firewall
 		// allows is that firewall's own grant, reported there.
-		capabilities.PublicIngress = model.Known(false, model.MethodStated, cited...)
+		capabilities.PublicIngress = model.Known(false, method, cited...)
 	}
 
 	// Two different approximations, each with its own reason. They share a
@@ -228,7 +234,10 @@ type firewallRule struct {
 	// read, which bounds comparison with a deny without unsettling the rule.
 	targetsUnread bool
 	unread        bool
-	cited         []model.Provenance
+	// directionDefaulted reports that direction was unwritten and read as the
+	// provider's INGRESS default, so a verdict resting on this rule rests on it.
+	directionDefaulted bool
+	cited              []model.Provenance
 }
 
 // protocolPorts is one allow or deny block.
@@ -274,6 +283,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	switch direction.State() {
 	case terraformplan.StateAbsent:
 		// INGRESS by the provider's own default.
+		read.directionDefaulted = true
 	case terraformplan.StateKnown:
 		// A spelling this build cannot name is undetermined, not EGRESS. An
 		// egress firewall says nothing about who can reach in, so reading an
@@ -281,6 +291,9 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		switch {
 		case strings.EqualFold(direction.Text(), "INGRESS"):
 			read.inbound = true
+			// The provider writes its default into the plan as a known value;
+			// the configuration says whether anybody wrote it.
+			read.directionDefaulted = declared.Unwritten(change, "direction")
 		case strings.EqualFold(direction.Text(), "EGRESS"):
 			read.inbound = false
 		default:
@@ -303,6 +316,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 			read.cited = append(read.cited, cite("direction"))
 			return read
 		}
+		read.directionDefaulted = true
 	}
 
 	disabled := change.After.Field("disabled")

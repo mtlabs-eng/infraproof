@@ -153,12 +153,12 @@ func publicAccess(prevention answer, preventionSources []model.Provenance,
 		return model.Known(false, model.MethodStated, preventionSources...).Canonical()
 	}
 
-	grant, grantSources := publicBinding(related)
+	grant, method, grantSources := publicBinding(related)
 	sources := append(preventionSources, grantSources...)
 
 	switch grant {
 	case answerYes:
-		return model.Known(true, model.MethodStated, grantSources...).Canonical()
+		return model.Known(true, method, grantSources...).Canonical()
 	case answerRedacted:
 		return model.Redacted[bool](sources...).Canonical()
 	case answerUnknown:
@@ -193,10 +193,15 @@ func preventionState(bucket terraformplan.ResourceChange) (answer, []model.Prove
 	}
 }
 
-// publicBinding reports whether any related IAM resource names everyone.
-func publicBinding(related []terraformplan.ResourceChange) (answer, []model.Provenance) {
+// publicBinding reports whether any related IAM resource names everyone, and how
+// the grant was established: a member list is stated, a policy document is this
+// build's reading of one. A stated grant wins, because it is the proof the
+// finding can rest on without trusting a grammar.
+func publicBinding(related []terraformplan.ResourceChange) (answer, model.Method, []model.Provenance) {
 	var sources []model.Provenance
 	result := answerNo
+	method := model.MethodStated
+	statedGrant := false
 
 	escalate := func(candidate answer) {
 		if candidate == answerYes || result == answerNo ||
@@ -209,16 +214,23 @@ func publicBinding(related []terraformplan.ResourceChange) (answer, []model.Prov
 		switch change.Type {
 		case typeIAMMember:
 			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "member", change.After.Field("member")))
-			escalate(memberIsEveryone(change.After.Field("member")))
+			candidate := memberIsEveryone(change.After.Field("member"))
+			statedGrant = statedGrant || candidate == answerYes
+			escalate(candidate)
 		case typeIAMBinding:
 			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "members", change.After.Field("members")))
-			escalate(membersIncludeEveryone(change.After.Field("members")))
+			candidate := membersIncludeEveryone(change.After.Field("members"))
+			statedGrant = statedGrant || candidate == answerYes
+			escalate(candidate)
 		case typeIAMPolicy:
 			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "policy_data", change.After.Field("policy_data")))
 			escalate(policyDataGrantsPublic(change.After.Field("policy_data")))
 		}
 	}
-	return result, sources
+	if result == answerYes && !statedGrant {
+		method = model.MethodPolicyDocument
+	}
+	return result, method, sources
 }
 
 func memberIsEveryone(value terraformplan.Value) answer {
