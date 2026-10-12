@@ -99,8 +99,11 @@ func TestAPolicyDataGrantIsInterpreted(t *testing.T) {
 	}
 }
 
+// A grant settles only because prevention is not enforced, so a member grant is
+// stated only when prevention is too. The fixture writes it; public-iam-member,
+// which does not, is the provider's default below.
 func TestAMemberGrantIsStated(t *testing.T) {
-	access := bucket(t, "public-iam-member").ObjectStorage.PublicAccess
+	access := bucket(t, "public-iam-member-prevention-written").ObjectStorage.PublicAccess
 	if access.Method() != model.MethodStated {
 		t.Errorf("method = %q, want %q", access.Method(), model.MethodStated)
 	}
@@ -108,27 +111,33 @@ func TestAMemberGrantIsStated(t *testing.T) {
 
 // Review Focus 2.
 func TestAGrantProvenTwiceTakesTheStatedProof(t *testing.T) {
-	access := bucket(t, "public-member-and-policy-data").ObjectStorage.PublicAccess
+	access := bucket(t, "public-member-and-policy-data-prevention-written").ObjectStorage.PublicAccess
 	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodStated {
 		t.Errorf("method = %q, want %q", access.Method(), model.MethodStated)
 	}
 }
 
 // `implicit` writes `settings` and no `ip_configuration`, and the plan carries no
-// switch for it at all. The public IP is Google's default, so the method is too.
-func TestAnAbsentIPv4SwitchIsTheProvidersDefault(t *testing.T) {
+// switch for it at all. The value is milestone 09's -- Google's default, a public
+// IP -- but the method cannot say "default": the configuration does not record
+// ip_configuration, and a dynamic ip_configuration nobody can resolve leaves the
+// identical plan. Until milestone 10's adversarial review this asserted
+// provider-default, which is the claim D1 forbids for a block the plan does not
+// record.
+func TestAnAbsentIPv4SwitchInAnUnrecordedBlockIsUnrecorded(t *testing.T) {
 	db := instance(t, "real-databases", "implicit").Database
 	if !db.PublicEndpoint.IsKnown() || !db.PublicEndpoint.Get() {
 		t.Fatalf("endpoint = %s; the provider default is a public IP", db.PublicEndpoint.State)
 	}
-	if db.PublicEndpoint.Method() != model.MethodProviderDefault {
-		t.Errorf("method = %q, want %q", db.PublicEndpoint.Method(), model.MethodProviderDefault)
+	if db.PublicEndpoint.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q, want %q", db.PublicEndpoint.Method(), model.MethodConfigurationUnrecorded)
 	}
 }
 
-// A binding's members are stated in the plan, so a grant proven by one is stated.
+// A binding's members are stated in the plan, so a grant proven by one is stated
+// -- with prevention written, which the grant also rests on.
 func TestABindingGrantIsStated(t *testing.T) {
-	access := bucket(t, "public-iam-binding").ObjectStorage.PublicAccess
+	access := bucket(t, "public-iam-binding-prevention-written").ObjectStorage.PublicAccess
 	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodStated {
 		t.Errorf("method = %q, want known true %q", access.Method(), model.MethodStated)
 	}
@@ -194,5 +203,98 @@ func TestAnUnknownUnwrittenDirectionIsTheDefaultWithAWrittenPriority(t *testing.
 	got := firewall(t, "fw-public-direction-computed").Network.PublicIngress
 	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodProviderDefault {
 		t.Errorf("web = %s, method = %q, want known true %q", got.State, got.Method(), model.MethodProviderDefault)
+	}
+}
+
+// A real update plan: the configuration writes settings with a tier and labels
+// and no ip_configuration, and the state holds ipv4_enabled = true and an
+// authorized network 0.0.0.0/0, which Terraform carries into after because the
+// block is Computed. Nobody under review wrote either, and the configuration
+// cannot say whether a dynamic ip_configuration did: both halves of the verdict
+// say so, and neither claims to be stated or the provider's default.
+func TestAnIPConfigurationNobodyRecordedIsConfigurationUnrecorded(t *testing.T) {
+	db := instance(t, "real-sql-ip-configuration-from-state", "db").Database
+	if !db.PublicEndpoint.IsKnown() || db.PublicEndpoint.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("endpoint: method = %q (state %s), want %q",
+			db.PublicEndpoint.Method(), db.PublicEndpoint.State, model.MethodConfigurationUnrecorded)
+	}
+	if !db.AdmitsAnyAddress.IsKnown() || !db.AdmitsAnyAddress.Get() ||
+		db.AdmitsAnyAddress.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("admission: method = %q (state %s), want known true %q",
+			db.AdmitsAnyAddress.Method(), db.AdmitsAnyAddress.State, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// Two instances in one real plan that differ only in how settings is written.
+// The static one records the block, so its unwritten switch is the provider's
+// default and its written allow list is stated. A dynamic settings block is not
+// recorded at all, so neither half can be attributed.
+func TestADynamicSettingsBlockIsConfigurationUnrecorded(t *testing.T) {
+	static := instance(t, "real-sql-dynamic-settings", "static").Database
+	if static.PublicEndpoint.Method() != model.MethodProviderDefault {
+		t.Errorf("static endpoint: method = %q, want %q", static.PublicEndpoint.Method(), model.MethodProviderDefault)
+	}
+	if static.AdmitsAnyAddress.Method() != model.MethodStated {
+		t.Errorf("static admission: method = %q, want %q", static.AdmitsAnyAddress.Method(), model.MethodStated)
+	}
+	dynamic := instance(t, "real-sql-dynamic-settings", "dyn").Database
+	if !dynamic.PublicEndpoint.IsKnown() || dynamic.PublicEndpoint.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("dynamic endpoint: method = %q (state %s), want %q",
+			dynamic.PublicEndpoint.Method(), dynamic.PublicEndpoint.State, model.MethodConfigurationUnrecorded)
+	}
+	if !dynamic.AdmitsAnyAddress.IsKnown() || dynamic.AdmitsAnyAddress.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("dynamic admission: method = %q (state %s), want %q",
+			dynamic.AdmitsAnyAddress.Method(), dynamic.AdmitsAnyAddress.State, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// A grant settles only because public_access_prevention is not enforced, and
+// that is the provider's value when nobody writes it. The hand-written
+// public-iam-member writes only the bucket's name; real-bucket-prevention-pair
+// is a real create plan of two buckets that differ only in writing it, where
+// the unwritten one is unknown in after and the written one is "inherited".
+func TestAGrantThroughAnUnwrittenPreventionIsTheProvidersDefault(t *testing.T) {
+	access := bucket(t, "public-iam-member").ObjectStorage.PublicAccess
+	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodProviderDefault {
+		t.Errorf("public-iam-member: method = %q (state %s), want known true %q",
+			access.Method(), access.State, model.MethodProviderDefault)
+	}
+
+	graph := graphOf(t, "real-bucket-prevention-pair")
+	for address, want := range map[string]model.Method{
+		"google_storage_bucket.unwritten": model.MethodProviderDefault,
+		"google_storage_bucket.written":   model.MethodStated,
+	} {
+		found, ok := graph.At(address)
+		if !ok || found.ObjectStorage == nil {
+			t.Fatalf("real-bucket-prevention-pair has no bucket at %s", address)
+		}
+		access := found.ObjectStorage.PublicAccess
+		if !access.IsKnown() || !access.Get() || access.Method() != want {
+			t.Errorf("%s: method = %q (state %s), want known true %q", address, access.Method(), access.State, want)
+		}
+	}
+}
+
+// A real update plan: the state holds "inherited" and the configuration does
+// not write the argument, which is Optional and Computed, so Terraform carries
+// it. The grant rests on a value carried from state.
+func TestAGrantThroughAPreventionCarriedFromStateIsPriorState(t *testing.T) {
+	found, ok := graphOf(t, "real-bucket-prevention-from-state").At("google_storage_bucket.unwritten")
+	if !ok || found.ObjectStorage == nil {
+		t.Fatal("real-bucket-prevention-from-state has no bucket at google_storage_bucket.unwritten")
+	}
+	access := found.ObjectStorage.PublicAccess
+	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodPriorState {
+		t.Errorf("method = %q (state %s), want known true %q", access.Method(), access.State, model.MethodPriorState)
+	}
+}
+
+// The interpreted document keeps its method beside a defaulted prevention, as
+// the AWS policy channel does beside a defaulted flag.
+func TestAPolicyDataGrantThroughAnUnwrittenPreventionStaysInterpreted(t *testing.T) {
+	access := bucket(t, "public-iam-policy-data").ObjectStorage.PublicAccess
+	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodPolicyDocument {
+		t.Errorf("method = %q, want %q", access.Method(), model.MethodPolicyDocument)
 	}
 }

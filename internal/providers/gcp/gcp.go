@@ -113,7 +113,7 @@ func (m Mapper) Map(subject terraformplan.ResourceChange, related, scope []terra
 	prevention, preventionSources := preventionState(subject)
 
 	capabilities := model.ObjectStorageCapabilities{
-		PublicAccess: publicAccess(prevention, preventionSources, related),
+		PublicAccess: publicAccess(prevention, preventionMethod(subject), preventionSources, related),
 	}
 	if prevention != answerYes {
 		capabilities.Unresolved = []model.MissingControl{{
@@ -144,13 +144,16 @@ const (
 )
 
 // publicAccess decides whether the change grants public access to the bucket.
-func publicAccess(prevention answer, preventionSources []model.Provenance,
+//
+// preventionMethod is how prevention was established, or "" when the method of
+// prevention says nothing the verdict rests on.
+func publicAccess(prevention answer, preventionMethod model.Method, preventionSources []model.Provenance,
 	related []terraformplan.ResourceChange) model.Fact[bool] {
 
 	// Enforced prevention settles it, whatever the bindings say — which is why
 	// a plan granting allUsers alongside enforced prevention is not public.
 	if prevention == answerYes {
-		return model.Known(false, model.MethodStated, preventionSources...).Canonical()
+		return model.Known(false, preventionMethod, preventionSources...).Canonical()
 	}
 
 	grant, method, grantSources := publicBinding(related)
@@ -158,6 +161,13 @@ func publicAccess(prevention answer, preventionSources []model.Provenance,
 
 	switch grant {
 	case answerYes:
+		// The grant settles only because prevention is not enforced, so it
+		// rests on prevention as much as on the binding. An interpreted
+		// document keeps its own method, as the AWS policy channel does: the
+		// document is what the finding cites.
+		if method != model.MethodPolicyDocument && preventionMethod != "" {
+			method = declared.Weakest(method, preventionMethod)
+		}
 		return model.Known(true, method, grantSources...).Canonical()
 	case answerRedacted:
 		return model.Redacted[bool](sources...).Canonical()
@@ -193,6 +203,23 @@ func preventionState(bucket terraformplan.ResourceChange) (answer, []model.Prove
 	}
 }
 
+// preventionMethod is how the bucket's public_access_prevention was
+// established. Optional and Computed: unwritten on a create, the provider's
+// default, which is "inherited" and which a real create plan carries as
+// unknown; unwritten on an update, the value Terraform carried from state.
+//
+// A value somebody wrote that the plan does not yet know contributes nothing:
+// the verdict then treats an unknown prevention as not enforced, a milestone 09
+// behaviour this method does not paper over by calling it stated.
+func preventionMethod(bucket terraformplan.ResourceChange) model.Method {
+	argument := declared.Argument{Path: attrPrevention, Computed: true}
+	if bucket.After.Field(attrPrevention).State() != terraformplan.StateKnown &&
+		argument.Writing(bucket) == declared.WritingWritten {
+		return ""
+	}
+	return argument.Method(bucket)
+}
+
 // publicBinding reports whether any related IAM resource names everyone, and how
 // the grant was established: a member list is stated, a policy document is this
 // build's reading of one. A stated grant wins, because it is the proof the
@@ -200,8 +227,11 @@ func preventionState(bucket terraformplan.ResourceChange) (answer, []model.Prove
 func publicBinding(related []terraformplan.ResourceChange) (answer, model.Method, []model.Provenance) {
 	var sources []model.Provenance
 	result := answerNo
-	method := model.MethodStated
-	statedGrant := false
+	// proofs are the methods of every binding that grants. A grant needs only
+	// one, so it takes the best of them: a member list over an interpreted
+	// document. `member` and `members` are Required, so wherever the
+	// configuration records the resource it records them.
+	var proofs []model.Method
 
 	escalate := func(candidate answer) {
 		if candidate == answerYes || result == answerNo ||
@@ -215,22 +245,27 @@ func publicBinding(related []terraformplan.ResourceChange) (answer, model.Method
 		case typeIAMMember:
 			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "member", change.After.Field("member")))
 			candidate := memberIsEveryone(change.After.Field("member"))
-			statedGrant = statedGrant || candidate == answerYes
+			if candidate == answerYes {
+				proofs = append(proofs, declared.Argument{Path: "member", Required: true}.Method(change))
+			}
 			escalate(candidate)
 		case typeIAMBinding:
 			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "members", change.After.Field("members")))
 			candidate := membersIncludeEveryone(change.After.Field("members"))
-			statedGrant = statedGrant || candidate == answerYes
+			if candidate == answerYes {
+				proofs = append(proofs, declared.Argument{Path: "members", Required: true}.Method(change))
+			}
 			escalate(candidate)
 		case typeIAMPolicy:
 			sources = append(sources, declared.Source(model.CloudGCP, change.Address, "policy_data", change.After.Field("policy_data")))
-			escalate(policyDataGrantsPublic(change.After.Field("policy_data")))
+			candidate := policyDataGrantsPublic(change.After.Field("policy_data"))
+			if candidate == answerYes {
+				proofs = append(proofs, model.MethodPolicyDocument)
+			}
+			escalate(candidate)
 		}
 	}
-	if result == answerYes && !statedGrant {
-		method = model.MethodPolicyDocument
-	}
-	return result, method, sources
+	return result, declared.Strongest(proofs...), sources
 }
 
 func memberIsEveryone(value terraformplan.Value) answer {
