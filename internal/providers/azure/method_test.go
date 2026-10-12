@@ -309,3 +309,25 @@ func TestAnAdmissionByAUnionRestsOnEveryRuleInIt(t *testing.T) {
 		t.Errorf("method = %q (state %s), want known true %q", admitted.Method(), admitted.State, model.MethodPriorState)
 	}
 }
+
+// An inline security_rule is an attribute written as blocks: Terraform records
+// every attribute of the rule, null where nothing was written, and plans an
+// attribute nobody wrote as an empty value. A source the plan keeps where the
+// configuration wrote nothing is not the author's -- under ignore_changes, it
+// is the state's. Hand-authored from nsg-cancelled-rule-beside-unrecorded,
+// since azurerm cannot be planned offline: the group is a no-op whose rule
+// writes source_address_prefix = "10.0.0.0/8" and leaves
+// source_address_prefixes null, while the plan keeps ["0.0.0.0/0"] there; the
+// twin writes both.
+func TestAnInlineRuleAttributeNobodyWroteIsNotStated(t *testing.T) {
+	cases := map[string]model.Method{
+		"nsg-inline-null-source-carried":     model.MethodPriorState,
+		"nsg-inline-sources-written-carried": model.MethodStated,
+	}
+	for fixture, want := range cases {
+		got := securityGroup(t, fixture).Network.PublicIngress
+		if !got.IsKnown() || !got.Get() || got.Method() != want {
+			t.Errorf("%s: %s method = %q, want known true %q", fixture, got.State, got.Method(), want)
+		}
+	}
+}

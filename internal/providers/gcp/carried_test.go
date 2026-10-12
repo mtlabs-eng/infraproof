@@ -188,3 +188,57 @@ func TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue(t *
 		}
 	}
 }
+
+// Real plans from the fifth review, where the method was decided at a place
+// other than the one the verdict reads.
+
+// ignore_changes = [labels["environment"]] beside a label the configuration
+// moves: the map moves, the key the verdict reads does not.
+func TestALabelTheLifecycleKeepsIsPriorStateWhileTheMapMoves(t *testing.T) {
+	r, ok := methodAt(t, "real-labels-partial-ignore", "google_storage_bucket.b")
+	if !ok {
+		t.Fatal("no bucket")
+	}
+	if got := r.Environment; !got.IsKnown() || got.Method() != model.MethodPriorState {
+		t.Errorf("%s method = %q, want known %q", got.State, got.Method(), model.MethodPriorState)
+	}
+}
+
+// A block written in block syntax records only the attributes the author
+// wrote, and Terraform plans the others empty. allow { protocol = "tcp" } is
+// every TCP port; under ignore_changes = [allow] the state's ports = ["22"]
+// stand, which nobody under review wrote. The firewall whose state adds a
+// block the configuration does not write, and the Cloud SQL network list the
+// state widens, read the same way.
+func TestAnAttributeABlockDoesNotWriteIsNotStated(t *testing.T) {
+	for _, address := range []string{"google_compute_firewall.fw2", "google_compute_firewall.fw"} {
+		r, ok := methodAt(t, "real-blocks-unwritten-from-state", address)
+		if !ok {
+			t.Fatalf("no %s", address)
+		}
+		if got := r.Network.PublicIngress; !got.IsKnown() || !got.Get() || got.Method() != model.MethodPriorState {
+			t.Errorf("%s: %s method = %q, want known true %q", address, got.State, got.Method(), model.MethodPriorState)
+		}
+	}
+	db, ok := methodAt(t, "real-blocks-unwritten-from-state", "google_sql_database_instance.db")
+	if !ok {
+		t.Fatal("no instance")
+	}
+	if got := db.Database.AdmitsAnyAddress; !got.IsKnown() || got.Method() != model.MethodPriorState {
+		t.Errorf("admits any address: %s method = %q, want known %q", got.State, got.Method(), model.MethodPriorState)
+	}
+}
+
+// allow { protocol = "TCP" } against a state holding "tcp": the provider
+// treats the two as one and the plan is a no-op -- measured -- but this build
+// compares the constant as Terraform converts it, so the method understates it
+// as prior-state.
+func TestAProtocolTheProviderCanonicalizesReadsPriorState(t *testing.T) {
+	r, ok := methodAt(t, "real-labels-partial-ignore", "google_compute_firewall.fw")
+	if !ok {
+		t.Fatal("no firewall")
+	}
+	if got := r.Network.PublicIngress; !got.IsKnown() || !got.Get() || got.Method() != model.MethodPriorState {
+		t.Errorf("%s method = %q, want known true %q", got.State, got.Method(), model.MethodPriorState)
+	}
+}

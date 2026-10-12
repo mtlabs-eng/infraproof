@@ -126,3 +126,62 @@ func TestAWriteThePlanDoesNotEvaluateIsStatedWhereTheUpdateMovesTheValue(t *test
 	wantMethod(t, "an inline rule moved to a variable's value",
 		at(t, "real-reference-write-moved", "aws_security_group.web").Network.PublicIngress, model.MethodStated)
 }
+
+// Real plans from the fifth review, where the method was decided at a place
+// other than the one the verdict reads.
+
+// ignore_changes = [tags["environment"]] beside a tag the configuration moves:
+// the map moves, the key the verdict reads does not, and its value is the
+// state's, not the staging the configuration writes. A replacement is a new
+// object, where Terraform applies the configuration whatever the lifecycle
+// says.
+func TestAKeyTheLifecycleKeepsIsPriorStateWhileTheMapMoves(t *testing.T) {
+	wantMethod(t, "tags[\"environment\"] kept, team moved",
+		at(t, "real-tags-partial-ignore", "aws_s3_bucket.b").Environment, model.MethodPriorState)
+	wantMethod(t, "a replaced bucket's ignored tags",
+		at(t, "real-tags-partial-ignore", "aws_s3_bucket.r").Environment, model.MethodStated)
+}
+
+// ignore_changes = [tags], one tag written from a sensitive variable: the plan
+// is a no-op, and the sensitive mark on the sibling must not make the map look
+// moved. The control is the same configuration with the variable not
+// sensitive; both read what the plan records about a reference write the
+// update keeps.
+func TestASensitiveTagDoesNotMakeAKeptMapMove(t *testing.T) {
+	for _, fixture := range []string{"real-tags-sensitive-ignored", "real-tags-sensitive-ignored-control"} {
+		wantMethod(t, fixture, at(t, fixture, "aws_s3_bucket.s").Environment, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// Terraform records an inline rule with every attribute, null where nothing
+// was written, and plans an attribute nobody wrote as an empty value. Under
+// ignore_changes = [ingress] a source the state holds where the configuration
+// wrote nothing is not the author's: a rule that writes 10.0.0.0/8 and leaves
+// the state's ::/0 standing, and a rule that writes no source at all against a
+// state that admits 0.0.0.0/0. The same rule without ignore_changes plans the
+// unwritten source empty and is not public; a rule that writes 0.0.0.0/0 is
+// stated.
+func TestAnAttributeNobodyWroteInAnInlineRuleIsNotStated(t *testing.T) {
+	wantMethod(t, "::/0 kept where null was written",
+		at(t, "real-sg-null-attribute-from-state", "aws_security_group.web").Network.PublicIngress, model.MethodPriorState)
+	wantMethod(t, "0.0.0.0/0 kept where no source was written",
+		at(t, "real-sg-unwritten-source-from-state", "aws_security_group.web").Network.PublicIngress, model.MethodPriorState)
+	wantMethod(t, "0.0.0.0/0 written",
+		at(t, "real-sg-null-attribute-from-state", "aws_security_group.ports").Network.PublicIngress, model.MethodStated)
+	ctl := at(t, "real-sg-null-attribute-from-state", "aws_security_group.ctl").Network.PublicIngress
+	if !ctl.IsKnown() || ctl.Get() {
+		t.Errorf("the control: %s %v, want known false", ctl.State, ctl.Get())
+	}
+}
+
+// The provider canonicalizes a protocol written "TCP", or by its number "6", to
+// "tcp", and the plan of the constant against a state holding "tcp" is a no-op
+// -- measured. This build compares constants as Terraform converts them, not
+// as a provider canonicalizes them, so the plan's "tcp" contradicts the "TCP"
+// written and the method reads prior-state. That understates a value the
+// author wrote; it never states one nobody did.
+func TestAConstantTheProviderCanonicalizesReadsPriorState(t *testing.T) {
+	for _, address := range []string{"aws_security_group.n1", "aws_security_group.n2"} {
+		wantMethod(t, address, at(t, "real-tags-sensitive-ignored", address).Network.PublicIngress, model.MethodPriorState)
+	}
+}
