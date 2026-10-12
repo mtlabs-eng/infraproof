@@ -203,7 +203,7 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	// A grant nothing blocks settles it.
 	for _, c := range []channel{acl, policy} {
 		if c.grant == answerYes && c.blocked == answerNo {
-			return model.Known(true, c.sources...).Canonical()
+			return model.Known(true, model.MethodStated, c.sources...).Canonical()
 		}
 	}
 
@@ -237,7 +237,7 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 		if !blocksEveryRoute(proven) {
 			proven = account
 		}
-		return model.Known(false, blockProvenance(proven)...).Canonical()
+		return model.Known(false, model.MethodStated, blockProvenance(proven)...).Canonical()
 	}
 	return model.Unknown[bool](sources...).Canonical()
 }

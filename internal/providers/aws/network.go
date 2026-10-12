@@ -119,7 +119,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 
 	switch {
 	case len(found.ranges) > 0:
-		capabilities.PublicIngress = model.Known(true, found.cited...)
+		capabilities.PublicIngress = model.Known(true, model.MethodStated, found.cited...)
 		// The grant is proven and the set behind it may not be whole. The
 		// boolean is unaffected -- an unread rule can only add openness here --
 		// but anyone asking which ports the set reaches has to be told that the
@@ -128,7 +128,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	case found.unread:
 		capabilities.PublicIngress = model.Unknown[bool](found.cited...)
 	case stated:
-		capabilities.PublicIngress = model.Known(false, found.cited...)
+		capabilities.PublicIngress = model.Known(false, model.MethodStated, found.cited...)
 		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
 			CheckID: checkRuleSetOpenEnded,
 			Reason: "The group writes its rules inline and the provider does not refuse a separate " +

@@ -85,7 +85,7 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 	if value.State() != terraformplan.StateKnown || value.Kind() != terraformplan.KindBool {
 		return model.Unknown[bool](cited)
 	}
-	return model.Known(value.Bool(), cited)
+	return model.Known(value.Bool(), model.MethodStated, cited)
 }
 
 // allowList reads the server's firewall rules and answers whether any of them
@@ -173,7 +173,7 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	// The union, not any single rule: two halves of the space are each narrow
 	// and together are the internet.
 	if len(ranges) > 0 && declared.RangeReach(ranges) == declared.ReachAnyAddress {
-		return model.Known(true, cited...), unread
+		return model.Known(true, model.MethodStated, cited...), unread
 	}
 	// Closure is not provable on this cloud at all, and that is not a limitation
 	// of this build. A database firewall rule is always a separate resource --
@@ -319,5 +319,5 @@ func listeningPort(subject terraformplan.ResourceChange) model.Fact[int] {
 	if port == 0 {
 		return model.Unknown[int](portCitation(subject))
 	}
-	return model.Known(port, portCitation(subject))
+	return model.Known(port, model.MethodStated, portCitation(subject))
 }

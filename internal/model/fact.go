@@ -25,7 +25,7 @@ const (
 type FactState string
 
 const (
-	// FactKnown means a mapper determined the value from the plan.
+	// FactKnown means a mapper determined the value; Method says how.
 	FactKnown FactState = "KNOWN"
 	// FactUnknown means the plan does not determine the value.
 	FactUnknown FactState = "UNKNOWN"
@@ -34,6 +34,32 @@ const (
 	FactAbsent FactState = "ABSENT"
 	// FactRedacted means the source value was marked sensitive and discarded.
 	FactRedacted FactState = "REDACTED"
+)
+
+// Method is how a mapper established a KNOWN fact's value. Only a KNOWN fact has
+// one; the other states established nothing.
+//
+// The zero value is not a method. A fact nobody gave one reaches the bundle as
+// an unrecognized method and fails validation, rather than reading as stated --
+// a default of "stated" would present every defaulted, inferred or interpreted
+// value as one the plan wrote, which is the defect milestone 10 removes.
+type Method string
+
+const (
+	// MethodStated means the plan states the value.
+	MethodStated Method = "plan-stated-value"
+	// MethodProviderDefault means the argument is unwritten and the value is the
+	// provider's documented default.
+	MethodProviderDefault Method = "provider-default"
+	// MethodPolicyDocument means the value is this build's reading of a JSON
+	// policy document.
+	MethodPolicyDocument Method = "policy-document-interpreted"
+	// MethodReferenceResolved means the value joins two resources through
+	// configuration references.
+	MethodReferenceResolved Method = "reference-resolved"
+	// MethodDocumentedTable means the value comes from a closed, documented table
+	// in this build.
+	MethodDocumentedTable Method = "documented-table"
 )
 
 // Provenance locates where a normalized fact came from. Three clouds reach the
@@ -62,12 +88,24 @@ type Provenance struct {
 type Fact[T any] struct {
 	State   FactState
 	value   T
+	method  Method
 	Sources []Provenance
 }
 
-// Known returns a fact a mapper determined, attributed to the given sources.
-func Known[T any](value T, sources ...Provenance) Fact[T] {
-	return Fact[T]{State: FactKnown, value: value, Sources: sources}
+// Known returns a fact a mapper determined, how it determined it, and the
+// sources it is attributed to. There is no constructor without a method, so
+// every site that establishes a value has to say how.
+func Known[T any](value T, method Method, sources ...Provenance) Fact[T] {
+	return Fact[T]{State: FactKnown, value: value, method: method, Sources: sources}
+}
+
+// Method returns how the value was established, or "" for any state but
+// FactKnown.
+func (f Fact[T]) Method() Method {
+	if f.State != FactKnown {
+		return ""
+	}
+	return f.method
 }
 
 // Unknown returns a fact the plan does not determine.

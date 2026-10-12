@@ -176,7 +176,7 @@ func TestR06RequiredDisagreesWithStorage(t *testing.T) {
 // R0-7 LATENT. Known(0) as a port makes a group open on 1-65535 read as closed.
 func TestR07PortZeroReadsAsClosed(t *testing.T) {
 	r := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
-		reachable(known(true), unknownBool(), model.Known(0, provenance()),
+		reachable(known(true), unknownBool(), model.Known(0, model.MethodStated, provenance()),
 			group("aws_security_group.db", known(true), rngR(model.ProtocolTCP, 1, 65535))))
 	if len(r.Findings) == 0 && len(r.Unknowns) == 0 {
 		t.Fatal("Port=Known(0) against a group open on every usable port produced total silence")

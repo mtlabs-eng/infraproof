@@ -104,7 +104,7 @@ func Environment(change terraformplan.ResourceChange, attribute string, cloud mo
 		// taking the readable one would be choosing on the plan's behalf.
 		return model.Unknown[string](source)
 	case readable:
-		return model.Known(stated, source)
+		return model.Known(stated, model.MethodStated, source)
 	}
 
 	return model.Absent[string](source)

@@ -118,13 +118,13 @@ func publicEndpoint(subject terraformplan.ResourceChange, config terraformplan.V
 	value := config.Field(attrIPv4Enabled)
 
 	if value.State() == terraformplan.StateKnown && value.Kind() == terraformplan.KindBool {
-		return model.Known(value.Bool(), cited)
+		return model.Known(value.Bool(), model.MethodStated, cited)
 	}
 	if wroteSettings(subject) && declared.Unwritten(subject, pathIPv4Enabled) {
 		// Nobody wrote it inside a block the author did write, so the provider's
 		// documented default applies: Cloud SQL gives an instance a public IP
 		// unless asked not to.
-		return model.Known(true, cited)
+		return model.Known(true, model.MethodStated, cited)
 	}
 	return model.Unknown[bool](cited)
 }
@@ -235,7 +235,7 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 	// The grant before the gaps: one entry covering everything settles it.
 	switch declared.SetReach(prefixes) {
 	case declared.ReachAnyAddress:
-		return model.Known(true, cited), unread
+		return model.Known(true, model.MethodStated, cited), unread
 	case declared.ReachUnreadable:
 		return model.Unknown[bool](cited), append(unread, model.MissingControl{
 			CheckID: checkAuthNetsUnread,
@@ -250,7 +250,7 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 	}
 	// Every entry was read and none covers every address. The list is inside the
 	// instance, so this is the whole list and an empty one authorizes nobody.
-	return model.Known(false, cited), nil
+	return model.Known(false, model.MethodStated, cited), nil
 }
 
 // wroteSettings reports that the author wrote the block the switch and the allow
@@ -286,5 +286,5 @@ func listeningPort(subject terraformplan.ResourceChange) model.Fact[int] {
 	if !named {
 		return model.Unknown[int](cited)
 	}
-	return model.Known(port, cited)
+	return model.Known(port, model.MethodStated, cited)
 }

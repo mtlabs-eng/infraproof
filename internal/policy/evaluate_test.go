@@ -14,10 +14,10 @@ func private(address string) model.NormalizedResource {
 	return model.NormalizedResource{
 		Address: address, Provider: "registry.terraform.io/hashicorp/aws",
 		Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
-		Environment: model.Known("staging",
+		Environment: model.Known("staging", model.MethodStated,
 			model.Provenance{ResourceAddress: address, AttributePath: "tags.environment"}),
 		ObjectStorage: &model.ObjectStorageCapabilities{
-			PublicAccess: model.Known(false,
+			PublicAccess: model.Known(false, model.MethodStated,
 				model.Provenance{ResourceAddress: address, AttributePath: "block_public_acls"})},
 	}
 }
@@ -57,7 +57,7 @@ func TestACleanChangePasses(t *testing.T) {
 // and leaves something undetermined must report the violation.
 func TestDecisionPrecedence(t *testing.T) {
 	public := private("aws_s3_bucket.public")
-	public.ObjectStorage.PublicAccess = model.Known(true,
+	public.ObjectStorage.PublicAccess = model.Known(true, model.MethodStated,
 		model.Provenance{ResourceAddress: "aws_s3_bucket_acl.public", AttributePath: "acl"})
 
 	undetermined := private("aws_s3_bucket.undetermined")
@@ -102,11 +102,11 @@ func TestDecisionPrecedence(t *testing.T) {
 // that cannot point at the data it came from is an opinion.
 func TestEveryBlockRestsOnEvidence(t *testing.T) {
 	public := private("aws_s3_bucket.public")
-	public.ObjectStorage.PublicAccess = model.Known(true,
+	public.ObjectStorage.PublicAccess = model.Known(true, model.MethodStated,
 		model.Provenance{ResourceAddress: "aws_s3_bucket_acl.public", AttributePath: "acl"})
 
 	wrongEnvironment := private("aws_s3_bucket.prod")
-	wrongEnvironment.Environment = model.Known("production",
+	wrongEnvironment.Environment = model.Known("production", model.MethodStated,
 		model.Provenance{ResourceAddress: "aws_s3_bucket.prod", AttributePath: "tags.environment"})
 
 	otherCloud := private("google_storage_bucket.g")
@@ -214,7 +214,7 @@ func TestVerificationRecordsWhatDidNotRun(t *testing.T) {
 // rules happened to append in.
 func TestEvaluateIsDeterministic(t *testing.T) {
 	public := private("aws_s3_bucket.public")
-	public.ObjectStorage.PublicAccess = model.Known(true,
+	public.ObjectStorage.PublicAccess = model.Known(true, model.MethodStated,
 		model.Provenance{ResourceAddress: "aws_s3_bucket_acl.public", AttributePath: "acl"})
 	undetermined := private("aws_s3_bucket.undetermined")
 	undetermined.ObjectStorage.PublicAccess = model.Unknown[bool]()
@@ -244,7 +244,7 @@ func TestEvaluateIsDeterministic(t *testing.T) {
 // structural guarantees.
 func TestTheSummaryNeverCarriesAPlanValue(t *testing.T) {
 	secret := private("aws_s3_bucket.secret")
-	secret.Environment = model.Known("hunter2-the-environment",
+	secret.Environment = model.Known("hunter2-the-environment", model.MethodStated,
 		model.Provenance{ResourceAddress: "aws_s3_bucket.secret", AttributePath: "tags.environment"})
 
 	bundle := bundleFor(t, contract(nil), secret)
@@ -282,7 +282,7 @@ func TestAResourceNoRuleEvaluatedCannotPass(t *testing.T) {
 		Cloud:       model.CloudAWS,
 		Family:      model.Family("message_queue"),
 		Interpreted: true,
-		Environment: model.Known("staging",
+		Environment: model.Known("staging", model.MethodStated,
 			model.Provenance{ResourceAddress: "aws_sqs_queue.orders", AttributePath: "tags.environment"}),
 	}
 

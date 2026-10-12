@@ -150,7 +150,7 @@ func publicAccess(prevention answer, preventionSources []model.Provenance,
 	// Enforced prevention settles it, whatever the bindings say — which is why
 	// a plan granting allUsers alongside enforced prevention is not public.
 	if prevention == answerYes {
-		return model.Known(false, preventionSources...).Canonical()
+		return model.Known(false, model.MethodStated, preventionSources...).Canonical()
 	}
 
 	grant, grantSources := publicBinding(related)
@@ -158,7 +158,7 @@ func publicAccess(prevention answer, preventionSources []model.Provenance,
 
 	switch grant {
 	case answerYes:
-		return model.Known(true, grantSources...).Canonical()
+		return model.Known(true, model.MethodStated, grantSources...).Canonical()
 	case answerRedacted:
 		return model.Redacted[bool](sources...).Canonical()
 	case answerUnknown:

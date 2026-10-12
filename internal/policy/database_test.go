@@ -70,8 +70,8 @@ func group(address string, ingress model.Fact[bool], open ...model.OpenRange) mo
 	}
 }
 
-func known(v bool) model.Fact[bool]   { return model.Known(v, provenance()) }
-func knownPort(p int) model.Fact[int] { return model.Known(p, provenance()) }
+func known(v bool) model.Fact[bool]   { return model.Known(v, model.MethodStated, provenance()) }
+func knownPort(p int) model.Fact[int] { return model.Known(p, model.MethodStated, provenance()) }
 func unknownBool() model.Fact[bool]   { return model.Unknown[bool](provenance()) }
 func unknownPort() model.Fact[int]    { return model.Unknown[int](provenance()) }
 
@@ -479,7 +479,7 @@ func TestAPortOfZeroIsNotAPort(t *testing.T) {
 	}
 
 	result := policy.DatabaseExposure(declaringExposure(intent.ExposurePrivate),
-		reachable(known(true), unknownBool(), model.Known(0, provenance()),
+		reachable(known(true), unknownBool(), model.Known(0, model.MethodStated, provenance()),
 			group("aws_security_group.db", known(true), everyUsablePort)))
 
 	if len(result.Findings) != 1 {

@@ -126,19 +126,19 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 		// default, and an absence beside an argument somebody did write is a
 		// value the plan withheld.
 		if declared.Unwritten(subject, attrPubliclyAccessible) {
-			return model.Known(false, cited)
+			return model.Known(false, model.MethodStated, cited)
 		}
 		return model.Unknown[bool](cited)
 	case terraformplan.StateKnown:
 		if value.Kind() != terraformplan.KindBool {
 			return model.Unknown[bool](cited)
 		}
-		return model.Known(value.Bool(), cited)
+		return model.Known(value.Bool(), model.MethodStated, cited)
 	default:
 		if declared.Unwritten(subject, attrPubliclyAccessible) {
 			// Computed and nobody wrote it, so the provider's documented default
 			// applies: a database is not publicly accessible unless asked for.
-			return model.Known(false, cited)
+			return model.Known(false, model.MethodStated, cited)
 		}
 		return model.Unknown[bool](cited)
 	}
@@ -340,7 +340,7 @@ func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	if stated := subject.After.Field(attrPort); stated.State() == terraformplan.StateKnown &&
 		stated.Kind() == terraformplan.KindNumber {
 		if value, err := stated.Number().Int64(); err == nil && value > 0 && value <= lastPort {
-			return model.Known(int(value),
+			return model.Known(int(value), model.MethodStated,
 				declared.Source(model.CloudAWS, subject.Address, attrPort, stated)), false
 		}
 	}
@@ -362,7 +362,7 @@ func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	if !named {
 		return model.Unknown[int](cited), true
 	}
-	return model.Known(port, cited), true
+	return model.Known(port, model.MethodStated, cited), true
 }
 
 // clusterUncorrelated reports that the plan holds an Aurora cluster the subject

@@ -208,7 +208,7 @@ func TestTheRuleReadsOnlyTheModel(t *testing.T) {
 		Family:      model.FamilyObjectStorage,
 		Interpreted: true,
 		ObjectStorage: &model.ObjectStorageCapabilities{
-			PublicAccess: model.Known(true, model.Provenance{
+			PublicAccess: model.Known(true, model.MethodStated, model.Provenance{
 				ResourceAddress: "invented.resource",
 				AttributePath:   "exposed",
 				Cloud:           model.Cloud("newcloud"),
@@ -235,7 +235,7 @@ func TestAFindingFromAnUnknownCloudStillValidates(t *testing.T) {
 		Family:      model.FamilyObjectStorage,
 		Interpreted: true,
 		ObjectStorage: &model.ObjectStorageCapabilities{
-			PublicAccess: model.Known(true, model.Provenance{
+			PublicAccess: model.Known(true, model.MethodStated, model.Provenance{
 				ResourceAddress: "invented.resource",
 				AttributePath:   "exposed",
 				Cloud:           model.Cloud("newcloud"),

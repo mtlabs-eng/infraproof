@@ -131,13 +131,13 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 
 	switch {
 	case len(opened) > 0:
-		capabilities.PublicIngress = model.Known(true, cited...)
+		capabilities.PublicIngress = model.Known(true, model.MethodStated, cited...)
 	default:
 		// Every rule of this firewall was read. The platform denies inbound
 		// traffic no rule allows, so a firewall that opens nothing to any
 		// address permits nothing from any address -- whatever another firewall
 		// allows is that firewall's own grant, reported there.
-		capabilities.PublicIngress = model.Known(false, cited...)
+		capabilities.PublicIngress = model.Known(false, model.MethodStated, cited...)
 	}
 
 	// Two different approximations, each with its own reason. They share a

@@ -90,7 +90,7 @@ func TestANetworkResourceCarriesItsCapabilities(t *testing.T) {
 		Cloud:   model.CloudAWS,
 		Family:  model.FamilyNetwork,
 		Network: &model.NetworkCapabilities{
-			PublicIngress: model.Known(true, model.Provenance{
+			PublicIngress: model.Known(true, model.MethodStated, model.Provenance{
 				ResourceAddress: "aws_security_group.web",
 				AttributePath:   "ingress[0].cidr_blocks[0]",
 				Cloud:           model.CloudAWS,

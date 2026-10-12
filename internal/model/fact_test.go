@@ -20,8 +20,8 @@ func TestFactStatesAreDistinguishable(t *testing.T) {
 		state FactState
 		value bool
 	}{
-		"known true":  {Known(true, source), FactKnown, true},
-		"known false": {Known(false, source), FactKnown, false},
+		"known true":  {Known(true, MethodStated, source), FactKnown, true},
+		"known false": {Known(false, MethodStated, source), FactKnown, false},
 		"unknown":     {Unknown[bool](source), FactUnknown, false},
 		"absent":      {Absent[bool](source), FactAbsent, false},
 		"redacted":    {Redacted[bool](source), FactRedacted, false},
@@ -59,7 +59,7 @@ func TestOnlyAKnownFactCarriesAValue(t *testing.T) {
 			t.Fatalf("a %s fact reported itself known", fact.State)
 		}
 	}
-	if !Known(true, aws("a.b", "x")).IsKnown() {
+	if !Known(true, MethodStated, aws("a.b", "x")).IsKnown() {
 		t.Fatal("a known fact should report itself known")
 	}
 }
@@ -71,11 +71,11 @@ func TestEveryFactRecordsItsProvenance(t *testing.T) {
 	first := aws("aws_s3_bucket_public_access_block.assets", "block_public_policy")
 	second := aws("aws_s3_bucket_policy.assets", "policy")
 
-	fact := Known(true, first, second)
+	fact := Known(true, MethodStated, first, second)
 	if !reflect.DeepEqual(fact.Sources, []Provenance{first, second}) {
 		t.Fatalf("sources = %v", fact.Sources)
 	}
-	if len(Known(true).Sources) != 0 {
+	if len(Known(true, MethodStated).Sources) != 0 {
 		t.Fatal("a fact with no stated source must not invent one")
 	}
 }
@@ -86,8 +86,8 @@ func TestProvenanceOrdersDeterministically(t *testing.T) {
 	late := aws("aws_s3_bucket_policy.assets", "policy")
 	early := aws("aws_s3_bucket_acl.assets", "acl")
 
-	forward := Known(true, late, early).Canonical()
-	reversed := Known(true, early, late).Canonical()
+	forward := Known(true, MethodStated, late, early).Canonical()
+	reversed := Known(true, MethodStated, early, late).Canonical()
 
 	if !reflect.DeepEqual(forward.Sources, reversed.Sources) {
 		t.Fatalf("provenance order depends on input: %v vs %v", forward.Sources, reversed.Sources)
@@ -100,7 +100,36 @@ func TestProvenanceOrdersDeterministically(t *testing.T) {
 func TestDuplicateProvenanceIsCollapsed(t *testing.T) {
 	source := aws("aws_s3_bucket.assets", "bucket")
 
-	if got := Known(true, source, source).Canonical().Sources; len(got) != 1 {
+	if got := Known(true, MethodStated, source, source).Canonical().Sources; len(got) != 1 {
 		t.Fatalf("sources = %v, want one", got)
+	}
+}
+
+func TestAKnownFactCarriesTheMethodItWasGiven(t *testing.T) {
+	f := Known(true, MethodProviderDefault, Provenance{ResourceAddress: "a", AttributePath: "b"})
+	if f.Method() != MethodProviderDefault {
+		t.Errorf("Method() = %q, want %q", f.Method(), MethodProviderDefault)
+	}
+	if f.Canonical().Method() != MethodProviderDefault {
+		t.Error("Canonical dropped the method")
+	}
+}
+
+func TestOnlyAKnownFactHasAMethod(t *testing.T) {
+	for name, f := range map[string]Fact[bool]{
+		"unknown":  Unknown[bool](),
+		"absent":   Absent[bool](),
+		"redacted": Redacted[bool](),
+	} {
+		if f.Method() != "" {
+			t.Errorf("%s fact reports method %q; nothing was established", name, f.Method())
+		}
+	}
+}
+
+func TestTheZeroMethodIsNotStated(t *testing.T) {
+	var zero Method
+	if zero == MethodStated {
+		t.Fatal("the zero method reads as plan-stated-value, which is the default this milestone removes")
 	}
 }

@@ -217,7 +217,7 @@ func admitsAnyAddress(capabilities model.DatabaseCapabilities,
 		reaches, wider := rangesReach(gate.Network.OpenToAnyAddress, capabilities.Port)
 		if reaches {
 			how.widerThanReality = how.widerThanReality || wider
-			return model.Known(true, referencesTo(gate)...), how
+			return model.Known(true, model.MethodReferenceResolved, referencesTo(gate)...), how
 		}
 		if gate.Network.RangesPartial {
 			// The port is not in the set, and the set is not the whole set: at
@@ -248,7 +248,12 @@ func admitsAnyAddress(capabilities model.DatabaseCapabilities,
 	if !settled {
 		return model.Unknown[bool](capabilities.AdmitsAnyAddress.Sources...), how
 	}
-	return model.Known(false, capabilities.AdmitsAnyAddress.Sources...), how
+	method := model.MethodReferenceResolved
+	if len(capabilities.GatedBy) == 0 {
+		// No gate was consulted: the mapper's own fact settled it.
+		method = capabilities.AdmitsAnyAddress.Method()
+	}
+	return model.Known(false, method, capabilities.AdmitsAnyAddress.Sources...), how
 }
 
 // approximation records how far the admission answer can be trusted, so every

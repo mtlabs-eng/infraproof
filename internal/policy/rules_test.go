@@ -205,7 +205,7 @@ func TestEachDisallowedCloudIsReportedOnce(t *testing.T) {
 func TestAProvableEnvironmentMismatchIsBlocked(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Interpreted: true,
-			Environment: model.Known("production",
+			Environment: model.Known("production", model.MethodStated,
 				model.Provenance{ResourceAddress: "aws_s3_bucket.b", AttributePath: "tags.environment", Cloud: model.CloudAWS})},
 	}}
 
@@ -224,7 +224,7 @@ func TestAProvableEnvironmentMismatchIsBlocked(t *testing.T) {
 func TestAMatchingEnvironmentIsSilent(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Interpreted: true,
-			Environment: model.Known("staging",
+			Environment: model.Known("staging", model.MethodStated,
 				model.Provenance{ResourceAddress: "aws_s3_bucket.b", AttributePath: "tags.environment"})},
 	}}
 
@@ -282,7 +282,7 @@ func TestPrivateIntentBlocksProvablePublicStorage(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
 			ObjectStorage: &model.ObjectStorageCapabilities{
-				PublicAccess: model.Known(true,
+				PublicAccess: model.Known(true, model.MethodStated,
 					model.Provenance{ResourceAddress: "aws_s3_bucket_acl.b", AttributePath: "acl"})}},
 	}}
 
@@ -325,7 +325,7 @@ func TestPublicIntentAcceptsPublicStorage(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
 			ObjectStorage: &model.ObjectStorageCapabilities{
-				PublicAccess: model.Known(true,
+				PublicAccess: model.Known(true, model.MethodStated,
 					model.Provenance{ResourceAddress: "aws_s3_bucket_acl.b", AttributePath: "acl"})}},
 	}}
 
@@ -381,7 +381,7 @@ func TestUnspecifiedExposureStillReportsPublicAccess(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
 			ObjectStorage: &model.ObjectStorageCapabilities{
-				PublicAccess: model.Known(true,
+				PublicAccess: model.Known(true, model.MethodStated,
 					model.Provenance{ResourceAddress: "aws_s3_bucket_acl.b", AttributePath: "acl"})}},
 	}}
 
@@ -415,7 +415,7 @@ func TestAFamilyTheContractNeverMentionedIsReportedNotJudged(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
 			ObjectStorage: &model.ObjectStorageCapabilities{
-				PublicAccess: model.Known(true,
+				PublicAccess: model.Known(true, model.MethodStated,
 					model.Provenance{ResourceAddress: "aws_s3_bucket_acl.b", AttributePath: "acl"})}},
 	}}
 
@@ -540,7 +540,7 @@ func TestTheEnvironmentValueIsComparedExactly(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			graph := model.Graph{Resources: []model.NormalizedResource{
 				{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Interpreted: true,
-					Environment: model.Known(tc.declared, model.Provenance{
+					Environment: model.Known(tc.declared, model.MethodStated, model.Provenance{
 						ResourceAddress: "aws_s3_bucket.b", AttributePath: "tags.environment"})},
 			}}
 
@@ -582,7 +582,7 @@ func TestADeclarationWithSomethingToApplyToIsSilent(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
 			Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
-				PublicAccess: model.Known(false, model.Provenance{
+				PublicAccess: model.Known(false, model.MethodStated, model.Provenance{
 					ResourceAddress: "aws_s3_bucket.b", AttributePath: "block_public_acls"})}},
 	}}
 
@@ -631,7 +631,7 @@ func TestAHostilePlanValueIsReportedNotRefused(t *testing.T) {
 
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b\nrogue", Cloud: model.CloudAWS, Interpreted: true,
-			Environment: model.Known(forgery, model.Provenance{
+			Environment: model.Known(forgery, model.MethodStated, model.Provenance{
 				ResourceAddress: "aws_s3_bucket.b\nrogue", AttributePath: "tags.environment"})},
 	}}
 
@@ -840,7 +840,7 @@ func TestRedactedEvidenceSaysSo(t *testing.T) {
 	plain := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage,
 			Interpreted: true, ObjectStorage: &model.ObjectStorageCapabilities{
-				PublicAccess: model.Known(true, read)}},
+				PublicAccess: model.Known(true, model.MethodStated, read)}},
 	}}
 	for _, finding := range policy.StorageExposure(contract(nil), plain).Findings {
 		for _, ref := range finding.Evidence {
@@ -970,7 +970,7 @@ func TestAContractValueCannotBreakTheBundleItIsComparedWith(t *testing.T) {
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Provider: "p", Cloud: model.CloudAWS,
 			Family:      model.FamilyObjectStorage,
-			Interpreted: true, Environment: model.Known("production",
+			Interpreted: true, Environment: model.Known("production", model.MethodStated,
 				model.Provenance{ResourceAddress: "aws_s3_bucket.b", AttributePath: "tags.environment"})},
 	}}
 
@@ -1016,7 +1016,7 @@ func TestDeclaredPublicExposureChangesTheDispositionAndNotTheFinding(t *testing.
 	graph := model.Graph{Resources: []model.NormalizedResource{
 		{Address: "aws_s3_bucket.b", Cloud: model.CloudAWS, Family: model.FamilyObjectStorage, Interpreted: true,
 			ObjectStorage: &model.ObjectStorageCapabilities{
-				PublicAccess: model.Known(true,
+				PublicAccess: model.Known(true, model.MethodStated,
 					model.Provenance{ResourceAddress: "aws_s3_bucket_acl.b", AttributePath: "acl"})}},
 	}}
 

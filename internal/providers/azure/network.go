@@ -138,7 +138,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	case unread:
 		capabilities.PublicIngress = model.Unknown[bool](cited...)
 	case len(opened) > 0:
-		capabilities.PublicIngress = model.Known(true, cited...)
+		capabilities.PublicIngress = model.Known(true, model.MethodStated, cited...)
 		if !stated {
 			// A grant is provable from part of a rule set, and this is that
 			// part. What is not here is a deny at a lower priority, which would
@@ -150,7 +150,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 		// Every rule in the set was read and none of them opens anything. The
 		// platform's own default denies inbound traffic no rule allows, so a set
 		// with no allow from any address permits none.
-		capabilities.PublicIngress = model.Known(false, cited...)
+		capabilities.PublicIngress = model.Known(false, model.MethodStated, cited...)
 	default:
 		capabilities.PublicIngress = model.Unknown[bool](cited...)
 		capabilities.Unresolved = append(capabilities.Unresolved, incompleteSet())

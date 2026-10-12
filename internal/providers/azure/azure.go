@@ -166,7 +166,7 @@ func accountCapabilities(account terraformplan.ResourceChange, related []terrafo
 
 	gate, sources := accountAllowsPublic(&account)
 	if gate == answerNo {
-		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, sources...).Canonical()}
+		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, model.MethodStated, sources...).Canonical()}
 	}
 
 	capabilities := &model.ObjectStorageCapabilities{
@@ -206,13 +206,13 @@ func publicAccess(container terraformplan.ResourceChange, account *terraformplan
 
 	// One definite no settles it, whatever the other says.
 	if gate == answerNo {
-		return model.Known(false, gateSources...).Canonical()
+		return model.Known(false, model.MethodStated, gateSources...).Canonical()
 	}
 	if setting == answerNo {
-		return model.Known(false, settingSources...).Canonical()
+		return model.Known(false, model.MethodStated, settingSources...).Canonical()
 	}
 	if gate == answerYes && setting == answerYes {
-		return model.Known(true, sources...).Canonical()
+		return model.Known(true, model.MethodStated, sources...).Canonical()
 	}
 
 	if gate == answerRedacted || setting == answerRedacted {
