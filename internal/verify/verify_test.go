@@ -482,7 +482,7 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 				// return an error and watching this test pass.
 				t.Fatalf("this fixture had a baseline and is no longer verifiable: %v", err)
 			}
-			got, err := render.JSON(bundle)
+			got, err := render.JSON(verdictOnly(bundle))
 			if err != nil {
 				t.Fatalf("render.JSON: %v", err)
 			}
@@ -528,4 +528,21 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 	if total := int(compared.Load()); total != len(goldens) {
 		t.Fatalf("compared %d fixtures against %d recorded baselines", total, len(goldens))
 	}
+}
+
+// verdictOnly is the bundle as milestone 09 would have written it: no
+// verification steps, and the version that predates them.
+//
+// The baselines are the milestone 09 verdict baseline and are not re-recorded.
+// Stripping only what milestone 10 adds means every other byte -- decision,
+// findings, unknowns, evidence, DATABASE_PORT_INFERRED -- is still compared, so
+// a verdict cannot change behind the new field.
+func verdictOnly(b evidence.Bundle) evidence.Bundle {
+	out := b
+	out.SchemaVersion = "1.2"
+	out.Findings = slices.Clone(b.Findings)
+	for i := range out.Findings {
+		out.Findings[i].VerificationSteps = nil
+	}
+	return out
 }
