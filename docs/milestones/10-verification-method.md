@@ -48,10 +48,10 @@ the bundle only as an unknown.
 
   | method | means |
   | --- | --- |
-  | `plan-stated-value` | the plan's configuration records that the author wrote the argument with a value, and the plan carries that value: any write on a new object or where the plan moves the value; where the change keeps the object and the value it had, only a constant (in block syntax, every attribute written in the block) that the carried value is. The policy also assigns it to `resource.cloud`, from `provider_name` |
+  | `plan-stated-value` | the plan's configuration records that the author wrote the argument with a value, decided at the place the verdict reads (a map key, a whole rule set): any write on a new object; any write the plan does not contradict where the update moves the value there; where the update keeps the value there, only a constant written there that the planned value is shown to equal -- `null`, and an attribute a block does not write, match only an empty value (null, `[]`, `{}`, `""`, `false`). Never by default. The policy also assigns it to `resource.cloud`, from `provider_name` |
   | `provider-default` | the configuration records the argument as unwritten, or written as `null`, and the value is not carried from prior state: the provider's documented default, on a new object or where the plan moves the value to it |
-  | `prior-state` | the change keeps an existing object, the plan carries the value it had, and the configuration does not record the author writing it: unwritten, written as `null`, or written as a constant the carried value contradicts (`lifecycle { ignore_changes }`) |
-  | `configuration-unrecorded` | the plan does not record whether the author wrote the argument with a value; or it was written by an expression the plan does not evaluate -- a reference, a variable, a function -- on an update or no-op whose `after` equals `before` at the argument |
+  | `prior-state` | the change keeps an existing object and, at the place the verdict reads, the plan keeps the value it had while the configuration records it unwritten or written as `null`, or the configuration records a constant the planned value is not, moved or not (`lifecycle { ignore_changes }`; a provider that canonicalizes a constant also lands here, understated) |
+  | `configuration-unrecorded` | the plan does not record whether the author wrote the argument with a value; or, on an update or no-op that keeps the value at the place the verdict reads, the plan cannot show the write is it: an expression the plan does not evaluate -- a reference, a variable, a function -- an attribute of a repeated block, or a constant compared with a value the plan withholds as sensitive or does not know |
   | `policy-document-interpreted` | the value results from this build's reading of a JSON policy document |
   | `reference-resolved` | the value is obtainable only by resolving a reference: the security groups a database reaches through `vpc_security_group_ids` |
   | `documented-table` | the value comes from a closed, documented table in this build |
@@ -67,7 +67,9 @@ the bundle only as an unknown.
   update that plans an unwritten argument back to its default is neither of the
   other two. The third fix wave narrowed `plan-stated-value` and widened
   `configuration-unrecorded` by the user's decision recorded in the amendment
-  "user decision on unevaluated writes" below. `reference-resolved` was narrowed by decision
+  "user decision on unevaluated writes" below, and the fifth review's fix wave
+decided all four at the place the verdict reads (amendment "adversarial
+review, round 5"). `reference-resolved` was narrowed by decision
   D2: a grant written on its own ACL, IAM or firewall-rule resource is stated,
   and the reference that joins it to a bucket or a server only locates where
   it applies.
@@ -285,7 +287,7 @@ and the mappers' call sites.
 ## Limitations as built
 
 Written from what the tests measure at the end of the milestone, after the
-adversarial review's second fix wave.
+fifth review's fix wave.
 
 - **The method follows what the configuration records, compared with the
   prior state, not the `after` value alone.** Real plans showed that a provider
@@ -294,13 +296,15 @@ adversarial review's second fix wave.
   under `lifecycle { ignore_changes }` -- which the plan's configuration does
   not record -- it carries the prior value even of an argument the
   configuration writes. One mechanism, `declared.Argument`, decides every
-  mapper's method: `configuration-unrecorded` where the plan does not record
-  the writing, and where the change keeps the object, `before` and `after`
-  agree at the argument's path, and the write is an expression the plan does
-  not evaluate; `prior-state` where the change keeps the object, `before` and
-  `after` agree at the argument's path, and the configuration records the
-  argument as unwritten, as `null`, or as a constant the carried value
-  contradicts; otherwise `plan-stated-value` for a written value and
+  mapper's method, at the place the verdict reads -- the environment at its
+  tag or label key, a network grant at the rule set or block list:
+  `configuration-unrecorded` where the plan does not record the writing, and
+  where the change keeps the object, `before` and `after` agree there, and the
+  write is an expression the plan does not evaluate or a constant it cannot
+  compare; `prior-state` where the change keeps the object and either `before`
+  and `after` agree there while the configuration records the argument as
+  unwritten or as `null`, or a written constant is contradicted there, moved
+  or not; otherwise `plan-stated-value` for a written value and
   `provider-default` for an unwritten one. The value itself is read exactly as
   in milestone 09.
 - **A block is never recorded as unwritten.** Terraform does not record a
@@ -321,8 +325,12 @@ adversarial review's second fix wave.
   strips `expressions` produces the same shape, and its attributes read as
   unwritten too; no verdict reads this, only the method does.
 - **`prior-state` is decided by comparing `before` with `after`, not by the
-  schema.** An update or no-op that keeps the object, and a value known and
-  equal on both sides at the argument's path. Where a provider's default equals
+  schema.** An update or no-op that keeps the object, and a value equal on
+  both sides at the place the verdict reads. The comparison is made while
+  parsing, on the plan's own `before` and `after` before any sensitive mark
+  applies, and keeps only its answer: a sensitive tag beside the environment
+  no longer makes a kept map look moved. A value not yet known is never
+  carried. Where a provider's default equals
   what the object already had -- a firewall priority of 1000 left unwritten --
   the value is both, and the method says `prior-state`. An unwritten argument
   the update moves is `provider-default`: Terraform planned it back to the
@@ -349,7 +357,11 @@ adversarial review's second fix wave.
   written, and one that makes a value out of variables that are all `null` --
   `coalesce(var.x, "private")` -- reads as unwritten, which is never stated. An
   expression that also draws on a resource or a local reads as written, as it
-  did.
+  did. A module input `null` for an attribute of an `object()` variable
+  declared `optional(T, default)` reads as `null`, unwritten, while Terraform
+  applies the default (found by the fifth review, by reasoning; not planned):
+  the method then says `provider-default` or `configuration-unrecorded` for a
+  value the module's author wrote, which understates it and never states one.
 - **On an update that keeps a value, only a constant write is stated.** The
   plan records a constant's value: a constant the carried value is reads
   `plan-stated-value`, and one it is not reads `prior-state` (`ignore_changes`
@@ -361,23 +373,37 @@ adversarial review's second fix wave.
   referenced value written legitimately that an update does not change is no
   longer stated (measured: `real-reference-write-unchanged`). Block syntax is
   decided by everything written in the block, at every depth: all constants are
-  compared with the planned blocks one for one on the attributes written --
-  `plan-stated-value` or `prior-state` as above -- and a block with anything
-  else inside reads `configuration-unrecorded`. An attribute written in a
-  repeated block, and a block inside a repeated block, have no one expression
-  to compare, so carried they read `configuration-unrecorded`; the mapper
-  sites read whole blocks, never those paths. A write the plan moves is stated
-  without a comparison: `ignore_changes` keeps a value, so a value the plan
+  compared with the planned blocks one for one, every planned attribute the
+  block does not write compared as written as nothing -- `plan-stated-value`
+  or `prior-state` as above -- and a block with anything else inside reads
+  `configuration-unrecorded`. An attribute written in a repeated block, and a
+  block inside a repeated block, have no one expression to compare, so
+  carried they read `configuration-unrecorded`; the mapper sites read whole
+  blocks, never those paths. Each is decided at the place the verdict reads: a
+  map written as a constant is compared key by key, and a key it does not
+  write is written as nothing. A constant the plan contradicts there is
+  `prior-state` on any update, moved or not, and one compared with a value the
+  plan withholds or does not know is `configuration-unrecorded`. A write the
+  plan moves, and does not contradict, is stated without a comparison: `ignore_changes` keeps a value, so a value the plan
   moves is the configuration's, but the plan does not show that `after` is
   what the expression evaluates to (a provider that normalizes or computes the
   value would read stated). A static block beside a `dynamic` one of the same
-  type, on a create, still reads stated; carried, the planned set is not the
-  written one and it reads `prior-state`. The comparison takes Terraform's
+  type, on a create, still reads stated; on an update, the planned set is not
+  the written one and it reads `prior-state`. The comparison takes Terraform's
   encoding: an attribute written as blocks records every attribute, `null`
-  where nothing was written, and a list is compared as a set, greedily, so a
-  set it fails to pair reads `prior-state`, never stated. A provider that
-  normalizes a constant -- a case, a canonical CIDR -- on a value the update
-  keeps would read `prior-state`, never stated; none was found.
+  where nothing was written, and Terraform plans an attribute nobody wrote as
+  an empty value, so `null` -- and an attribute a block in block syntax does
+  not write -- matches only `null`, `[]`, `{}`, `""` or `false`; a non-empty
+  documented default there reads `prior-state`, never stated. A list is
+  compared as a set, greedily, so a set it fails to pair reads `prior-state`,
+  never stated. A provider that canonicalizes a constant reads `prior-state`,
+  never stated, and the fifth review found it on real no-op plans: GCP
+  `allow { protocol = "TCP" }` and AWS `protocol = "TCP"` and `protocol = "6"`
+  against a state holding `tcp` (pinned on `real-labels-partial-ignore` and
+  `real-tags-sensitive-ignored`). This build does not normalize them: a
+  case-insensitive protocol and the AWS protocol numbers are provider
+  behaviour, the comparison lives in the provider-independent plan reader, and
+  understating is the direction this milestone accepts.
 - **A grant on an interpreted document keeps the document's method.** On AWS a
   policy-document grant through a block flag nobody wrote, and on GCP a
   `policy_data` grant beside a `public_access_prevention` nobody wrote, rest on
@@ -1126,3 +1152,300 @@ that is neither an object nor an array, which `Parse` already rejects
 | `e-body-constant-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
 | `c-scalar-entry-recorded` | `terraformplan/config.go` | survived: unobservable, `Parse` rejects the shape |
 | `e-scalar-entry-nested` | `terraformplan/expression.go` | survived: unobservable, `Parse` rejects the shape |
+
+## Amendment: adversarial review, round 5
+
+A fifth round ran at `44fb773` -- provider reality with real plans (Terraform
+1.14.0, `hashicorp/aws` 6.67.0, `hashicorp/google` 6.50.0, `plan
+-refresh=false` against hand-written state, nothing applied) and mutations and
+claims. Both returned BLOCK. No verdict was wrong and criterion 8 reproduced;
+the method again put `plan-stated-value` on BLOCK findings for values carried
+from state, because it was decided somewhere other than where the verdict
+reads.
+
+### The principle the fix wave applied
+
+On an update or no-op, a value is `plan-stated-value` only if, at the exact
+place the verdict reads -- a map key, an element, not the enclosing map or
+block -- the configuration records a constant write that equals the planned
+value. `null`, or an attribute a written block does not hold, matches only an
+empty value. A recorded constant the plan contradicts there is `prior-state` on
+any update, moved or not. Whether the plan keeps the value is decided at the
+same place, and a sensitive mark must not make a kept value look moved.
+Anything the plan cannot decide there is `configuration-unrecorded`; nothing is
+stated by default. The third wave's rule for a write the update moves -- stated,
+because `ignore_changes` keeps a value -- stands, now decided at that place and
+only where the plan does not contradict the write.
+
+### Claims the third wave made that turned out false
+
+- *"Carried is decided by comparing `before` with `after` at the argument's
+  path."* The environment's argument path was the whole `tags`/`labels` map,
+  not the key the verdict reads, so `ignore_changes = [tags["environment"]]`
+  beside another tag the configuration moves read the written `staging` as
+  stated while the plan held the state's `prod` (`real-tags-partial-ignore`,
+  `real-labels-partial-ignore`). Fixed: `declared.Argument.Key`, and each key
+  of a constant map compared on its own.
+- *"A value known and equal on both sides."* One tag written from a `sensitive`
+  variable made the map unreadable on both sides, so a no-op read as moved and
+  the reference write as stated, where its non-sensitive twin read
+  `configuration-unrecorded` (`real-tags-sensitive-ignored` and `-control`).
+  Fixed: `terraformplan.Value.Carried` is decided while parsing from the raw
+  `before` and `after`, before marks apply, and keeps only the answer.
+- *"An attribute written as blocks records every attribute, null where nothing
+  was written, so a null matches anything"* (the `Expression` documentation and
+  `constantMatches`). It let a source only the state held read stated: an AWS
+  inline rule writing `10.0.0.0/8` under `ignore_changes = [ingress]` with
+  `::/0` in state, and one writing no source with `0.0.0.0/0` in state, were
+  BLOCKs with `network.public_ingress = plan-stated-value`
+  (`real-sg-null-attribute-from-state`, `real-sg-unwritten-source-from-state`).
+  Azure's inline `security_rule` has the same encoding. Fixed: `null` matches
+  only `null`, `[]`, `{}`, `""` or `false`, which is what the controls plan.
+- *"Compared one for one on the attributes written; extra planned attributes
+  are ignored."* `allow { protocol = "tcp" }` under `ignore_changes = [allow]`
+  with `ports = ["22"]` in state read the state's ports as stated
+  (`real-blocks-unwritten-from-state`). Fixed: an attribute a block does not
+  write is compared as written as nothing.
+- *"A provider that normalizes a constant ... would read `prior-state`, never
+  stated; none was found."* Found, on real no-op plans: GCP
+  `protocol = "TCP"`, AWS `protocol = "TCP"` and `protocol = "6"` against
+  `tcp`. The first half held; the Limitations now say so and the fixtures pin
+  it. No normalization was added (see Limitations).
+- *"36 of 36 applicable mutants killed"* held for the wave's own set, not for
+  every changed line: five evaluator survivors changed bundle output (an
+  indexed attribute of a variable, a variable whose name another's begins
+  with, a map key the plan lacks, two comparisons of mismatched kinds), and
+  about twelve more were unpinned without being permissive. Each now has a
+  test or was removed with the code it mutated (`equal`, replaced by the parse's
+  answer).
+- *The definition of `plan-stated-value`* in the method table here, in
+  `EVIDENCE-BUNDLE.md`, `MCP.md` and `PRODUCT.md` -- "the plan carries that
+  value" -- and the reader guide's "it is what the author wrote" were false for
+  the null-attribute shape. All now state the principle above.
+- Found by reasoning, not planned: an `optional(T, default)` attribute set to
+  `null` through a module input reads as unwritten while Terraform applies the
+  default. That understates; it is now a Limitation.
+
+### Tests whose assertion changed
+
+- `TestTheMethodFollowsWhatTheConfigurationRecords`, "written as another
+  constant, on an update that moves it": `plan-stated-value` became
+  `prior-state`, by the principle (a contradicted constant is `prior-state`
+  moved or not).
+- `TestABlockIsDecidedByWhatIsWrittenInsideIt`, "null inside a block is no
+  write": `plan-stated-value` became `prior-state` (renamed "null inside a block
+  matches only an empty value"): the row asserted the defect.
+  `TestABlockIsRecordedFromEverythingWrittenInIt`, "a literal null inside" and
+  "a variable recorded as null inside": not contradicted became contradicted
+  (renamed "..., where the plan holds a value"), for the same reason.
+- Rows whose subject was ordering or nesting -- "constants", "constants in
+  another order", "a block inside a block", "a single block inside a block",
+  "constants, carried, in another order", "a block inside a block, constants,
+  carried" -- now write every attribute the planned blocks hold, so they still
+  test what they are named for; their original inputs came back as new rows
+  asserting the contradiction.
+- No test was removed or skipped.
+
+### Criterion 8, re-measured after the fifth review's fix wave
+
+The binary built from `3b50544`, one built from the third wave's head
+(`44fb773`) and one built from this wave's tree ran `check --format json` on
+every plan JSON in the tree under the shipped contract and the three in
+`scratchpad/intents/`, normalised as before (`scratchpad/w4/c8.py`).
+
+| | count |
+| --- | --- |
+| plans x contracts compared | 322 x 4 = 1288 |
+| identical to `3b50544` after normalisation, same exit code and stderr | 1288 |
+| identical to `44fb773` after normalisation, same exit code and stderr | 1288 |
+| differing | 0 |
+| exit codes, shipped contract (before = after) | 259 x `4`, 46 x `3`, 15 x `0`, 2 x `10` |
+
+The 322 plans include `examples/tfplan.json` and the ten fixtures this wave
+added (seven real plans, three hand-authored). `git diff 3b50544 --
+internal/verify/testdata/baseline` is empty and no fixture that existed before
+this wave was touched; the 226 baselines still match. Against `44fb773`, no
+step changed on any plan that existed there: the 27 step changes
+(`scratchpad/w4/c8-final.txt`) are all on the new fixtures, each one
+`plan-stated-value` that became `prior-state` or, for the sensitive tag,
+`configuration-unrecorded`. Steps on plan facts across the 1288 runs,
+`resource.cloud`, `contract.` and `plan-action` excluded: `plan-stated-value`
+838, `configuration-unrecorded` 219, `prior-state` 158, `provider-default` 132,
+`reference-resolved` 100, `documented-table` 72, `policy-document-interpreted`
+12.
+
+### Criterion 9, re-measured after the fifth review's fix wave
+
+The same harness (`scratchpad/w4/mut.py`, the fifth review's `run.py`
+re-pointed at a worktree of this wave's head): each mutant replaces one string
+occurring once, the change must show in `git diff`, `go vet ./...` must pass,
+`go test ./... -count=1` runs, and the file is restored. Every line this wave
+added or changed was mutated -- the carried mark the parse sets, the tri-state
+comparison, per-key elements, the decision at the key, `Carried`, the
+environment's keys -- 85 mutants, and the fifth review's survivors and the
+third wave's 38 were re-run beside them.
+
+On the first run 66 of the 85 were killed, six did not compile (an unused
+variable) and thirteen survived:
+
+- three survivors, and one mutant that did not compile, were redundant code,
+  and the code was removed: the descent guard for a withheld node (it has no
+  kind to descend by), the shape checks on a prior value (one of another shape
+  holds nothing below), and the early `break` when a set element matches;
+- two are the survivors below;
+- nine were given tests, and the re-run killed them: a value with no prior
+  state at its place, or named only by a mask; an element not yet known; a path
+  naming no single planned value; a set pairing through withheld values, and an
+  undecided element compared first; a block withheld, unknown or absent; an
+  outer block contradicted through its inner block alone;
+- the other five that did not compile were re-expressed (`|| true`, `_ =`) and
+  re-run.
+
+The re-run found `n-key-dropped` alive: the fifth review's fixtures are
+fixed by the contradiction rule alone, so nothing showed the key deciding apart
+from the map. A row where only another key is kept now does.
+
+Final, 82 mutants of this wave: 80 killed. Two survive: the comparison of a
+constant that is neither a string, a bool nor a number, which `Parse` never
+produces, and `Carried` following a prior value that is not a list, which is
+equivalent. Of the fifth review's eleven, nine are killed, including all five
+it named as permissive; `r5-ev-mostspecific-bracket` and
+`r5-ev-traversal-index-deferred` are the equivalents it triaged. Of the third
+wave's 38, 21 are killed, 15 no longer apply because this wave rewrote the
+comparison they mutate (its own mutants above cover the new code), and the two
+`Parse`-rejected shapes survive as before. Results:
+`scratchpad/w4/{mut2,mut3,mut4}-r.json`.
+
+| mutant | file | result |
+| --- | --- | --- |
+| `v-carried-true` | `terraformplan/value.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 7 more |
+| `v-carried-false` | `terraformplan/value.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` and 16 more |
+| `p-mark-dropped` | `terraformplan/parse.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` and 16 more |
+| `c-before-present` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `c-after-present` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `c-unknown` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `c-equal-true` | `terraformplan/mask.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 7 more |
+| `c-obj-in-before` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `c-obj-in-after` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `c-obj-unknown-mask` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `c-obj-not-assigned` | `terraformplan/mask.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` and 16 more |
+| `c-arr-in-before` | `terraformplan/mask.go` | killed: `TestAValueOfTheWrongKindIsNotAnAnswer`, `TestEveryFixtureIsUnchangedWhenNothingMatches`, `TestEveryMissingControlAnUnsettledSetReportsIsAsserted` and 6 more |
+| `c-arr-in-after` | `terraformplan/mask.go` | killed: `TestEveryFixtureIsUnchangedWhenNothingMatches`, `TestEveryValidFixtureParses`, `TestInspectReportsUnknownPaths` and 1 more |
+| `c-arr-unknown-mask` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `c-arr-not-assigned` | `terraformplan/mask.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAValueIsCarriedWhateverItsSensitivity`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` and 2 more |
+| `e-elem-nil-null` | `terraformplan/expression.go` | killed: `TestAKeyOfAMapIsDecidedAtTheKey`, `TestASensitiveTagDoesNotMakeAKeptMapMove`, `TestAWriteThePlanDoesNotEvaluateIsStatedWhereTheUpdateMovesTheValue` and 2 more |
+| `e-elem-found-ignored` | `terraformplan/expression.go` | killed: `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords`, `TestAKeyOfAMapIsDecidedAtTheKey`, `TestAKeyTheLifecycleKeepsIsPriorStateWhileTheMapMoves` and 3 more |
+| `e-elem-missing-whole` | `terraformplan/expression.go` | killed: `TestAKeyOfAMapIsDecidedAtTheKey`, `TestEachKeyOfAWrittenMapIsDecidedOnItsOwn` |
+| `e-expr-record-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantNotInAfterIsContradicted` and 13 more |
+| `e-expr-elements-dropped` | `terraformplan/expression.go` | killed: `TestAKeyOfAMapIsDecidedAtTheKey`, `TestEachKeyOfAWrittenMapIsDecidedOnItsOwn` |
+| `e-elem-null-constant` | `terraformplan/expression.go` | killed: `TestEachKeyOfAWrittenMapIsDecidedOnItsOwn` |
+| `e-elem-record-dropped` | `terraformplan/expression.go` | killed: `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords`, `TestAKeyOfAMapIsDecidedAtTheKey`, `TestAKeyTheLifecycleKeepsIsPriorStateWhileTheMapMoves` and 3 more |
+| `e-elem-whole-value` | `terraformplan/expression.go` | killed: `TestAKeyOfAMapIsDecidedAtTheKey`, `TestAWithheldKeyIsUndecided`, `TestEachKeyOfAWrittenMapIsDecidedOnItsOwn` |
+| `e-blocks-record-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestABlockThePlanDoesNotShowIsNeverContradicted` and 5 more |
+| `e-record-contra-any` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockThePlanDoesNotShowIsNeverContradicted`, `TestAComparisonThePlanCannotCompleteIsUndecided` and 4 more |
+| `e-record-undecided-never` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept` and 1 more |
+| `e-compareif-matched` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAComparisonThePlanCannotCompleteIsUndecided` |
+| `e-notshown-matched` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAWithheldKeyIsUndecided` |
+| `e-notshown-redacted-dropped` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAValueThePlanDoesNotShowIsNeverContradicted` and 1 more |
+| `e-notshown-absent-nil-contra` | `terraformplan/expression.go` | killed: `TestNothingWrittenMatchesOnlyAnEmptyValue` |
+| `e-notshown-absent-matched` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantNotInAfterIsContradicted` |
+| `e-nil-anything` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAnAttributeABlockDoesNotWriteIsNotStated` and 3 more |
+| `e-nil-nothing` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAConstantNotInAfterIsContradicted` and 5 more |
+| `e-list-shape-matched` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantNotInAfterIsContradicted` |
+| `e-list-len-dropped` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantNotInAfterIsContradicted` |
+| `e-map-kind-matched` | `terraformplan/expression.go` | killed: `TestAConstantNotInAfterIsContradicted` |
+| `e-map-extra-key-dropped` | `terraformplan/expression.go` | killed: `TestAConstantNotInAfterIsContradicted` |
+| `e-map-last-wins` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantTheProviderCanonicalizesReadsPriorState`, `TestAnAttributeNobodyWroteInAnInlineRuleIsNotStated` and 4 more |
+| `e-scalar-notext-matched` | `terraformplan/expression.go` | survived: unobservable, every constant Parse decodes is a string, a bool or a number |
+| `e-scalar-string-true` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAComparisonThePlanCannotCompleteIsUndecided`, `TestAConstantNotInAfterIsContradicted` and 13 more |
+| `e-scalar-number-true` | `terraformplan/expression.go` | killed: `TestABlockThePlanDoesNotShowIsNeverContradicted` |
+| `e-scalar-bool-true` | `terraformplan/expression.go` | killed: `TestAConstantNotInAfterIsContradicted`, `TestAValueNobodyRecordedWritingIsNeverStated`, `TestTheMethodFollowsWhatTheConfigurationRecords` |
+| `e-scalar-same-ignored` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestABlockThePlanDoesNotShowIsNeverContradicted`, `TestAComparisonThePlanCannotCompleteIsUndecided` and 16 more |
+| `e-empty-null-false` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestNothingWrittenMatchesOnlyAnEmptyValue` |
+| `e-empty-container-any` | `terraformplan/expression.go` | killed: `TestAnAttributeABlockDoesNotWriteIsNotStated`, `TestAnAttributeNobodyWroteInAnInlineRuleIsNotStated`, `TestAnInlineRuleAttributeNobodyWroteIsNotStated` and 1 more |
+| `e-empty-object-dropped` | `terraformplan/expression.go` | killed: `TestNothingWrittenMatchesOnlyAnEmptyValue` |
+| `e-empty-string-any` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestNothingWrittenMatchesOnlyAnEmptyValue` |
+| `e-empty-bool-any` | `terraformplan/expression.go` | killed: `TestNothingWrittenMatchesOnlyAnEmptyValue` |
+| `e-empty-default-true` | `terraformplan/expression.go` | killed: `TestNothingWrittenMatchesOnlyAnEmptyValue` |
+| `e-set-strict-lt` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided` |
+| `e-set-unpaired-matched` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestABlockThePlanDoesNotShowIsNeverContradicted` and 12 more |
+| `e-set-reuse` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided` |
+| `e-set-last-wins` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided` |
+| `e-set-used-skip-dropped` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided` |
+| `e-blocks-single-count` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-blocks-shape-matched` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAnAttributeABlockDoesNotWriteIsNotStated` |
+| `e-body-kind-matched` | `terraformplan/expression.go` | killed: `TestABlockThePlanDoesNotShowIsNeverContradicted` |
+| `e-body-nested-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `e-body-written-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestABlockThePlanDoesNotShowIsNeverContradicted` and 3 more |
+| `e-body-unwritten-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAComparisonThePlanCannotCompleteIsUndecided` and 2 more |
+| `e-body-unwritten-matched` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAComparisonThePlanCannotCompleteIsUndecided` and 2 more |
+| `e-body-notshown-matched` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided` |
+| `e-blocks-notshown-matched` | `terraformplan/expression.go` | killed: `TestAComparisonThePlanCannotCompleteIsUndecided` |
+| `d-key-ignored` | `providers/declared/method.go` | killed: `TestAKeyOfAMapIsDecidedAtTheKey` |
+| `d-key-path-whole` | `providers/declared/method.go` | killed: `TestAKeyOfAMapIsDecidedAtTheKey` |
+| `d-key-element-whole` | `providers/declared/method.go` | killed: `TestAKeyOfAMapIsDecidedAtTheKey` |
+| `d-create-prior` | `providers/declared/method.go` | killed: `TestABindingGrantIsStated`, `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault` and 50 more |
+| `d-create-contradicted` | `providers/declared/method.go` | killed: `TestANetworkSecurityGroupGrantSaysWhatTheConfigurationRecords`, `TestTheMethodFollowsWhatTheConfigurationRecords` |
+| `d-contradicted-dropped` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantTheProviderCanonicalizesReadsPriorState`, `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` and 15 more |
+| `d-contradicted-stated` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantTheProviderCanonicalizesReadsPriorState`, `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` and 15 more |
+| `d-moved-stated-unrecorded` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 2 more |
+| `d-undecided-dropped` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept` |
+| `d-nonconstant-dropped` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAKeyOfAMapIsDecidedAtTheKey`, `TestASensitiveTagDoesNotMakeAKeptMapMove` and 2 more |
+| `d-carried-before-kind` | `providers/declared/method.go` | survived: equivalent, a prior value that is not a list holds nothing at the places below and is never equal to a planned list |
+| `d-carried-before-len` | `providers/declared/method.go` | killed: `TestCarriedFollowsABlockOnlyThroughItsOneElement` |
+| `d-carried-after-len` | `providers/declared/method.go` | killed: `TestCarriedFollowsABlockOnlyThroughItsOneElement` |
+| `d-carried-block-true` | `providers/declared/method.go` | killed: `TestCarriedFollowsABlockOnlyThroughItsOneElement` |
+| `d-carried-block-false` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestCarriedFollowsABlockOnlyThroughItsOneElement` |
+| `d-carried-leaf-true` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 6 more |
+| `n-strongest` | `providers/declared/environment.go` | killed: `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` |
+| `n-first-key-only` | `providers/declared/environment.go` | killed: `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` |
+| `n-key-dropped` | `providers/declared/environment.go` | killed: `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` |
+| `r5-ev-traversal-nonobject-deferred` | `terraformplan/expression.go` | killed: `TestAnExpressionSaysWhatItEvaluatesToOffline` |
+| `r5-ev-traversal-missing-null` | `terraformplan/expression.go` | killed: `TestAnExpressionSaysWhatItEvaluatesToOffline` |
+| `r5-ev-traversal-nil-constant` | `terraformplan/expression.go` | killed: `TestAnExpressionSaysWhatItEvaluatesToOffline` |
+| `r5-ev-traversal-off` | `terraformplan/expression.go` | killed: `TestAnExpressionSaysWhatItEvaluatesToOffline` |
+| `r5-ev-mostspecific-bracket` | `terraformplan/expression.go` | survived: equivalent, an indexed reference is unresolved and decides the expression whatever else is read |
+| `r5-ev-mostspecific-anyprefix` | `terraformplan/expression.go` | killed: `TestAnExpressionSaysWhatItEvaluatesToOffline` |
+| `r5-m-unwritten-carried-unrecorded` | `providers/declared/method.go` | killed: `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords`, `TestADenySkippedRestsTheVerdictOnWhyItWasSkipped`, `TestADirectionCarriedFromStateIsPriorState` and 9 more |
+| `r5-gn-disabled-isdefault-true` | `providers/gcp/network.go` | killed: `TestADenySkippedRestsTheVerdictOnWhyItWasSkipped` |
+| `r5-aws-openedby-weakest` | `providers/aws/network.go` | killed: `TestASeparateRuleOpenedTwiceTakesTheBestProof` |
+| `r5-aws-openedby-isdefault-true` | `providers/aws/network.go` | killed: `TestASeparateRuleAddressTheConfigurationDoesNotRecordIsUnrecorded`, `TestASeparateRuleOpenedTwiceTakesTheBestProof` |
+| `r5-ev-traversal-index-deferred` | `terraformplan/expression.go` | survived: equivalent, an indexed attribute misses the key and is unresolved anyway |
+| `w3:c-scalar-entry-recorded` | `terraformplan/config.go` | survived: unobservable, `Parse` rejects the shape |
+| `w3:e-scalar-entry-nested` | `terraformplan/expression.go` | survived: unobservable, `Parse` rejects the shape |
+| `w3:m-unrecorded-stated` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 3 more |
+| `w3:c-blocks-never` | `terraformplan/config.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestABlockThePlanDoesNotShowIsNeverContradicted` and 10 more |
+| `w3:m-constant-guard-recorded` | `providers/declared/method.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:m-constant-guard-deferred` | `providers/declared/method.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:m-block-lookup-dropped` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestADenyAppliedThroughACarriedSourceIsPriorState`, `TestADenySkippedRestsTheVerdictOnWhyItWasSkipped` and 5 more |
+| `w3:m-block-lookup-inverted` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantTheProviderCanonicalizesReadsPriorState`, `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` and 22 more |
+| `w3:m-not-carried-inverted` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 4 more |
+| `w3:m-not-carried-unrecorded` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 2 more |
+| `w3:m-contradicted-stated` | `providers/declared/method.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:c-repeated-recorded` | `terraformplan/config.go` | killed: `TestOnlyABlockWrittenInOnePlaceIsRecorded` |
+| `w3:c-repeated-not-propagated` | `terraformplan/config.go` | killed: `TestOnlyABlockWrittenInOnePlaceIsRecorded` |
+| `w3:c-repeated-any` | `terraformplan/config.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` and 1 more |
+| `w3:c-expression-as-block` | `terraformplan/config.go` | killed: `TestOnlyABlockWrittenInOnePlaceIsRecorded` |
+| `w3:c-single-block-skipped` | `terraformplan/config.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `w3:c-blocks-not-assigned` | `terraformplan/config.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestABlockThePlanDoesNotShowIsNeverContradicted` and 10 more |
+| `w3:e-repeated-evaluated` | `terraformplan/expression.go` | killed: `TestOnlyABlockWrittenInOnePlaceIsRecorded` |
+| `w3:e-nonconstant-constant` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `w3:e-contradiction-inverted` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-contradiction-never` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-null-not-constant` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `w3:e-deferred-wildcard` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestABlockIsRecordedFromEverythingWrittenInIt`, `TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue` |
+| `w3:e-single-nested-ignored` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `w3:e-list-nested-ignored` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `w3:e-inner-nonconstant-ignored` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `w3:e-inner-not-kept` | `terraformplan/expression.go` | killed: `TestABlockIsRecordedFromEverythingWrittenInIt` |
+| `w3:e-unknown-mismatch` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-single-count-dropped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-single-branch-dropped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-count-dropped` | `terraformplan/expression.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAnAttributeABlockDoesNotWriteIsNotStated` |
+| `w3:e-used-dropped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-notfound-dropped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-body-unknown-mismatch` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-body-kind-match` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-body-nested-skipped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-body-absent-dropped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+| `w3:e-body-constant-dropped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |

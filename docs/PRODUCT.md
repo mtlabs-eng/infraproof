@@ -75,19 +75,25 @@ on a provider default, on a value carried from prior state, or on this build's
 reading of a policy document says so, and a reader who trusts only what the
 plan states can see which findings those are. A value is stated only where the
 plan's configuration records that the author wrote the argument with a value
--- in its expressions, or as a Required argument of a body it records -- and
-the plan carries that value; the one other stated step is the cloud a change
-belongs to, read from its provider. A value the plan carries for an argument
+-- in its expressions, or as a Required argument of a body it records -- decided
+at the place the verdict reads, such as the environment's tag key: on a new
+object any write, on an update that moves the value any write the plan does not
+contradict, and on an update that keeps the value only a constant written there
+that the plan's value equals, with `null` and an unwritten attribute matching
+only an empty value. The one other stated step is the cloud a change belongs
+to, read from its provider. A value the plan carries for an argument
 nobody wrote, or wrote as `null`, is the provider's default on a new object and
 the value carried from prior state where an update keeps it, because providers
 write their defaults into the plan and Terraform keeps an existing value. So is
 a written constant that `lifecycle { ignore_changes }` overrides with the
-state's, which the plan's configuration does not record. Where the configuration
+state's, which the plan's configuration does not record, and so is a constant a
+provider canonicalizes, which understates it. Where the configuration
 does not record the argument at all -- a plan exported without it, a dynamic
 block, or a variable the plan does not resolve -- the method says that, rather
 than reading as stated; and so it does for a write by reference, variable or
 function on an update that keeps the value, because the plan records no value
-for such a write and cannot tell it from one `ignore_changes` kept. The method decides nothing.
+for such a write and cannot tell it from one `ignore_changes` kept, and for a
+kept constant the plan withholds as sensitive. The method decides nothing.
 
 For network exposure the claim is narrower still, and deliberately so. A finding
 says the change **permits ingress from any address**, not that anything becomes
