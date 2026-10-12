@@ -244,12 +244,12 @@ func TestANonDefaultValueOfAnArgumentNotComputedWasWritten(t *testing.T) {
 		isDefault bool
 		want      model.Method
 	}{
-		"unwritten, holding the default": {flag, planned(t, create, noPrior, unwritten), true, model.MethodProviderDefault},
-		"unwritten, holding something else": {flag, planned(t, create, noPrior, unwritten), false, model.MethodStated},
+		"unwritten, holding the default":          {flag, planned(t, create, noPrior, unwritten), true, model.MethodProviderDefault},
+		"unwritten, holding something else":       {flag, planned(t, create, noPrior, unwritten), false, model.MethodStated},
 		"unwritten, on an update, something else": {flag, planned(t, update, hasPrior, unwritten), false, model.MethodStated},
-		"computed, carried from state": {carried, planned(t, update, hasPrior, unwritten), false, model.MethodPriorState},
-		"unrecorded stays unrecorded": {flag, planned(t, create, noPrior, ""), false, model.MethodConfigurationUnrecorded},
-		"a block stays what it records": {rules, planned(t, create, noPrior, unwritten), false, model.MethodConfigurationUnrecorded},
+		"computed, carried from state":            {carried, planned(t, update, hasPrior, unwritten), false, model.MethodPriorState},
+		"unrecorded stays unrecorded":             {flag, planned(t, create, noPrior, ""), false, model.MethodConfigurationUnrecorded},
+		"a block stays what it records":           {rules, planned(t, create, noPrior, unwritten), false, model.MethodConfigurationUnrecorded},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -339,4 +339,3 @@ func (Mapper) Bindings() []declared.Binding {
 func (m Mapper) Environment(change terraformplan.ResourceChange) model.Fact[string] {
 	return declared.Environment(change, attrTags, model.CloudAzure)
 }
-
