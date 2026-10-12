@@ -50,8 +50,9 @@ func (b Bundle) Validate() error {
 
 	errs = append(errs, b.validateEnvelope()...)
 	errs = append(errs, b.validateVerification()...)
+	requireSteps := carriesVerificationSteps(b.SchemaVersion)
 	for i, f := range ordered.Findings {
-		errs = append(errs, validateFinding(fmt.Sprintf("findings[%d]", i), f)...)
+		errs = append(errs, validateFinding(fmt.Sprintf("findings[%d]", i), f, requireSteps)...)
 	}
 	for i, u := range ordered.Unknowns {
 		errs = append(errs, validateUnknown(fmt.Sprintf("unknowns[%d]", i), u)...)
@@ -126,16 +127,26 @@ func (b Bundle) validateEnvelope() []error {
 }
 
 // carriesIntentDigest reports whether a declared version is one that has
-// subject.intent_digest. An unreadable version is not treated as an old one:
+// subject.intent_digest.
+func carriesIntentDigest(version string) bool { return atLeastMinor(version, intentDigestMinor) }
+
+// carriesVerificationSteps reports whether a declared version is one that
+// requires findings[].verification_steps.
+func carriesVerificationSteps(version string) bool {
+	return atLeastMinor(version, verificationStepsMinor)
+}
+
+// atLeastMinor reports whether a declared version is at or after a minor
+// version. An unreadable version is not treated as an old one:
 // validateSchemaVersion refuses it separately, and reading it as "before the
 // field existed" would let anything skip the check by mangling one string.
-func carriesIntentDigest(version string) bool {
-	_, minor, found := strings.Cut(version, ".")
-	if !found || !isPlainNumber(minor) {
+func atLeastMinor(version string, minor int) bool {
+	_, declared, found := strings.Cut(version, ".")
+	if !found || !isPlainNumber(declared) {
 		return true
 	}
-	value, err := strconv.Atoi(minor)
-	return err != nil || value >= intentDigestMinor
+	value, err := strconv.Atoi(declared)
+	return err != nil || value >= minor
 }
 
 // Inline makes a value usable in a field this contract requires to be a single
@@ -246,7 +257,7 @@ func (b Bundle) validateVerification() []error {
 }
 
 // validateFinding checks one finding and everything it contains.
-func validateFinding(path string, f Finding) []error {
+func validateFinding(path string, f Finding, requireSteps bool) []error {
 	var errs []error
 
 	if !identifierPattern.MatchString(f.RuleID) {
@@ -308,6 +319,38 @@ func validateFinding(path string, f Finding) []error {
 	}
 	errs = append(errs, validateEvidence(path, f.Evidence)...)
 
+	if requireSteps && len(f.VerificationSteps) == 0 {
+		errs = append(errs, violation(path+".verification_steps",
+			"must say how at least one fact the finding rests on was established"))
+	}
+	errs = append(errs, validateSteps(path, f.VerificationSteps)...)
+
+	return errs
+}
+
+// validateSteps checks every verification step, whatever version the bundle
+// declares: a field that is present is held to its contract, as intent_digest
+// is.
+func validateSteps(parent string, steps []VerificationStep) []error {
+	var errs []error
+	for i, step := range steps {
+		path := fmt.Sprintf("%s.verification_steps[%d]", parent, i)
+		if strings.TrimSpace(step.Fact) == "" {
+			errs = append(errs, violation(path+".fact", "must name the fact"))
+		}
+		if err := validateSingleLine(path+".fact", step.Fact); err != nil {
+			errs = append(errs, err)
+		}
+		// Stricter than prose: a fact path is a constant of this build, never
+		// plan text, so a control character in one is a defect, not a value.
+		if strings.IndexFunc(step.Fact, isControlChar) >= 0 {
+			errs = append(errs, violation(path+".fact", "must not carry a control character"))
+		}
+		if !step.Method.Valid() {
+			errs = append(errs, violation(path+".method", "unrecognized verification method %q",
+				string(step.Method)))
+		}
+	}
 	return errs
 }
 

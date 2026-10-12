@@ -39,6 +39,10 @@ func blockBundle() Bundle {
 					ResourceAddress: "aws_s3_bucket.assets",
 					Path:            "resource_changes[].change.after",
 				}},
+				VerificationSteps: []VerificationStep{
+					{Fact: "object_storage.public_access", Method: MethodPlanStatedValue},
+					{Fact: "contract.object_storage.exposure", Method: MethodIntentComparison},
+				},
 				Remediation: "Disable public access using the provider-supported controls.",
 			},
 		},
@@ -57,7 +61,8 @@ func warnFinding() Finding {
 			Source: "terraform_plan",
 			Path:   "resource_changes[].change.after",
 		}},
-		Remediation: "Declare versioning explicitly.",
+		VerificationSteps: []VerificationStep{{Fact: "object_storage.versioning", Method: MethodPlanStatedValue}},
+		Remediation:       "Declare versioning explicitly.",
 	}
 }
 
@@ -71,7 +76,8 @@ func infoFinding() Finding {
 			Source: "terraform_plan",
 			Path:   "resource_changes[]",
 		}},
-		Remediation: "No remediation required; this finding is informational.",
+		VerificationSteps: []VerificationStep{{Fact: "object_storage.public_access", Method: MethodPlanStatedValue}},
+		Remediation:       "No remediation required; this finding is informational.",
 	}
 }
 

@@ -17,3 +17,8 @@ const SchemaVersion = "1.2"
 // a breaking change inside a major version — which this contract says needs a
 // new major version.
 const intentDigestMinor = 1
+
+// verificationStepsMinor is the minor version that added
+// findings[].verification_steps. A bundle declaring an earlier one is valid
+// without the field, for the reason intentDigestMinor gives.
+const verificationStepsMinor = 3

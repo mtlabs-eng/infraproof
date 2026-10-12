@@ -158,3 +158,43 @@ func (c Cloud) Valid() bool {
 	}
 	return false
 }
+
+// VerificationMethod is how one fact a finding rests on was established. It is
+// provenance, not technique: a reader is told whether the verdict rests on what
+// the plan states, on a provider default, or on something this build inferred.
+//
+// It is never load-bearing. No decision, disposition or exit code depends on it.
+type VerificationMethod string
+
+const (
+	// MethodPlanStatedValue means the value is stated in the plan.
+	MethodPlanStatedValue VerificationMethod = "plan-stated-value"
+	// MethodProviderDefault means the argument is unwritten and the value is the
+	// provider's documented default.
+	MethodProviderDefault VerificationMethod = "provider-default"
+	// MethodPolicyDocumentInterpreted means the value results from this build's
+	// reading of a JSON policy document.
+	MethodPolicyDocumentInterpreted VerificationMethod = "policy-document-interpreted"
+	// MethodReferenceResolved means the fact joins two resources through
+	// configuration references.
+	MethodReferenceResolved VerificationMethod = "reference-resolved"
+	// MethodDocumentedTable means the value comes from a closed, documented table
+	// in this build.
+	MethodDocumentedTable VerificationMethod = "documented-table"
+	// MethodPlanAction means the value is the classification of the plan's
+	// actions.
+	MethodPlanAction VerificationMethod = "plan-action"
+	// MethodIntentComparison means the fact is the comparison with the intent
+	// contract.
+	MethodIntentComparison VerificationMethod = "intent-comparison"
+)
+
+// Valid reports whether m is a member of the closed method set.
+func (m VerificationMethod) Valid() bool {
+	switch m {
+	case MethodPlanStatedValue, MethodProviderDefault, MethodPolicyDocumentInterpreted,
+		MethodReferenceResolved, MethodDocumentedTable, MethodPlanAction, MethodIntentComparison:
+		return true
+	}
+	return false
+}
