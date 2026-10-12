@@ -18,28 +18,29 @@ import (
 // configured resource its provider config key and the references its arguments
 // make.
 func parseConfiguration(document map[string]any, errs *[]error) (map[string]ProviderConfig,
-	map[string]configResource, map[string]ModuleCall) {
+	map[string]configResource, map[string]ModuleCall, map[string]moduleScope) {
 
 	raw, present := document["configuration"]
 	if !present || raw == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	configuration, ok := raw.(map[string]any)
 	if !ok {
 		*errs = append(*errs, invalid("configuration", "must be an object"))
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	configs := parseProviderConfigs(configuration, errs)
 
 	byAddress := map[string]configResource{}
 	calls := map[string]ModuleCall{}
+	scopes := map[string]moduleScope{}
 	if rootRaw, present := configuration["root_module"]; present && rootRaw != nil {
 		root, ok := rootRaw.(map[string]any)
 		if !ok {
 			*errs = append(*errs, invalid("configuration.root_module", "must be an object"))
 		} else {
-			walkModule("configuration.root_module", "", root, byAddress, calls, errs)
+			walkModule("configuration.root_module", "", root, byAddress, calls, scopes, errs)
 		}
 	}
 	// A reference is only an address if the configuration declares a resource
@@ -50,7 +51,7 @@ func parseConfiguration(document map[string]any, errs *[]error) (map[string]Prov
 		resource.references, resource.opaque = resolveReferences(resource.references, byAddress)
 		byAddress[address] = resource
 	}
-	return configs, byAddress, calls
+	return configs, byAddress, calls, scopes
 }
 
 // configResource is what the configuration block says about one resource.
@@ -63,6 +64,13 @@ type configResource struct {
 	// recorded reports that the entry carries an expressions object, which is
 	// what makes stated an answer rather than a silence.
 	recorded bool
+	// expressions holds each argument's raw expression by path, and a nil
+	// entry for a path written in more than one block. It is read while
+	// parsing and never kept: see Expression.
+	expressions map[string]any
+	// module is the configuration address of the module declaring it, the
+	// scope its variables resolve in.
+	module string
 }
 
 func resolveReferences(refs []ExpressionReference,
@@ -157,7 +165,7 @@ func parseProviderConfigs(configuration map[string]any, errs *[]error) map[strin
 // descends into its module calls. Configuration addresses are module-relative,
 // so the qualified address is rebuilt on the way down.
 func walkModule(path, addressPrefix string, module map[string]any, byAddress map[string]configResource,
-	calls map[string]ModuleCall, errs *[]error) {
+	calls map[string]ModuleCall, scopes map[string]moduleScope, errs *[]error) {
 
 	if resourcesRaw, present := module["resources"]; present && resourcesRaw != nil {
 		resources, ok := resourcesRaw.([]any)
@@ -200,6 +208,8 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 					references:        parseExpressions(entryPath, fields, addressPrefix, errs),
 					stated:            statedArguments(fields),
 					recorded:          recordsArguments(fields),
+					expressions:       recordedExpressions(fields),
+					module:            addressPrefix,
 				}
 			}
 		}
@@ -239,7 +249,12 @@ func walkModule(path, addressPrefix string, module map[string]any, byAddress map
 			*errs = append(*errs, invalid(callPath+".module", "must be an object"))
 			continue
 		}
-		walkModule(callPath+".module", address, inner, byAddress, calls, errs)
+		// Read for the method alone, so a shape this build does not expect is
+		// a variable it cannot resolve rather than an unreadable plan.
+		inputs, _ := call["expressions"].(map[string]any)
+		variables, _ := inner["variables"].(map[string]any)
+		scopes[address] = moduleScope{parent: addressPrefix, inputs: inputs, variables: variables}
+		walkModule(callPath+".module", address, inner, byAddress, calls, scopes, errs)
 	}
 }
 
@@ -270,6 +285,46 @@ func recordsArguments(fields map[string]any) bool {
 	}
 	_, ok := raw.(map[string]any)
 	return ok
+}
+
+// recordedExpressions collects the raw expression of every argument the entry
+// writes, by the path Stated spells it, marking a path written in more than one
+// block with nil.
+func recordedExpressions(fields map[string]any) map[string]any {
+	body, ok := fields["expressions"].(map[string]any)
+	if !ok || len(body) == 0 {
+		return nil
+	}
+	into := map[string]any{}
+	collectExpressions("", body, into)
+	return into
+}
+
+func collectExpressions(prefix string, body map[string]any, into map[string]any) {
+	for name, entry := range body {
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		switch typed := entry.(type) {
+		case map[string]any:
+			if !isExpression(typed) {
+				collectExpressions(path, typed, into)
+				continue
+			}
+			if _, seen := into[path]; seen {
+				into[path] = nil
+				continue
+			}
+			into[path] = typed
+		case []any:
+			for _, element := range typed {
+				if block, ok := element.(map[string]any); ok {
+					collectExpressions(path, block, into)
+				}
+			}
+		}
+	}
 }
 
 // namesSomethingDeclared reports that a reference target, or any prefix of it,
@@ -585,7 +640,7 @@ func dependsOnReferences(path string, fields map[string]any, addressPrefix strin
 // configuration block does not, so the key is stripped before matching. A
 // resource whose address is not in the configuration keeps an empty key rather
 // than being guessed at.
-func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
+func resolveProviderInstances(plan *Plan, byAddress map[string]configResource, values evaluator) {
 	if len(byAddress) == 0 {
 		return
 	}
@@ -603,6 +658,7 @@ func resolveProviderInstances(plan *Plan, byAddress map[string]configResource) {
 		change.Configured = configured.recorded
 		change.Stated = configured.stated
 		change.Opaque = configured.opaque
+		change.Expressions = values.expressions(configured.expressions, configured.module, change.After)
 	}
 }
 

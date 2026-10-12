@@ -226,6 +226,11 @@ type ResourceChange struct {
 	// configuration answers nothing about what an argument drew on, and
 	// answering no would be saying the list is complete.
 	Opaque []string
+	// Expressions records, for each argument the configuration writes once,
+	// what its expression evaluates to as far as the plan records it, by the
+	// path Stated spells it. Nil when Configured is false. It holds no value:
+	// see Expression.
+	Expressions map[string]Expression
 }
 
 // DrawsOnOpaque reports whether an argument's value comes, in part, from
