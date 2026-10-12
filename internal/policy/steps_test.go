@@ -1,6 +1,7 @@
 package policy_test
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +21,28 @@ func stepsOf(t *testing.T, result policy.Result, rule, address string) []evidenc
 	}
 	t.Fatalf("no %s finding about %s", rule, address)
 	return nil
+}
+
+// findingOf is the one finding of a rule about an address, in canonical order.
+func findingOf(t *testing.T, result policy.Result, rule, address string) evidence.Finding {
+	t.Helper()
+	for _, f := range result.Findings {
+		if f.RuleID == rule && f.Resource != nil && f.Resource.Address == address {
+			return evidence.Canonical(evidence.Bundle{Findings: []evidence.Finding{f}}).Findings[0]
+		}
+	}
+	t.Fatalf("no %s finding about %s", rule, address)
+	return evidence.Finding{}
+}
+
+// assertSameBesidesSteps is the "nowhere else" half of a criterion 3 pair: with
+// the steps removed, the two findings are identical.
+func assertSameBesidesSteps(t *testing.T, a, b evidence.Finding) {
+	t.Helper()
+	a.VerificationSteps, b.VerificationSteps = nil, nil
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("the findings differ beyond their steps\n a %+v\n b %+v", a, b)
+	}
 }
 
 func assertSteps(t *testing.T, got []evidence.VerificationStep, want ...evidence.VerificationStep) {
@@ -55,6 +78,20 @@ func TestADatabaseBehindAnOpenGroupNamesTheHopAndTheGate(t *testing.T) {
 	)
 }
 
+// Criterion 4, the stated half: rds-port-written writes port 1433 and the group
+// in front of it opens 1433 alone, so the port decided and its step says the
+// plan stated it. The engine-derived half is the test above.
+func TestAStatedPortIsStatedInTheStep(t *testing.T) {
+	result := evaluateDatabase(t, "aws", "rds-port-written", requiringPrivate())
+	assertSteps(t, stepsOf(t, result, policy.RuleDatabasePublicReachable, "aws_db_instance.offport"),
+		step("contract.database.exposure", evidence.MethodIntentComparison),
+		step("database.admitted_by", evidence.MethodReferenceResolved),
+		step("database.port", evidence.MethodPlanStatedValue),
+		step("database.public_endpoint", evidence.MethodPlanStatedValue),
+		step("network.public_ingress", evidence.MethodPlanStatedValue),
+	)
+}
+
 // Criterion 3, GCP ipv4_enabled: the pair differs in that one method and in
 // nothing else.
 func TestTheIPv4DefaultChangesOneStepAndNothingElse(t *testing.T) {
@@ -84,6 +121,11 @@ func TestTheDirectionDefaultChangesOneStepAndNothingElse(t *testing.T) {
 		policy.RuleNetworkPublicIngress, "google_compute_firewall.web")
 	defaulted := stepsOf(t, evaluateNetwork(t, "gcp", "fw-public", declaringPort()),
 		policy.RuleNetworkPublicIngress, "google_compute_firewall.web")
+	assertSameBesidesSteps(t,
+		findingOf(t, evaluateNetwork(t, "gcp", "fw-public-direction-written", declaringPort()),
+			policy.RuleNetworkPublicIngress, "google_compute_firewall.web"),
+		findingOf(t, evaluateNetwork(t, "gcp", "fw-public-direction-omitted", declaringPort()),
+			policy.RuleNetworkPublicIngress, "google_compute_firewall.web"))
 	assertSteps(t, written,
 		step("contract.network.public_ports", evidence.MethodIntentComparison),
 		step("network.public_ingress", evidence.MethodPlanStatedValue))
@@ -111,6 +153,9 @@ func TestTheBlockFlagDefaultChangesTheACLStep(t *testing.T) {
 	assertSteps(t, stepsOf(t, evaluate(t, "aws", "public-acl"), policy.RuleStoragePublic, "aws_s3_bucket.assets"),
 		step("contract.object_storage.exposure", evidence.MethodIntentComparison),
 		step("object_storage.public_access", evidence.MethodProviderDefault))
+	assertSameBesidesSteps(t,
+		findingOf(t, evaluate(t, "aws", "public-acl-flags-written"), policy.RuleStoragePublic, "aws_s3_bucket.assets"),
+		findingOf(t, evaluate(t, "aws", "public-acl"), policy.RuleStoragePublic, "aws_s3_bucket.assets"))
 }
 
 func TestEveryGenericRuleSaysHowItKnows(t *testing.T) {
@@ -186,7 +231,9 @@ func TestAZeroMethodNeverReachesABundle(t *testing.T) {
 			IntentDigest: "sha256:" + strings.Repeat("0", 64)},
 		Verification: []evidence.Verification{{Name: "terraform_plan", Status: evidence.VerificationVerified, Method: "terraform-plan-json"}},
 		Findings:     result.Findings, Unknowns: []evidence.Unknown{}}
-	if err := bundle.Validate(); err == nil || !strings.Contains(err.Error(), "verification_steps") {
-		t.Errorf("a fact with no method validated: %v", err)
+	// The method is what must be refused, not some other part of the step.
+	if err := bundle.Validate(); err == nil || !strings.Contains(err.Error(), "verification_steps") ||
+		!strings.Contains(err.Error(), "unrecognized verification method") {
+		t.Errorf("a fact with no method validated, or was refused for another reason: %v", err)
 	}
 }

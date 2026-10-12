@@ -548,8 +548,8 @@ func verdictOnly(b evidence.Bundle) evidence.Bundle {
 }
 
 // TestEveryFindingSaysHowItKnows is criterion 1 over every committed plan
-// fixture, not a sample: each finding carries at least one step and the bundle
-// validates as 1.3.
+// fixture, not a sample: each finding carries at least one step, one of them
+// the contract comparison, and the bundle validates as 1.3.
 func TestEveryFindingSaysHowItKnows(t *testing.T) {
 	intent := filepath.Join("testdata", "baseline", "intent.json")
 	findings := 0
@@ -565,6 +565,13 @@ func TestEveryFindingSaysHowItKnows(t *testing.T) {
 			findings++
 			if len(f.VerificationSteps) == 0 {
 				t.Errorf("%s: %s on %v carries no step", fixture, f.RuleID, f.Resource)
+			}
+			// The contract comparison is on every finding, including one where
+			// the contract declares nothing: silence is read.
+			if !slices.ContainsFunc(f.VerificationSteps, func(s evidence.VerificationStep) bool {
+				return strings.HasPrefix(s.Fact, "contract.")
+			}) {
+				t.Errorf("%s: %s on %v carries no contract comparison step", fixture, f.RuleID, f.Resource)
 			}
 		}
 		if err := bundle.Validate(); err != nil {
