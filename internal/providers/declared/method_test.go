@@ -56,6 +56,8 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 	carried := declared.Argument{Path: "flag", Computed: true}
 	rules := declared.Argument{Path: "rule", Block: true, Computed: true}
 	nested := declared.Argument{Path: "settings.ip.enabled", Computed: true}
+	required := declared.Argument{Path: "flag", Required: true}
+	requiredNested := declared.Argument{Path: "settings.flag", Required: true}
 
 	cases := map[string]struct {
 		argument declared.Argument
@@ -137,6 +139,29 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			nested, planned(t, update, hasPrior, entry(`{"settings": [{"ip": [{"other": {"constant_value": 1}}]}]}`)),
 			model.MethodPriorState,
 		},
+		// Terraform refuses a body that omits a Required argument, and no
+		// dynamic block writes an attribute, so wherever the body holding it is
+		// recorded, so is the argument -- even by an entry with no expressions.
+		"required, the body recorded without it": {
+			required, planned(t, create, noPrior, entry(`{"name": {"constant_value": "t"}}`)),
+			model.MethodStated,
+		},
+		"required, an entry without expressions": {
+			required, planned(t, create, noPrior, entry("")),
+			model.MethodStated,
+		},
+		"required, no configuration": {
+			required, planned(t, create, noPrior, ""),
+			model.MethodConfigurationUnrecorded,
+		},
+		"required, inside a block not recorded": {
+			requiredNested, planned(t, create, noPrior, entry(`{"name": {"constant_value": "t"}}`)),
+			model.MethodConfigurationUnrecorded,
+		},
+		"required, inside a block written": {
+			requiredNested, planned(t, create, noPrior, entry(`{"settings": [{"tier": {"constant_value": "a"}}]}`)),
+			model.MethodStated,
+		},
 		"nested and written": {
 			nested, planned(t, create, noPrior, entry(`{"settings": [{"ip": [{"enabled": {"constant_value": true}}]}]}`)),
 			model.MethodStated,
@@ -177,6 +202,26 @@ func TestTheWeakestConfigurationMethodWins(t *testing.T) {
 	for _, c := range cases {
 		if got := declared.Weakest(c.in...); got != c.want {
 			t.Errorf("Weakest(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// A grant proven several ways at once takes the method of the best proof: the
+// verdict needs only one, and the finding can cite the one that is stated.
+func TestTheStrongestProofOfADisjunctionWins(t *testing.T) {
+	cases := []struct {
+		in   []model.Method
+		want model.Method
+	}{
+		{[]model.Method{model.MethodProviderDefault, model.MethodStated}, model.MethodStated},
+		{[]model.Method{model.MethodConfigurationUnrecorded, model.MethodPriorState}, model.MethodPriorState},
+		{[]model.Method{model.MethodPriorState, model.MethodProviderDefault}, model.MethodProviderDefault},
+		{[]model.Method{model.MethodConfigurationUnrecorded}, model.MethodConfigurationUnrecorded},
+		{[]model.Method{model.MethodPolicyDocument, model.MethodProviderDefault}, model.MethodPolicyDocument},
+	}
+	for _, c := range cases {
+		if got := declared.Strongest(c.in...); got != c.want {
+			t.Errorf("Strongest(%v) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

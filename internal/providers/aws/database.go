@@ -135,10 +135,11 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 		}
 		// The method follows the configuration: a real plan emits the default
 		// as a known value when nobody wrote it, and that is still a default.
-		if declared.Unwritten(subject, attrPubliclyAccessible) {
-			return model.Known(value.Bool(), model.MethodProviderDefault, cited)
-		}
-		return model.Known(value.Bool(), model.MethodStated, cited)
+		// On an Aurora instance the switch is Computed, so an update carries an
+		// unwritten one over from state -- true as readily as false, and the
+		// default only by coincidence.
+		switchArgument := declared.Argument{Path: attrPubliclyAccessible, Computed: subject.Type == typeClusterInstance}
+		return model.Known(value.Bool(), switchArgument.Method(subject), cited)
 	default:
 		if declared.Unwritten(subject, attrPubliclyAccessible) {
 			// Computed and nobody wrote it, so the provider's documented default
@@ -345,7 +346,11 @@ func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	if stated := subject.After.Field(attrPort); stated.State() == terraformplan.StateKnown &&
 		stated.Kind() == terraformplan.KindNumber {
 		if value, err := stated.Number().Int64(); err == nil && value > 0 && value <= lastPort {
-			return model.Known(int(value), model.MethodStated,
+			// Stated only when somebody wrote it. `port` is Computed everywhere,
+			// so an update carries an unwritten one from state: the deployed
+			// port, which is neither stated nor the table's.
+			portArgument := declared.Argument{Path: attrPort, Computed: true}
+			return model.Known(int(value), portArgument.Method(subject),
 				declared.Source(model.CloudAWS, subject.Address, attrPort, stated)), false
 		}
 	}

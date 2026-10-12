@@ -112,3 +112,99 @@ func TestAComputedSwitchNobodyWroteIsTheProvidersDefault(t *testing.T) {
 		t.Errorf("method = %q (state %s), want known false %q", endpoint.Method(), endpoint.State, model.MethodProviderDefault)
 	}
 }
+
+// Real update plans, planned against a hand-written state with -refresh=false:
+// the configuration of real-rds-unwritten-update writes neither
+// publicly_accessible on the Aurora instance nor port anywhere, and the state
+// holds publicly_accessible = true and port 5432. Terraform carries both into
+// after as known values. Neither is stated, and the Aurora switch is not the
+// provider's default either -- its default is false.
+func TestAnUnwrittenComputedSwitchCarriedFromStateIsPriorState(t *testing.T) {
+	endpoint := database(t, "real-rds-unwritten-update", "aws_rds_cluster_instance.i").Database.PublicEndpoint
+	if !endpoint.IsKnown() || !endpoint.Get() || endpoint.Method() != model.MethodPriorState {
+		t.Errorf("method = %q (state %s, value %v), want known true %q",
+			endpoint.Method(), endpoint.State, endpoint.Get(), model.MethodPriorState)
+	}
+}
+
+// The same switch written on the plain instance stays stated on an update.
+func TestAWrittenSwitchOnAnUpdateIsStated(t *testing.T) {
+	endpoint := database(t, "real-rds-unwritten-update", "aws_db_instance.d").Database.PublicEndpoint
+	if endpoint.Method() != model.MethodStated {
+		t.Errorf("method = %q, want %q", endpoint.Method(), model.MethodStated)
+	}
+}
+
+// A port nobody wrote, carried from state, is the deployed port: prior-state,
+// not stated and not the table. On the create twin, identical HCL, it is
+// unknown and the engine table supplies it.
+func TestAnUnwrittenPortCarriedFromStateIsPriorState(t *testing.T) {
+	for _, address := range []string{"aws_db_instance.d", "aws_rds_cluster_instance.i"} {
+		port := database(t, "real-rds-unwritten-update", address).Database.Port
+		if !port.IsKnown() || port.Method() != model.MethodPriorState {
+			t.Errorf("%s update: method = %q (state %s), want %q", address, port.Method(), port.State, model.MethodPriorState)
+		}
+		port = database(t, "real-rds-unwritten-create", address).Database.Port
+		if !port.IsKnown() || port.Method() != model.MethodDocumentedTable {
+			t.Errorf("%s create: method = %q (state %s), want %q", address, port.Method(), port.State, model.MethodDocumentedTable)
+		}
+	}
+}
+
+// A real update plan: the group's configuration writes name, vpc_id and tags and
+// no ingress, and the state holds one inline rule, tcp 22 from 0.0.0.0/0, which
+// Terraform carries into after because `ingress` is Optional and Computed. The
+// grant is real and nobody under review wrote it. The configuration cannot say
+// whether a dynamic ingress block wrote it either -- Terraform does not record
+// one -- so the method is that the plan does not record it.
+func TestAnInlineGrantNobodyRecordedIsConfigurationUnrecorded(t *testing.T) {
+	ingress := group(t, "real-sg-ingress-from-state", "aws_security_group.web").Network.PublicIngress
+	if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q (state %s), want known true %q", ingress.Method(), ingress.State, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// Written inline, the grant is stated; written as a separate rule whose address
+// is written, it is stated too.
+func TestAWrittenGrantIsStatedInlineOrSeparate(t *testing.T) {
+	for _, address := range []string{"aws_security_group.mixed", "aws_security_group.protoall", "aws_security_group.ipv6"} {
+		ingress := group(t, "real-groups", address).Network.PublicIngress
+		if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != model.MethodStated {
+			t.Errorf("%s: method = %q (state %s, value %v), want known true %q",
+				address, ingress.Method(), ingress.State, ingress.Get(), model.MethodStated)
+		}
+	}
+}
+
+func group(t *testing.T, fixture, address string) model.NormalizedResource {
+	t.Helper()
+	found, ok := normalize(t, fixture).At(address)
+	if !ok || found.Network == nil {
+		t.Fatalf("fixture %s has no network resource at %s", fixture, address)
+	}
+	return found
+}
+
+// A pair of real create plans. In the first the account block is
+// `resource "aws_s3_account_public_access_block" "acct" {}`, which Terraform
+// records with no expressions at all; in the second it writes one flag the ACL
+// route does not read. In both, the two flags the grant rests on are unwritten
+// and the provider wrote its default, false. Writing more must not make the
+// claim stronger: both are the provider's default.
+func TestAnEmptyAccountBlockIsAsDefaultedAsOneThatWritesSomethingElse(t *testing.T) {
+	for _, fixture := range []string{"real-acl-account-block-empty", "real-acl-account-block-one-flag"} {
+		access := normalizeAt(t, fixture, "aws_s3_bucket.b").ObjectStorage.PublicAccess
+		if !access.IsKnown() || !access.Get() || access.Method() != model.MethodProviderDefault {
+			t.Errorf("%s: method = %q (state %s), want known true %q", fixture, access.Method(), access.State, model.MethodProviderDefault)
+		}
+	}
+}
+
+func normalizeAt(t *testing.T, fixture, address string) model.NormalizedResource {
+	t.Helper()
+	found, ok := normalize(t, fixture).At(address)
+	if !ok {
+		t.Fatalf("fixture %s has no resource at %s", fixture, address)
+	}
+	return found
+}

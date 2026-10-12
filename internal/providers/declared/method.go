@@ -31,6 +31,12 @@ type Argument struct {
 	// update rather than planning it back to a default: an Optional and
 	// Computed argument, or a Computed-only one.
 	Computed bool
+	// Required reports that the provider's schema requires the argument.
+	// Terraform refuses a body that omits one, and no dynamic block writes an
+	// attribute, so wherever the body holding it is recorded the argument is
+	// written -- including by a configuration entry with no expressions, and
+	// by a hand-written plan whose configuration lists only the references.
+	Required bool
 }
 
 // Writing is what the configuration records about one argument.
@@ -66,14 +72,14 @@ func (a Argument) Writing(change terraformplan.ResourceChange) Writing {
 	if a.Block {
 		return WritingUnrecorded
 	}
-	parent, nested := cutLast(a.Path)
-	if !nested {
-		return WritingUnwritten
+	if parent, nested := cutLast(a.Path); nested && !(change.Configured && change.States(parent)) {
+		// The block holding it is not recorded, and may be dynamic.
+		return WritingUnrecorded
 	}
-	if change.Configured && change.States(parent) {
-		return WritingUnwritten
+	if a.Required {
+		return WritingWritten
 	}
-	return WritingUnrecorded
+	return WritingUnwritten
 }
 
 // Method returns how a KNOWN value the plan carries for this argument was
@@ -130,13 +136,36 @@ func Updates(change terraformplan.ResourceChange) bool {
 // cites, and the product decision recorded in milestone 10 is that a defaulted
 // gate beside it does not show.
 func Weakest(methods ...model.Method) model.Method {
-	weakest := model.MethodStated
-	for _, method := range methods {
+	if len(methods) == 0 {
+		// Nothing to rest on is not a stated value; the zero method fails
+		// validation.
+		return ""
+	}
+	weakest := methods[0]
+	for _, method := range methods[1:] {
 		if strength(method) < strength(weakest) {
 			weakest = method
 		}
 	}
 	return weakest
+}
+
+// Strongest returns the method of the best of several proofs, any one of which
+// settles a fact on its own. A disjunctive grant needs only one, and the finding
+// can cite the one that is best established; the order is Weakest's.
+func Strongest(methods ...model.Method) model.Method {
+	if len(methods) == 0 {
+		// No proof is not a stated one. The zero method fails validation, so
+		// a caller that forgot its proofs fails closed.
+		return ""
+	}
+	strongest := methods[0]
+	for _, method := range methods[1:] {
+		if strength(method) > strength(strongest) {
+			strongest = method
+		}
+	}
+	return strongest
 }
 
 func strength(method model.Method) int {
