@@ -1,6 +1,8 @@
 package policy_test
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"github.com/mtlabs-eng/infraproof/internal/intent"
 	"github.com/mtlabs-eng/infraproof/internal/model"
 	"github.com/mtlabs-eng/infraproof/internal/policy"
+	"github.com/mtlabs-eng/infraproof/internal/providers"
+	"github.com/mtlabs-eng/infraproof/internal/terraformplan"
 )
 
 func stepsOf(t *testing.T, result policy.Result, rule, address string) []evidence.VerificationStep {
@@ -246,4 +250,40 @@ func TestAZeroMethodNeverReachesABundle(t *testing.T) {
 		!strings.Contains(err.Error(), "unrecognized verification method") {
 		t.Errorf("a fact with no method validated, or was refused for another reason: %v", err)
 	}
+}
+
+// ENVIRONMENT_MISMATCH through the mapper rather than a fact built by hand: the
+// real plan rds-partial-allow-list writes tags = { environment = "staging" },
+// so the environment is stated. The same plan without its configuration records
+// nothing about who wrote the tag.
+func TestAnEnvironmentReadFromAPlanSaysHowItKnows(t *testing.T) {
+	contract := intent.Contract{SchemaVersion: "1.2", ChangeID: "t", Environment: "production"}
+	plan := planAt(t, "aws", "rds-partial-allow-list")
+	assertSteps(t, stepsOf(t, policy.EnvironmentMatch(contract, providers.Normalize(plan, providers.Default())),
+		policy.RuleEnvironmentMismatch, "aws_db_instance.partial"),
+		step("contract.environment", evidence.MethodIntentComparison),
+		step("resource.environment", evidence.MethodPlanStatedValue))
+
+	for i := range plan.ResourceChanges {
+		plan.ResourceChanges[i].Declared = false
+		plan.ResourceChanges[i].Configured = false
+		plan.ResourceChanges[i].Stated = nil
+	}
+	assertSteps(t, stepsOf(t, policy.EnvironmentMatch(contract, providers.Normalize(plan, providers.Default())),
+		policy.RuleEnvironmentMismatch, "aws_db_instance.partial"),
+		step("contract.environment", evidence.MethodIntentComparison),
+		step("resource.environment", evidence.MethodConfigurationUnrecorded))
+}
+
+func planAt(t *testing.T, cloud, fixture string) terraformplan.Plan {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "providers", cloud, "testdata", fixture+".json"))
+	if err != nil {
+		t.Fatalf("reading %s: %v", fixture, err)
+	}
+	plan, err := terraformplan.Parse(raw)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", fixture, err)
+	}
+	return plan
 }
