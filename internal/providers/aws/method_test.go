@@ -71,3 +71,12 @@ func TestAKnownSwitchNobodyWroteIsTheProvidersDefault(t *testing.T) {
 		t.Errorf("method = %q (state %s), want %q", endpoint.Method(), endpoint.State, model.MethodProviderDefault)
 	}
 }
+
+// A real plan emits publicly_accessible as unknown on an Aurora instance nobody
+// wrote it on. That unknown is the provider's default, and the method says so.
+func TestAComputedSwitchNobodyWroteIsTheProvidersDefault(t *testing.T) {
+	endpoint := database(t, "real-aurora-defaults", "aws_rds_cluster_instance.ax").Database.PublicEndpoint
+	if !endpoint.IsKnown() || endpoint.Get() || endpoint.Method() != model.MethodProviderDefault {
+		t.Errorf("method = %q (state %s), want known false %q", endpoint.Method(), endpoint.State, model.MethodProviderDefault)
+	}
+}
