@@ -13,6 +13,23 @@
       },
       "direction": {
        "constant_value": "INGRESS"
+      },
+      "allow": [
+       {
+        "protocol": {
+         "constant_value": "tcp"
+        },
+        "ports": {
+         "constant_value": [
+          "22"
+         ]
+        }
+       }
+      ],
+      "source_ranges": {
+       "constant_value": [
+        "0.0.0.0/0"
+       ]
       }
      },
      "mode": "managed",
@@ -33,6 +50,18 @@
       },
       "priority": {
        "constant_value": 1001
+      },
+      "deny": [
+       {
+        "protocol": {
+         "constant_value": "all"
+        }
+       }
+      ],
+      "source_ranges": {
+       "constant_value": [
+        "0.0.0.0/0"
+       ]
       }
      },
      "mode": "managed",

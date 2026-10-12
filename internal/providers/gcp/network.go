@@ -64,7 +64,9 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange) model.NetworkCapabilities {
 
 	rule := readFirewall(subject)
-	defaulted := rule.directionDefaulted || rule.priorityDefaulted
+	// Every input the verdict rests on, each with how it was established. The
+	// verdict is only as strong as the weakest of them.
+	rests := []model.Method{rule.sourceMethod, rule.blocksMethod, rule.directionMethod, rule.priorityMethod}
 	capabilities := model.NetworkCapabilities{Unresolved: m.ingressGaps(subject)}
 
 	if rule.unread {
@@ -106,7 +108,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 				//
 				// The skip rests on the deny's priority, so a defaulted one is
 				// what the verdict rests on.
-				defaulted = defaulted || deny.priorityDefaulted
+				rests = append(rests, deny.priorityMethod)
 				continue
 			}
 
@@ -127,7 +129,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			}
 
 			cited = append(cited, deny.cited...)
-			defaulted = defaulted || deny.directionDefaulted || deny.priorityDefaulted
+			rests = append(rests, deny.sourceMethod, deny.blocksMethod, deny.directionMethod, deny.priorityMethod)
 			remaining, byProtocol = subtract(remaining, deny.denies, byProtocol)
 		}
 	}
@@ -135,10 +137,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	opened := openRanges(remaining, rule)
 	capabilities.OpenToAnyAddress = opened
 
-	method := model.MethodStated
-	if defaulted {
-		method = model.MethodProviderDefault
-	}
+	method := declared.Weakest(rests...)
 	switch {
 	case len(opened) > 0:
 		capabilities.PublicIngress = model.Known(true, method, cited...)
@@ -238,14 +237,19 @@ type firewallRule struct {
 	// read, which bounds comparison with a deny without unsettling the rule.
 	targetsUnread bool
 	unread        bool
-	// directionDefaulted reports that direction was unwritten and read as the
-	// provider's INGRESS default, so a verdict resting on this rule rests on it.
-	directionDefaulted bool
-	// priorityDefaulted reports that priority was unwritten and read as the
-	// provider's documented 1000, so a verdict resting on the ordering rests on
-	// it.
-	priorityDefaulted bool
-	cited             []model.Provenance
+	// directionMethod is how direction was established. Unwritten, it is read
+	// as the provider's INGRESS default, so a verdict resting on this rule
+	// rests on that default; it is Computed, so an update carries it.
+	directionMethod model.Method
+	// priorityMethod is how priority was established. Unwritten, it is the
+	// provider's documented 1000, and a verdict resting on the ordering rests
+	// on it.
+	priorityMethod model.Method
+	// sourceMethod is how source_ranges was established, and blocksMethod how
+	// the allow or deny blocks were: a block the configuration does not record
+	// may be a dynamic one.
+	sourceMethod, blocksMethod model.Method
+	cited                      []model.Provenance
 }
 
 // protocolPorts is one allow or deny block.
@@ -253,6 +257,14 @@ type protocolPorts struct {
 	protocol model.Protocol
 	ports    []model.PortRange
 }
+
+var (
+	// priorityArgument is Optional and not Computed: an unwritten one is
+	// planned to 1000 on every change.
+	priorityArgument = declared.Argument{Path: "priority"}
+	// directionArgument is Optional and Computed.
+	directionArgument = declared.Argument{Path: "direction", Computed: true}
+)
 
 // readFirewall reads one firewall resource.
 func readFirewall(change terraformplan.ResourceChange) firewallRule {
@@ -267,7 +279,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	case terraformplan.StateAbsent:
 		// The provider documents 1000 for an unstated priority, so an absent
 		// field is a value rather than a gap.
-		read.priorityDefaulted = true
+		read.priorityMethod = priorityArgument.Method(change)
 	case terraformplan.StateKnown:
 		value, err := priority.Number().Int64()
 		if priority.Kind() != terraformplan.KindNumber || err != nil {
@@ -277,7 +289,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		read.priority = int(value)
 		// A real plan carries the default as a known 1000; the configuration
 		// says whether anybody wrote it.
-		read.priorityDefaulted = declared.Unwritten(change, "priority")
+		read.priorityMethod = priorityArgument.Method(change)
 	default:
 		// `priority` is Optional and not Computed: the authoritative schema says
 		// so, and a real plan confirms it by emitting 1000 for an omitted one.
@@ -295,7 +307,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	switch direction.State() {
 	case terraformplan.StateAbsent:
 		// INGRESS by the provider's own default.
-		read.directionDefaulted = true
+		read.directionMethod = directionArgument.Method(change)
 	case terraformplan.StateKnown:
 		// A spelling this build cannot name is undetermined, not EGRESS. An
 		// egress firewall says nothing about who can reach in, so reading an
@@ -305,9 +317,10 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 			read.inbound = true
 			// The provider writes its default into the plan as a known value;
 			// the configuration says whether anybody wrote it.
-			read.directionDefaulted = declared.Unwritten(change, "direction")
+			read.directionMethod = directionArgument.Method(change)
 		case strings.EqualFold(direction.Text(), "EGRESS"):
 			read.inbound = false
+			read.directionMethod = directionArgument.Method(change)
 		default:
 			read.unread = true
 			read.cited = append(read.cited, cite("direction"))
@@ -328,7 +341,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 			read.cited = append(read.cited, cite("direction"))
 			return read
 		}
-		read.directionDefaulted = true
+		read.directionMethod = directionArgument.Method(change)
 	}
 
 	disabled := change.After.Field("disabled")
@@ -352,6 +365,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		return read
 	}
 	read.anySource = source
+	read.sourceMethod = declared.Argument{Path: "source_ranges"}.Method(change)
 
 	tags, tagsUnread := targetsOf(change, "target_tags")
 	accounts, accountsUnread := targetsOf(change, "target_service_accounts")
@@ -377,6 +391,11 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		return read
 	}
 	read.allows, read.denies = allows, denies
+	blocks := "allow"
+	if len(allows) == 0 && len(denies) > 0 {
+		blocks = "deny"
+	}
+	read.blocksMethod = declared.Argument{Path: blocks, Block: true}.Method(change)
 	if len(allows) > 0 {
 		read.cited = append(read.cited, cite("allow"))
 	}

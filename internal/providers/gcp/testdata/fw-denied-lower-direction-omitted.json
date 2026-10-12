@@ -114,6 +114,23 @@
             },
             "priority": {
               "constant_value": 1000
+            },
+            "allow": [
+              {
+                "protocol": {
+                  "constant_value": "tcp"
+                },
+                "ports": {
+                  "constant_value": [
+                    "22"
+                  ]
+                }
+              }
+            ],
+            "source_ranges": {
+              "constant_value": [
+                "0.0.0.0/0"
+              ]
             }
           }
         },
@@ -131,6 +148,18 @@
             },
             "priority": {
               "constant_value": 100
+            },
+            "deny": [
+              {
+                "protocol": {
+                  "constant_value": "all"
+                }
+              }
+            ],
+            "source_ranges": {
+              "constant_value": [
+                "0.0.0.0/0"
+              ]
             }
           }
         },

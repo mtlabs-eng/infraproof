@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
+	"github.com/mtlabs-eng/infraproof/internal/providers"
 )
 
 func TestAnUnwrittenIPv4SwitchIsTheProvidersDefault(t *testing.T) {
@@ -37,11 +38,17 @@ func TestAWrittenDirectionIsStated(t *testing.T) {
 	}
 }
 
-// The plan carries INGRESS in `after`, but nothing in the configuration wrote it.
-func TestAKnownDirectionNobodyWroteIsTheProvidersDefault(t *testing.T) {
+// The plan carries INGRESS in `after`, but nothing in the configuration wrote
+// it -- and fw-public's configuration, written for milestone 08, records no
+// allow and no source either. The grant rests on all of them, and the plan does
+// not record who wrote the allow, so the method cannot be the default. It read
+// provider-default until the adversarial review; the direction's default is
+// pinned with every other input written by
+// TestAKnownDirectionNobodyWroteIsTheDefaultWithAWrittenPriority.
+func TestAFirewallWhoseAllowIsNotRecordedIsUnrecorded(t *testing.T) {
 	got := firewall(t, "fw-public").Network.PublicIngress
-	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodProviderDefault {
-		t.Errorf("method = %q, want %q", got.Method(), model.MethodProviderDefault)
+	if !got.IsKnown() || !got.Get() || got.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q, want %q", got.Method(), model.MethodConfigurationUnrecorded)
 	}
 }
 
@@ -296,5 +303,46 @@ func TestAPolicyDataGrantThroughAnUnwrittenPreventionStaysInterpreted(t *testing
 	access := bucket(t, "public-iam-policy-data").ObjectStorage.PublicAccess
 	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodPolicyDocument {
 		t.Errorf("method = %q, want %q", access.Method(), model.MethodPolicyDocument)
+	}
+}
+
+// Two firewalls in one real plan, identical but for how `allow` is written. The
+// grant rests on the allow as much as on the source and the direction, and a
+// dynamic allow is not recorded in the configuration at all: the fully written
+// rule is stated and the dynamic one cannot be attributed.
+func TestAGrantThroughADynamicAllowIsConfigurationUnrecorded(t *testing.T) {
+	graph := graphOf(t, "real-firewall-dynamic-allow")
+	for address, want := range map[string]model.Method{
+		"google_compute_firewall.written":       model.MethodStated,
+		"google_compute_firewall.dynamic_allow": model.MethodConfigurationUnrecorded,
+	} {
+		found, ok := graph.At(address)
+		if !ok || found.Network == nil {
+			t.Fatalf("real-firewall-dynamic-allow has no firewall at %s", address)
+		}
+		ingress := found.Network.PublicIngress
+		if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != want {
+			t.Errorf("%s: method = %q (state %s), want known true %q", address, ingress.Method(), ingress.State, want)
+		}
+	}
+}
+
+// A firewall nobody wrote a source for cannot reach every address, so the
+// source the grant rests on is always somebody's -- unless the plan does not
+// record it. With no configuration at all, nothing is stated.
+func TestAFirewallInAPlanWithoutConfigurationIsUnrecorded(t *testing.T) {
+	plan := planOf(t, "real-firewall-dynamic-allow")
+	for i := range plan.ResourceChanges {
+		plan.ResourceChanges[i].Configured = false
+		plan.ResourceChanges[i].Declared = false
+		plan.ResourceChanges[i].Stated = nil
+	}
+	found, ok := providers.Normalize(plan, providers.Default()).At("google_compute_firewall.written")
+	if !ok || found.Network == nil {
+		t.Fatal("no firewall at google_compute_firewall.written")
+	}
+	ingress := found.Network.PublicIngress
+	if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q (state %s), want known true %q", ingress.Method(), ingress.State, model.MethodConfigurationUnrecorded)
 	}
 }

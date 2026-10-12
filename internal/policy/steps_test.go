@@ -60,7 +60,8 @@ func step(fact string, m evidence.VerificationMethod) evidence.VerificationStep 
 // policy converts one to the other by type conversion.
 func TestEveryModelMethodIsAnEvidenceMethod(t *testing.T) {
 	for _, m := range []model.Method{model.MethodStated, model.MethodProviderDefault,
-		model.MethodPolicyDocument, model.MethodReferenceResolved, model.MethodDocumentedTable} {
+		model.MethodPolicyDocument, model.MethodReferenceResolved, model.MethodDocumentedTable,
+		model.MethodPriorState, model.MethodConfigurationUnrecorded} {
 		if !evidence.VerificationMethod(m).Valid() {
 			t.Errorf("model method %q is not a valid evidence method", m)
 		}
@@ -111,30 +112,39 @@ func TestTheIPv4DefaultChangesOneStepAndNothingElse(t *testing.T) {
 	)
 }
 
-// Criterion 3, GCP direction. fw-public-direction-written writes the direction
-// in configuration; fw-public-direction-omitted and fw-public leave it to the
-// provider, which defaults it.
+// Criterion 3, GCP direction. fw-public-direction-written and
+// fw-public-priority-written are the pair: identical plans whose configurations
+// differ only in writing `direction = "INGRESS"`. The findings differ in the
+// method of that step and nowhere else.
+//
+// fw-public-direction-omitted leaves the field out of after altogether, a shape
+// no real plan has, so it is not the half of the pair; it still reads as the
+// default. fw-public, from milestone 08, records no allow and no source in its
+// configuration, so the plan cannot attribute what the grant rests on and the
+// step says so -- it read provider-default until the adversarial review.
 func TestTheDirectionDefaultChangesOneStepAndNothingElse(t *testing.T) {
-	written := stepsOf(t, evaluateNetwork(t, "gcp", "fw-public-direction-written", declaringPort()),
-		policy.RuleNetworkPublicIngress, "google_compute_firewall.web")
-	omitted := stepsOf(t, evaluateNetwork(t, "gcp", "fw-public-direction-omitted", declaringPort()),
-		policy.RuleNetworkPublicIngress, "google_compute_firewall.web")
-	defaulted := stepsOf(t, evaluateNetwork(t, "gcp", "fw-public", declaringPort()),
-		policy.RuleNetworkPublicIngress, "google_compute_firewall.web")
+	written := evaluateNetwork(t, "gcp", "fw-public-direction-written", declaringPort())
+	unwritten := evaluateNetwork(t, "gcp", "fw-public-priority-written", declaringPort())
 	assertSameBesidesSteps(t,
-		findingOf(t, evaluateNetwork(t, "gcp", "fw-public-direction-written", declaringPort()),
-			policy.RuleNetworkPublicIngress, "google_compute_firewall.web"),
-		findingOf(t, evaluateNetwork(t, "gcp", "fw-public-direction-omitted", declaringPort()),
-			policy.RuleNetworkPublicIngress, "google_compute_firewall.web"))
-	assertSteps(t, written,
+		findingOf(t, written, policy.RuleNetworkPublicIngress, "google_compute_firewall.web"),
+		findingOf(t, unwritten, policy.RuleNetworkPublicIngress, "google_compute_firewall.web"))
+	assertSteps(t, stepsOf(t, written, policy.RuleNetworkPublicIngress, "google_compute_firewall.web"),
 		step("contract.network.public_ports", evidence.MethodIntentComparison),
 		step("network.public_ingress", evidence.MethodPlanStatedValue))
+	assertSteps(t, stepsOf(t, unwritten, policy.RuleNetworkPublicIngress, "google_compute_firewall.web"),
+		step("contract.network.public_ports", evidence.MethodIntentComparison),
+		step("network.public_ingress", evidence.MethodProviderDefault))
+
+	omitted := stepsOf(t, evaluateNetwork(t, "gcp", "fw-public-direction-omitted", declaringPort()),
+		policy.RuleNetworkPublicIngress, "google_compute_firewall.web")
 	assertSteps(t, omitted,
 		step("contract.network.public_ports", evidence.MethodIntentComparison),
 		step("network.public_ingress", evidence.MethodProviderDefault))
-	assertSteps(t, defaulted,
+	unrecorded := stepsOf(t, evaluateNetwork(t, "gcp", "fw-public", declaringPort()),
+		policy.RuleNetworkPublicIngress, "google_compute_firewall.web")
+	assertSteps(t, unrecorded,
 		step("contract.network.public_ports", evidence.MethodIntentComparison),
-		step("network.public_ingress", evidence.MethodProviderDefault))
+		step("network.public_ingress", evidence.MethodConfigurationUnrecorded))
 }
 
 func TestAPolicyDocumentGrantIsInterpretedInTheStep(t *testing.T) {
