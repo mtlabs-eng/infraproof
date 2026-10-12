@@ -141,6 +141,29 @@ the placeholder token removed afterwards.
   `settings[0].ip_configuration[0].authorized_networks`. Each plan keeps the
   state's network.
 
+## Real plans added by milestone 10's fifth review
+
+Terraform 1.14.0 and `hashicorp/google` 6.50.0, `plan -refresh=false` against a
+hand-written state, nothing applied; the placeholder access token was stripped
+on import.
+
+- `real-labels-partial-ignore.json`: bucket `b` writes
+  `labels = { environment = "staging", team = "b" }` with
+  `ignore_changes = [labels["environment"]]` against a state holding
+  `{ environment = "prod", team = "a" }`: the update moves `team` and keeps the
+  state's `environment`. Firewall `fw` writes `allow { protocol = "TCP",
+  ports = [22] }` against a state holding `tcp` and `"22"`, a no-op. Firewall
+  `fw2` writes `source_ranges = ["0.0.0.0/00"]` against a state holding
+  `0.0.0.0/0`; the plan holds both.
+- `real-blocks-unwritten-from-state.json`: firewall `fw2` writes
+  `allow { protocol = "tcp" }` -- every TCP port -- with
+  `ignore_changes = [allow]`, against a state whose `allow` holds
+  `ports = ["22"]`; a no-op. Firewall `fw` writes one `allow` (udp/53) under
+  `ignore_changes = [allow]` against a state holding a second block (tcp/22).
+  Instance `db` writes one authorized network, `10.0.0.0/8`, with
+  `ignore_changes` on `settings[0].ip_configuration[0].authorized_networks`
+  against a state that also authorizes `0.0.0.0/0`, while `tier` moves.
+
 ## Skipped-deny fixtures added by the fourth review
 
 Hand-authored, by a script editing only the fields named here, from
@@ -153,6 +176,9 @@ record that ground, or records a constant the state overrides, as
 `ignore_changes` leaves it; in `-written` it writes it.
 `fw-deny-disabled-written-egress-carried` skips on two grounds, a written
 `disabled` and a carried direction.
+`fw-deny-disabled-unwritten-create`, added by the fifth review, is
+`fw-deny-disabled-written` with `block` a create and `disabled` removed from its
+configuration: a new deny holding `true` that nothing records writing.
 
 `fw-deny-network-subject-carried` is `fw-deny-network-written` with `web` an
 update whose `before` equals its `after` while its configuration writes another

@@ -192,3 +192,37 @@ the two credential arguments and every password value removed afterwards.
   `tags = { environment = lower("PROD") }`, which the configuration records as
   `{}` -- neither a value nor a reference -- against a state holding
   `environment = prod`; a no-op.
+
+## Real plans added by milestone 10's fifth review
+
+Terraform 1.14.0 and `hashicorp/aws` 6.67.0, `plan -refresh=false` against a
+hand-written state, nothing applied; the provider's placeholder auth was
+stripped on import.
+
+- `real-tags-partial-ignore.json`: bucket `b` writes
+  `tags = { environment = "staging", team = "b" }` with
+  `ignore_changes = [tags["environment"]]` against a state holding
+  `{ environment = "prod", team = "a" }`: the update moves `team` and keeps the
+  state's `environment`. Bucket `r` is replaced (its name changes) with
+  `ignore_changes = [tags]`, beside an ownership rule and an ACL writing
+  `private` under `ignore_changes = [acl]`; a replacement applies the
+  configuration.
+- `real-tags-sensitive-ignored.json`: bucket `s` writes
+  `tags = { environment = "staging", owner = var.owner }` with `owner`
+  declared `sensitive` (its default is the placeholder `team-x`) and
+  `ignore_changes = [tags]`, against a state holding `prod` and a sensitive
+  `owner`; a no-op. Beside it, groups `n1` and `n2` write an inline rule with
+  `protocol = "TCP"` (and `from_port = "22"`) and `protocol = "6"`, against a
+  state holding `tcp`; the provider treats each as `tcp`, and each is a no-op.
+- `real-tags-sensitive-ignored-control.json`: the same configuration with
+  `owner` not sensitive.
+- `real-sg-null-attribute-from-state.json`: group `web` writes one inline rule,
+  443/tcp from `10.0.0.0/8`, with `ignore_changes = [ingress]`, against a state
+  holding the same rule with `ipv6_cidr_blocks = ["::/0"]`; Terraform records
+  the rule with `ipv6_cidr_blocks = null` and the no-op keeps `::/0`. Group
+  `ctl` is the same without `ignore_changes`: the update plans `[]`. Group
+  `ports` writes 443/tcp from `0.0.0.0/0` with a description, as the state
+  holds.
+- `real-sg-unwritten-source-from-state.json`: group `web` writes a 22/tcp rule
+  with no source and `ignore_changes = [ingress]`, against a state whose rule
+  admits `0.0.0.0/0`; the update (a tag moves) keeps it.
