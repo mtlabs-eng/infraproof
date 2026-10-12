@@ -74,6 +74,8 @@ Fact<T> = Known(T) | Unknown | Absent | Redacted
 
 `Absent` means the source field was not present. It must not automatically be interpreted as a safe provider default.
 
+A KNOWN fact also carries how it was established. That is one of: stated by the plan, a provider default, a documented table, a policy document this build interpreted, or a reference it resolved. The constructor requires it, so no mapper can leave it out. The method follows the configuration: a value the plan carries for an argument the configuration does not write is a provider default. A finding's verification steps are those methods, plus the steps only the policy layer knows: the comparison with the contract, the classification of actions, the hop from a database to the gate that decided its admission, and the cloud claim, which is not a fact and so carries no method of its own. The method decides nothing.
+
 ### Policy engine
 
 Evaluates pure deterministic rules over the Intent Contract and normalized graph. A rule returns zero or more findings. Initial rules are compiled Go code with stable identifiers; external policy languages are deferred.

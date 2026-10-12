@@ -138,6 +138,7 @@ contract declares nothing: silence is read, and is what made the finding a
     `documented-table`.
   - AWS and GCP storage: a grant found by reading a policy document is
     `policy-document-interpreted`.
+
   Measured while planning: AWS unwritten `ingress` only suppresses an unread
   set. `Known(false)` requires the set to be stated and `Known(true)` rests on a
   stated separate rule, so the default never decides a KNOWN fact and every AWS
@@ -216,3 +217,176 @@ contract declares nothing: silence is read, and is what made the finding a
 Milestones 01, 03, 08 and 09. The plan should report, as milestone 09 did, any
 shared machinery this milestone turns out to need changed beyond `model.Fact`
 and the mappers' call sites.
+
+## Limitations as built
+
+Written from what the tests measure at the end of the milestone.
+
+- **The method follows the configuration, not the `after` value.** Real plans
+  showed that a provider writes the default of an unwritten Optional argument
+  into `after` as a known value. A known value whose argument the configuration
+  does not write is therefore `provider-default`, and the value itself is read
+  exactly as before. This applies to AWS `publicly_accessible`, GCP
+  `ipv4_enabled` and `direction`, and Azure `public_network_access_enabled`,
+  `allow_nested_items_to_be_public` and `container_access_type`. For the Azure
+  container, a `false` takes the method of whichever setting settled it, and a
+  `true` is `provider-default` if either setting was defaulted.
+- **A plan with no `configuration` section cannot tell.** Without it, nothing
+  records what the author wrote, so a known value is reported as
+  `plan-stated-value` even when the provider defaulted it. An absent or unknown
+  value in such a plan gets no default, as in milestone 09.
+- **The policy assigns four methods of its own.** It adds the contract
+  comparison (`intent-comparison`), the action classification (`plan-action`),
+  the hop from a database to the gate that decided its admission
+  (`reference-resolved`), and the cloud claim. `Resource.Cloud` is not a `Fact`
+  and carries no method, so `CLOUD_NOT_ALLOWED` assigns `resource.cloud` as
+  `plan-stated-value` in the rule, from `provider_name`. Every other step takes
+  the fact's own method unchanged.
+- **The AWS `vpc_security_group_ids` hop is a step but not a citation.** The
+  `database.admitted_by` step says `reference-resolved`, and the evidence cites
+  the gate's own sources. The attribute through which the database reached that
+  gate is still not cited, as the scope said.
+- **Unknowns carry no steps.** `verification_steps` exists on `Finding` only.
+- **`CORRELATION_UNRESOLVED` still reaches object storage only**, as in
+  milestone 09.
+- **GCP `direction` is still not cited as evidence.** A defaulted direction shows
+  only in the method. Citing it would change bundles that criterion 8 holds
+  fixed.
+- **A GCP `dynamic "ip_configuration"` that writes `ipv4_enabled` is labelled
+  `provider-default`.** The configuration JSON does not represent dynamic blocks,
+  so the switch reads as unwritten. Only the method is affected: the value is
+  the one milestone 09 read.
+- **A GCP firewall whose own direction is defaulted labels its verdict
+  `provider-default` even when the verdict does not rest on direction.** The
+  same happens when a deny with a defaulted direction is applied and subtracts
+  nothing. This over-attributes the default. It never hides one, and no verdict
+  depends on it.
+- **A database admission settled `false` through gates is labelled
+  `reference-resolved`, even when the mapper's own fact was known `false`.** It
+  never reaches a bundle. A known `false` admission produces no finding and no
+  step, so the method of that branch is unobservable (see criterion 9 below).
+- **The exhaustive test reaches four of the six rules.** `TestEveryFindingSaysHowItKnows`
+  runs every plan fixture under the one shipped contract, which produces
+  `STORAGE_PUBLIC`, `NETWORK_PUBLIC_INGRESS`, `DATABASE_PUBLIC_REACHABLE` and
+  `DESTRUCTIVE_CHANGE`. `CLOUD_NOT_ALLOWED` and `ENVIRONMENT_MISMATCH` are
+  pinned at unit level by `TestEveryGenericRuleSaysHowItKnows`.
+- **The method decides nothing.** As specified, no decision, disposition or exit
+  code reads it. Criterion 8 below measures that no verdict changed.
+
+## Criterion 8, measured
+
+The 226 baselines recorded at `3b50544` still match byte for byte under
+`TestEveryFixtureProducesItsBaselineBundle`. The test removes
+`verification_steps` and restores `schema_version: "1.2"` before it compares.
+No baseline was re-recorded.
+
+For the plan fixtures, binaries were built at `3b50544` and at the end of this
+milestone. Both binaries ran
+`check --intent internal/verify/testdata/baseline/intent.json --plan <fixture> --format json`
+on every plan under `internal/providers/*/testdata` and
+`internal/providers/testdata`. The *after* output was normalised by setting
+`schema_version` to `"1.2"` and dropping `verification_steps` from each finding.
+
+| | count |
+| --- | --- |
+| plan fixtures compared | 216 |
+| identical after normalisation, same exit code and stderr | 216 |
+| differing | 0 |
+| exit codes (before = after) | 182 × `4`, 21 × `3`, 13 × `0`; none `10` or `11` |
+| fixtures added during milestone 10, so absent at `3b50544` | 15 |
+
+Every fixture that existed at `3b50544` also has a baseline. The 15 new ones are
+the only plan fixtures here with no baseline, and the *before* binary reads
+each of them identically too:
+
+- AWS: `public-acl-and-policy`.
+- Azure: `private-account-forbids-written`,
+  `private-container-unwritten-gate-written`,
+  `private-container-written-gate-unwritten`, `public-blob-container-defaulted`,
+  `public-blob-gate-defaulted`, `public-blob-written`, `sql-switch-defaulted`.
+- GCP: `fw-denied-lower-direction-omitted`, `fw-deny-above-direction-omitted`,
+  `fw-public-direction-omitted`, `fw-public-direction-written`,
+  `public-iam-policy-data`, `public-member-and-policy-data`,
+  `real-databases-ipv4-unwritten`.
+
+## Criterion 9, measured
+
+Each assignment was mutated by hand, one at a time. The suite ran with
+`go test ./internal/...`, and the file was restored with `git checkout`. In the
+table, "stated" means the assignment was replaced with `model.MethodStated`, and
+"false" means a `defaulted` input was forced to `false`. A forced value is
+written `x || true` or `x && false` where the plain constant would leave a
+variable unused and stop the package compiling.
+
+First pass: 36 mutations, and five broke nothing:
+
+- AWS `publicly_accessible` in the unknown-and-unwritten branch;
+- GCP `ipv4_enabled` in the default branch;
+- the GCP `statedGrant` binding arm;
+- the Azure grant whose gate alone was defaulted;
+- the Azure account with no container.
+
+Three mutations, the Azure account and both `byPort` forms, were first written
+in a form that did not compile. A compile failure proves nothing, so they were
+re-measured in a form that compiles, and only the Azure account survived. Each of the five got a test, in the package that owns the
+site:
+
+- `TestAComputedSwitchNobodyWroteIsTheProvidersDefault` (aws);
+- `TestAnAbsentIPv4SwitchIsTheProvidersDefault` and `TestABindingGrantIsStated`
+  (gcp);
+- the `public-blob-gate-defaulted` case of
+  `TestStorageAccessSettingsFollowTheConfiguration`, and
+  `TestAnAccountAloneTakesItsGatesMethod` (azure).
+
+The re-measure is below.
+
+| site | mutation | broke |
+| --- | --- | --- |
+| `aws/database.go` `publicly_accessible`, absent and unwritten | stated | aws: `TestAnUnwrittenSwitchIsTheProvidersDefault` |
+| `aws/database.go` `publicly_accessible`, known and unwritten | stated | aws: `TestAKnownSwitchNobodyWroteIsTheProvidersDefault` |
+| `aws/database.go` `publicly_accessible`, unknown and unwritten | stated | aws: `TestAComputedSwitchNobodyWroteIsTheProvidersDefault` |
+| `aws/database.go` engine-derived port | stated | aws: `TestAnEngineDerivedPortIsFromTheTable`; policy: `TestADatabaseBehindAnOpenGroupNamesTheHopAndTheGate` |
+| `aws/aws.go` policy channel | stated | aws: `TestAPolicyGrantIsInterpreted`; policy: `TestAPolicyDocumentGrantIsInterpretedInTheStep` |
+| `gcp/database.go` `ipv4_enabled`, known and unwritten | stated | gcp: `TestAnUnwrittenIPv4SwitchIsTheProvidersDefault`; policy: `TestTheIPv4DefaultChangesOneStepAndNothingElse` |
+| `gcp/database.go` `ipv4_enabled`, default branch | stated | gcp: `TestAnAbsentIPv4SwitchIsTheProvidersDefault` |
+| `gcp/database.go` version-derived port | stated | gcp: `TestAVersionDerivedPortIsFromTheTable` |
+| `gcp/network.go` firewall method | stated | gcp: `TestAKnownDirectionNobodyWroteIsTheProvidersDefault`, `TestAnOmittedDirectionIsTheProvidersDefault`, `TestAnUnknownUnwrittenDirectionIsTheProvidersDefault`, `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault`; policy: `TestTheDirectionDefaultChangesOneStepAndNothingElse` |
+| `gcp/network.go` deny direction (`defaulted \|\| deny.directionDefaulted`) | drop the deny | gcp: `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault` |
+| `gcp/network.go` direction absent | false | gcp: `TestAnOmittedDirectionIsTheProvidersDefault`, `TestACancellingDenyWithADefaultedDirectionIsTheProvidersDefault`; policy: `TestTheDirectionDefaultChangesOneStepAndNothingElse` |
+| `gcp/network.go` direction known and unwritten | false | gcp: `TestAKnownDirectionNobodyWroteIsTheProvidersDefault`; policy: `TestTheDirectionDefaultChangesOneStepAndNothingElse` |
+| `gcp/network.go` direction unknown and unwritten | false | gcp: `TestAnUnknownUnwrittenDirectionIsTheProvidersDefault` |
+| `gcp/gcp.go` `policy_data` | stated | gcp: `TestAPolicyDataGrantIsInterpreted` |
+| `gcp/gcp.go` `statedGrant`, member arm | force `false` | gcp: `TestAMemberGrantIsStated`, `TestAGrantProvenTwiceTakesTheStatedProof` |
+| `gcp/gcp.go` `statedGrant`, binding arm | force `false` | gcp: `TestABindingGrantIsStated` |
+| `azure/database.go` type-derived port | stated | azure: `TestATypeDerivedPortIsFromTheTableAndNotInferred` |
+| `azure/database.go` `public_network_access_enabled` | stated | azure: `TestAnUnwrittenEndpointSwitchIsTheProviderDefault` |
+| `azure/azure.go` `methodOf` | stated | azure: `TestAnUnwrittenEndpointSwitchIsTheProviderDefault`, `TestStorageAccessSettingsFollowTheConfiguration`, `TestAnAccountAloneTakesItsGatesMethod` |
+| `azure/azure.go` account with no container | false | azure: `TestAnAccountAloneTakesItsGatesMethod` |
+| `azure/azure.go` gate says no | stated | azure: `TestStorageAccessSettingsFollowTheConfiguration` |
+| `azure/azure.go` container says no | stated | azure: `TestStorageAccessSettingsFollowTheConfiguration` |
+| `azure/azure.go` both say yes | stated | azure: `TestStorageAccessSettingsFollowTheConfiguration` |
+| `azure/azure.go` both say yes, the gate's default dropped | drop the gate | azure: `TestStorageAccessSettingsFollowTheConfiguration` |
+| `azure/azure.go` both say yes, the container's default dropped | drop the container | azure: `TestStorageAccessSettingsFollowTheConfiguration` |
+| `azure/azure.go` gate `defaulted` | false | azure: `TestStorageAccessSettingsFollowTheConfiguration`, `TestAnAccountAloneTakesItsGatesMethod` |
+| `azure/azure.go` container `defaulted` | false | azure: `TestStorageAccessSettingsFollowTheConfiguration` |
+| `policy/database.go` gate hop `reference-resolved` | stated | policy: `TestADatabaseBehindAnOpenGroupNamesTheHopAndTheGate` |
+| `policy/database.go` gate's own step | omitted | policy: `TestADatabaseBehindAnOpenGroupNamesTheHopAndTheGate` |
+| `policy/database.go` `byPort` | force `true` | policy: `TestThePortStepAppearsOnlyWhenThePortDecided` |
+| `policy/database.go` `byPort` | force `false` | policy: `TestThePortStepAppearsOnlyWhenThePortDecided`, `TestADatabaseBehindAnOpenGroupNamesTheHopAndTheGate` |
+| `policy/rules.go` `change.destructive` `plan-action` | stated | policy: `TestEveryGenericRuleSaysHowItKnows` |
+| `policy/rules.go` `resource.cloud` `plan-stated-value` | `plan-action` | policy: `TestEveryGenericRuleSaysHowItKnows` |
+| `policy/steps.go` contract `intent-comparison` | stated | policy: `TestEveryGenericRuleSaysHowItKnows`, `TestADatabaseBehindAnOpenGroupNamesTheHopAndTheGate`, `TestAPolicyDocumentGrantIsInterpretedInTheStep`, `TestTheIPv4DefaultChangesOneStepAndNothingElse`, `TestTheDirectionDefaultChangesOneStepAndNothingElse` |
+| `policy/database.go` admission settled `false` through gates, `reference-resolved` | stated | nothing: unobservable |
+| `policy/database.go` admission settled `false` by the mapper, its own method | `reference-resolved` | nothing: unobservable |
+
+Every `provider-default`, `documented-table` and `policy-document-interpreted`
+assignment now breaks at least one test, which is criterion 9. So does every
+method the policy layer assigns that can reach a bundle.
+
+The last two rows are the only survivors, and no output can observe either. Both
+assign the method of a `Known(false)` admission. The database rule handles a known
+`false` admission before it builds any finding, and it builds no finding and no
+step from it. The withdrawn branch produces an unknown, which carries no steps. A test
+would have to reach into the policy package's internals to pin a method nothing
+emits, so none was added. The first row is the over-attribution listed under the
+limitations above.

@@ -70,6 +70,14 @@ websites and network rules, GCP IAM conditions and legacy ACLs, AWS inline
 bucket `acl`, `policy` and `grant` arguments, and any control applied outside
 the plan.
 
+Every finding says how each fact behind it was established. A `BLOCK` resting
+on a provider default or on this build's reading of a policy document says so,
+and a reader who trusts only what the plan states can see which findings those
+are. A value the plan carries for an argument nobody wrote counts as a default,
+because providers write their defaults into the plan; a plan exported without
+its configuration cannot show that, and such a value reads as stated. The
+method decides nothing.
+
 For network exposure the claim is narrower still, and deliberately so. A finding
 says the change **permits ingress from any address**, not that anything becomes
 reachable: reachability needs the attachment — an instance, a subnet, an
