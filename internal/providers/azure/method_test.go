@@ -46,6 +46,8 @@ func TestStorageAccessSettingsFollowTheConfiguration(t *testing.T) {
 		why     string
 	}{
 		{"public-blob-written", true, model.MethodStated, "both settings written"},
+		{"private-container-written-gate-unwritten", false, model.MethodStated, "private container written, gate unwritten"},
+		{"private-container-unwritten-gate-written", false, model.MethodProviderDefault, "private container unwritten, gate written"},
 		{"public-blob-container-defaulted", true, model.MethodProviderDefault, "gate written, access type unwritten"},
 		{"public-blob", true, model.MethodProviderDefault, "neither setting written"},
 		{"private-account-forbids-written", false, model.MethodStated, "the deciding gate written"},

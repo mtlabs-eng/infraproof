@@ -96,3 +96,10 @@ block: the `after` values stay. They exist for the verification method, which
 follows what the configuration writes. The first leaves `public_network_access_enabled`
 out of the configuration while the plan still states it; the others write the
 storage settings the originals leave out, or write only the account's.
+
+`private-container-written-gate-unwritten` and
+`private-container-unwritten-gate-written` are `public-blob-container-defaulted`
+with the container set to `private` in `after`. In the first the container is
+written and the account gate is not; in the second the reverse. Neither gate says
+no, so the container's own setting settles the answer, and the verification
+method has to be the container's rather than the gate's.
