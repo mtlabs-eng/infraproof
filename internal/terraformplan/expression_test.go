@@ -93,6 +93,25 @@ func TestAnExpressionSaysWhatItEvaluatesToOffline(t *testing.T) {
 			`{"v": {"value": [null]}}`, `{"flag": {"references": ["var.v[0]", "var.v"]}}`, `{}`, `{}`, `{}`,
 			"x_thing.t", EvaluationUnresolved,
 		},
+		// An index into a variable: which element is Terraform's to say.
+		"an indexed attribute of a root variable": {
+			`{"cfg": {"value": {"items": [null]}}}`,
+			`{"flag": {"references": ["var.cfg.items[0]", "var.cfg.items", "var.cfg"]}}`, `{}`, `{}`, `{}`,
+			"x_thing.t", EvaluationUnresolved,
+		},
+		// An attribute the variable's value does not hold is an error
+		// Terraform would have raised, or a value an optional() default gave
+		// it; neither is recorded.
+		"a missing attribute of a root variable": {
+			`{"v": {"value": {}}}`, `{"flag": {"references": ["var.v.on", "var.v"]}}`, `{}`, `{}`, `{}`,
+			"x_thing.t", EvaluationUnresolved,
+		},
+		// var.ab does not extend var.a: both are read.
+		"a variable whose name another's begins with": {
+			`{"a": {"value": null}, "ab": {"value": true}}`, `{"flag": {"references": ["var.a", "var.ab"]}}`,
+			`{}`, `{}`, `{}`,
+			"x_thing.t", EvaluationUnresolved,
+		},
 		"two root variables, one null and one not": {
 			`{"a": {"value": null}, "b": {"value": true}}`, `{"flag": {"references": ["var.a", "var.b"]}}`,
 			`{}`, `{}`, `{}`,
@@ -224,6 +243,21 @@ func TestAConstantNotInAfterIsContradicted(t *testing.T) {
 			`{"rule": [{"port": {"constant_value": 22}}]}`,
 			`{"rule": [{"port": 80}, {"port": 22}]}`,
 			"rule.port", false,
+		},
+		"a map key the plan lacks": {
+			`{"tags": {"constant_value": {"a": "1"}}}`, `{"tags": {}}`, "tags", true,
+		},
+		"a string where the plan has a list": {
+			`{"acl": {"constant_value": "x"}}`, `{"acl": ["x"]}`, "acl", true,
+		},
+		"a string where the plan has null": {
+			`{"acl": {"constant_value": "x"}}`, `{"acl": null}`, "acl", true,
+		},
+		"a map where the plan has a string": {
+			`{"tags": {"constant_value": {"a": "1"}}}`, `{"tags": "a"}`, "tags", true,
+		},
+		"a list where the plan has a string": {
+			`{"source_ranges": {"constant_value": ["x"]}}`, `{"source_ranges": "x"}`, "source_ranges", true,
 		},
 		"a constant where the plan has nothing": {
 			`{"acl": {"constant_value": "x"}}`, `{}`, "acl", true,

@@ -91,6 +91,10 @@ func TestADenySkippedRestsTheVerdictOnWhyItWasSkipped(t *testing.T) {
 		// firewall the empty list is the provider's default.
 		{"fw-deny-source-tags-only", model.MethodProviderDefault},
 		{"fw-deny-source-tags-only-empty", model.MethodProviderDefault},
+		// disabled is Optional, not Computed, defaulting to false: a new deny
+		// holding true that the configuration does not record writing holds
+		// a value nobody is recorded writing, which is not the default.
+		{"fw-deny-disabled-unwritten-create", model.MethodConfigurationUnrecorded},
 	}
 	for _, c := range cases {
 		got := firewall(t, c.fixture).Network.PublicIngress
