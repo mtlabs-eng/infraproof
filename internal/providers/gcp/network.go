@@ -66,7 +66,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	rule := readFirewall(subject)
 	// Every input the verdict rests on, each with how it was established. The
 	// verdict is only as strong as the weakest of them.
-	rests := []model.Method{rule.sourceMethod, rule.blocksMethod, rule.directionMethod, rule.priorityMethod}
+	rests := []model.Method{rule.blocksMethod, rule.directionMethod, rule.priorityMethod}
 	capabilities := model.NetworkCapabilities{Unresolved: m.ingressGaps(subject)}
 
 	if rule.unread {
@@ -129,7 +129,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			}
 
 			cited = append(cited, deny.cited...)
-			rests = append(rests, deny.sourceMethod, deny.blocksMethod, deny.directionMethod, deny.priorityMethod)
+			rests = append(rests, deny.blocksMethod, deny.directionMethod, deny.priorityMethod)
 			remaining, byProtocol = subtract(remaining, deny.denies, byProtocol)
 		}
 	}
@@ -245,11 +245,16 @@ type firewallRule struct {
 	// provider's documented 1000, and a verdict resting on the ordering rests
 	// on it.
 	priorityMethod model.Method
-	// sourceMethod is how source_ranges was established, and blocksMethod how
-	// the allow or deny blocks were: a block the configuration does not record
-	// may be a dynamic one.
-	sourceMethod, blocksMethod model.Method
-	cited                      []model.Provenance
+	// blocksMethod is how the allow or deny blocks were established: a block
+	// the configuration does not record may be a dynamic one.
+	//
+	// source_ranges carries no method of its own. It is not Computed and has no
+	// default, so a source that reaches every address was written wherever the
+	// configuration records the resource at all, and where it does not, every
+	// other input is unrecorded too. A mutation run showed the input changed
+	// no method, so it was removed.
+	blocksMethod model.Method
+	cited        []model.Provenance
 }
 
 // protocolPorts is one allow or deny block.
@@ -365,11 +370,6 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		return read
 	}
 	read.anySource = source
-	// Optional, not Computed and without a default: a source the plan carries
-	// is one somebody wrote.
-	sources := change.After.Field("source_ranges")
-	read.sourceMethod = declared.Argument{Path: "source_ranges"}.MethodFor(change,
-		sources.State() != terraformplan.StateKnown || sources.Kind() == terraformplan.KindNull)
 
 	tags, tagsUnread := targetsOf(change, "target_tags")
 	accounts, accountsUnread := targetsOf(change, "target_service_accounts")

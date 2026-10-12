@@ -81,4 +81,16 @@ Milestone 10 records how each known value was established. Each of these pins on
 method decision; `fw-*` rows are in `README-network.md`.
 
 - `public-iam-policy-data.json`: a `google_storage_bucket_iam_policy` whose `policy_data` is a known document granting `allUsers`, so the grant is this build's reading of a document.
-- `public-member-and-policy-data.json`: `public-iam-member.json` plus the same policy document on the same bucket, so the stated member grant outranks the interpreted one.
+- `public-member-and-policy-data.json`: `public-iam-member.json` plus the same policy document on the same bucket, so the member grant outranks the interpreted one.
+- `public-iam-member-prevention-written.json`, `public-iam-binding-prevention-written.json` and `public-member-and-policy-data-prevention-written.json`: the three above with `public_access_prevention = "inherited"` written in the bucket's configuration, `after` unchanged. A grant rests on prevention not being enforced, so only these make a member or binding grant stated; the originals are `provider-default`.
+
+## Real plans added by milestone 10's adversarial review
+
+Terraform 1.14.0, `hashicorp/google` 6.50.0, `plan -refresh=false`, placeholder
+token removed afterwards; the update plans ran against a hand-written state.
+
+- `real-sql-ip-configuration-from-state.json`: `settings` written with no `ip_configuration`, on an update whose state holds `ipv4_enabled = true` and `0.0.0.0/0`. Both are carried; the plan does not record `ip_configuration`, so both halves are `configuration-unrecorded`.
+- `real-sql-dynamic-settings.json`: two instances, `settings` written as a block and as a resolvable `dynamic` block. The dynamic one records nothing about `settings`.
+- `real-sql-ipv4-written.json` and `real-sql-ipv4-unwritten.json`: one instance whose configurations differ only in writing `ipv4_enabled = true`; `after` is identical. The criterion 3 pair.
+- `real-bucket-prevention-pair.json`: two buckets with an `allUsers` member each, one writing `public_access_prevention = "inherited"`. Unwritten, the value is unknown in `after` and the grant is `provider-default`.
+- `real-bucket-prevention-from-state.json`: the unwritten bucket on an update whose state holds `"inherited"`, which Terraform carries: `prior-state`.

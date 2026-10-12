@@ -112,9 +112,21 @@ Each fixture is one question:
 | `fw-public-direction-computed` | `fw-public-direction-omitted` with `direction` unknown in `after_unknown`, the shape a real create plan emits for an unwritten one; `priority` written, so direction alone makes the method the provider's default |
 
 The `-direction-` fixtures above also write `priority` on every firewall,
-so that only `direction` decides their method.
+so that only `direction` decides their method. Every fixture in this table also
+records the `allow` or `deny` blocks and the `source_ranges` its `after`
+carries: a verdict rests on those as well, and a block the configuration does
+not record reads `configuration-unrecorded`. `fw-public-direction-written` and
+`fw-public-priority-written` are the criterion 3 pair: their configurations
+differ only in `direction`.
+
+`real-firewall-dynamic-allow.json` is a real plan (Terraform 1.14.0,
+`hashicorp/google` 6.50.0, placeholder token removed) of two firewalls that
+differ only in writing `allow` as a block or as a `dynamic` block, which the
+configuration does not record.
 
 Every other hand-authored fixture here predates milestone 10, and its
 configuration lists only the arguments that carry a reference (`network`). A
 `priority` or `direction` it sets in `after` therefore reads as unwritten, so a
-step on it may say `provider-default` for a value the fixture meant as written.
+step on it may say `provider-default` for a value the fixture meant as written,
+and its unrecorded `allow` makes the step `configuration-unrecorded`. Each has a
+milestone 09 baseline recording its plan digest, so none can be corrected.

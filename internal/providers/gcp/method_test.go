@@ -1,6 +1,7 @@
 package gcp_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mtlabs-eng/infraproof/internal/model"
@@ -344,5 +345,60 @@ func TestAFirewallInAPlanWithoutConfigurationIsUnrecorded(t *testing.T) {
 	ingress := found.Network.PublicIngress
 	if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != model.MethodConfigurationUnrecorded {
 		t.Errorf("method = %q (state %s), want known true %q", ingress.Method(), ingress.State, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// A real plan of the common pattern: ip_configuration written as a block, its
+// allow list as a dynamic one. The configuration records ip_configuration and
+// ipv4_enabled, and nothing about authorized_networks -- a block missing from a
+// recorded block is not an unwritten one, so the grant is not a default.
+func TestADynamicAllowListInsideAWrittenBlockIsConfigurationUnrecorded(t *testing.T) {
+	db := instance(t, "real-sql-dynamic-authorized-networks", "db").Database
+	if db.PublicEndpoint.Method() != model.MethodStated {
+		t.Errorf("endpoint: method = %q, want %q", db.PublicEndpoint.Method(), model.MethodStated)
+	}
+	if !db.AdmitsAnyAddress.IsKnown() || !db.AdmitsAnyAddress.Get() ||
+		db.AdmitsAnyAddress.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("admission: method = %q (state %s), want known true %q",
+			db.AdmitsAnyAddress.Method(), db.AdmitsAnyAddress.State, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// A real update plan of a firewall that writes neither direction nor priority,
+// against a state holding INGRESS and 1000. direction is Computed, so
+// Terraform carries it; priority is not, so it is planned to its default. The
+// verdict rests on both, and the weaker is the value carried from state.
+func TestADirectionCarriedFromStateIsPriorState(t *testing.T) {
+	ingress := firewall(t, "real-firewall-direction-from-state").Network.PublicIngress
+	if !ingress.IsKnown() || !ingress.Get() || ingress.Method() != model.MethodPriorState {
+		t.Errorf("method = %q (state %s), want known true %q", ingress.Method(), ingress.State, model.MethodPriorState)
+	}
+}
+
+// A deny the verdict applied rests the verdict on the deny's own blocks too. With
+// the deny block of fw-denied-lower-direction-omitted not recorded -- a dynamic
+// deny leaves no record -- the closed verdict cannot be attributed.
+func TestADenyAppliedThroughAnUnrecordedBlockIsConfigurationUnrecorded(t *testing.T) {
+	plan := planOf(t, "fw-denied-lower-direction-omitted")
+	for i := range plan.ResourceChanges {
+		if plan.ResourceChanges[i].Address != "google_compute_firewall.block" {
+			continue
+		}
+		var kept []string
+		for _, name := range plan.ResourceChanges[i].Stated {
+			if name != "deny" && !strings.HasPrefix(name, "deny.") {
+				kept = append(kept, name)
+			}
+		}
+		plan.ResourceChanges[i].Stated = kept
+	}
+	found, ok := providers.Normalize(plan, providers.Default()).At("google_compute_firewall.web")
+	if !ok || found.Network == nil {
+		t.Fatal("no firewall at google_compute_firewall.web")
+	}
+	ingress := found.Network.PublicIngress
+	if !ingress.IsKnown() || ingress.Get() || ingress.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q (state %s, value %v), want known false %q",
+			ingress.Method(), ingress.State, ingress.Get(), model.MethodConfigurationUnrecorded)
 	}
 }

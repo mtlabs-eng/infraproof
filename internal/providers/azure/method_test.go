@@ -249,3 +249,25 @@ func planOf(t *testing.T, fixture string) terraformplan.Plan {
 	}
 	return plan
 }
+
+// A grant needs both the gate and the container, so it is only as strong as the
+// weaker. public-blob-written writes both; with the container missing from the
+// configuration, the account's written gate cannot make the grant stated.
+func TestAGrantIsOnlyAsStrongAsTheWeakerSetting(t *testing.T) {
+	plan := planOf(t, "public-blob-written")
+	for i := range plan.ResourceChanges {
+		if plan.ResourceChanges[i].Type == "azurerm_storage_container" {
+			plan.ResourceChanges[i].Declared = false
+			plan.ResourceChanges[i].Configured = false
+			plan.ResourceChanges[i].Stated = nil
+		}
+	}
+	found, ok := providers.Normalize(plan, providers.Default()).At("azurerm_storage_container.assets")
+	if !ok || found.ObjectStorage == nil {
+		t.Fatal("no container at azurerm_storage_container.assets")
+	}
+	access := found.ObjectStorage.PublicAccess
+	if !access.IsKnown() || !access.Get() || access.Method() != model.MethodConfigurationUnrecorded {
+		t.Errorf("method = %q (state %s), want known true %q", access.Method(), access.State, model.MethodConfigurationUnrecorded)
+	}
+}

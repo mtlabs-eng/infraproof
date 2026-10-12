@@ -145,8 +145,7 @@ const (
 
 // publicAccess decides whether the change grants public access to the bucket.
 //
-// preventionMethod is how prevention was established, or "" when the method of
-// prevention says nothing the verdict rests on.
+// preventionMethod is how prevention was established.
 func publicAccess(prevention answer, preventionMethod model.Method, preventionSources []model.Provenance,
 	related []terraformplan.ResourceChange) model.Fact[bool] {
 
@@ -165,7 +164,7 @@ func publicAccess(prevention answer, preventionMethod model.Method, preventionSo
 		// rests on prevention as much as on the binding. An interpreted
 		// document keeps its own method, as the AWS policy channel does: the
 		// document is what the finding cites.
-		if method != model.MethodPolicyDocument && preventionMethod != "" {
+		if method != model.MethodPolicyDocument {
 			method = declared.Weakest(method, preventionMethod)
 		}
 		return model.Known(true, method, grantSources...).Canonical()
@@ -208,16 +207,13 @@ func preventionState(bucket terraformplan.ResourceChange) (answer, []model.Prove
 // default, which is "inherited" and which a real create plan carries as
 // unknown; unwritten on an update, the value Terraform carried from state.
 //
-// A value somebody wrote that the plan does not yet know contributes nothing:
-// the verdict then treats an unknown prevention as not enforced, a milestone 09
-// behaviour this method does not paper over by calling it stated.
+// A value somebody wrote that the plan does not yet know reads as stated: the
+// method records that the author wrote it, and the verdict, as in milestone 09,
+// treats an unknown prevention as not enforced. A mutation run showed that
+// withholding a method there changes nothing, since a stated input never
+// weakens a fact, so the branch that did it was removed.
 func preventionMethod(bucket terraformplan.ResourceChange) model.Method {
-	argument := declared.Argument{Path: attrPrevention, Computed: true}
-	if bucket.After.Field(attrPrevention).State() != terraformplan.StateKnown &&
-		argument.Writing(bucket) == declared.WritingWritten {
-		return ""
-	}
-	return argument.Method(bucket)
+	return declared.Argument{Path: attrPrevention, Computed: true}.Method(bucket)
 }
 
 // publicBinding reports whether any related IAM resource names everyone, and how

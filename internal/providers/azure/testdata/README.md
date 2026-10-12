@@ -111,11 +111,20 @@ not -- the shape a real plan takes, since the provider defaults the gate to
 `true` -- and the grant is only as strong as the gate, so the method is the
 provider's default.
 
+`public-blob-container-defaulted` is a shape Terraform cannot produce: the
+container's access type defaults to `private` and is not Computed, so an
+unwritten one is planned as `private`, never `blob`. The adversarial review found
+it defending a `provider-default` branch no real plan reaches. The mapper now
+reads a public access type the configuration records as unwritten as one that
+was written, and the fixture pins that.
+
 The storage fixtures that predate milestone 10 do not write their storage
 settings in the configuration: `public-blob`, `public-container`,
 `private-container`, `private-account-forbids` and the others set
 `allow_nested_items_to_be_public` and `container_access_type` in `after` only,
-so both read as unwritten. A step on them may say `provider-default` for a value
-the fixture meant as written. The edits above write what each pair needs, and
+so both read as unwritten. A public access type reads as written, for the
+reason above; the account gate reads as the provider's default. They have
+milestone 09 baselines recording their plan digests, so they cannot be
+corrected. The edits above write what each pair needs, and
 only those fixtures say which half is stated. The database fixtures do write
 `public_network_access_enabled`, except where a fixture above says otherwise.

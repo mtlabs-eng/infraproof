@@ -167,4 +167,12 @@ func TestAVersionWithStepsRequiresTheContractStep(t *testing.T) {
 	if err := withSteps("1.3", wrongMethod).Validate(); err == nil {
 		t.Error("a comparison step outside contract. was taken for the contract step")
 	}
+	// Nor is any contract. fact the comparison, whatever method it claims.
+	notCompared := []VerificationStep{
+		{Fact: "object_storage.public_access", Method: MethodPlanStatedValue},
+		{Fact: "contract.object_storage.exposure", Method: MethodPlanStatedValue},
+	}
+	if err := withSteps("1.3", notCompared).Validate(); err == nil {
+		t.Error("a contract. fact not established by intent-comparison was taken for the contract step")
+	}
 }

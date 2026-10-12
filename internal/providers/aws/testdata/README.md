@@ -118,4 +118,27 @@ in `after` therefore reads as unwritten, so a step on them may say
 `provider-default` for a value the fixture meant as written. `public-acl`,
 `public-policy` and the other open-block fixtures read that way on purpose now;
 the blocked fixtures set the flags `true`, which a real plan only carries when
-somebody wrote them, and their proof of prevention stays `plan-stated-value`.
+somebody wrote them -- no flag is Computed and each defaults to `false` -- and
+their proof of prevention stays `plan-stated-value`. They cannot be corrected:
+each has a milestone 09 baseline, which records its plan digest.
+
+## Real plans added by milestone 10's adversarial review
+
+Real `terraform plan -refresh=false` then `terraform show -json`, Terraform
+1.14.0, `hashicorp/aws` 6.67.0, `skip_*` flags and placeholder credentials; the
+two credential arguments and every password value removed afterwards. The
+update plans ran against a hand-written state file and contacted nothing.
+
+- `real-rds-unwritten-update.json` and `real-rds-unwritten-create.json`: one
+  configuration, planned against a state and without one. The Aurora instance
+  writes no `publicly_accessible` and nothing writes `port`; the state holds
+  `true` and 5432. On the update both are carried and known, `prior-state`; on
+  the create the port is unknown and the engine table supplies it.
+- `real-sg-ingress-from-state.json`: a group whose configuration writes name,
+  vpc_id and tags and no `ingress`, on an update whose state holds one inline
+  rule open to the world. Terraform carries it; the grant is
+  `configuration-unrecorded`, since a dynamic `ingress` leaves the same plan.
+- `real-acl-account-block-empty.json` and `real-acl-account-block-one-flag.json`:
+  a public-read ACL through `resource "aws_s3_account_public_access_block" "acct" {}`,
+  which Terraform records with no `expressions` key, and through one that writes
+  an unrelated flag. Both are `provider-default`.
