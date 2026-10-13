@@ -200,8 +200,21 @@ func TestEachKeyOfAWrittenMapIsDecidedOnItsOwn(t *testing.T) {
 		})
 	}
 
+	// Where the path names no single planned value -- a block written once
+	// and planned twice, a static block beside a dynamic one -- no key can be
+	// compared, so none is contradicted.
+	plan := expressionPlan(t, `{}`, `{"rule": [{"tags": {"constant_value": {"environment": "staging"}}}]}`,
+		`{"rule": [{"tags": {"environment": "prod"}}, {"tags": {"environment": "staging"}}]}`, `{}`, `{}`, `{}`)
+	whole, found := expressionAt(t, plan, "x_thing.t", "rule.tags")
+	if !found {
+		t.Fatal("no expression recorded for rule.tags")
+	}
+	if got := whole.Element("environment"); got.Contradicted || !got.Undecided {
+		t.Errorf("a key where the path names no single value: %+v, want undecided", got)
+	}
+
 	// The map as a whole is still compared as a whole.
-	plan := expressionPlan(t, `{}`, `{"tags": {"constant_value": {"environment": "staging", "team": "b", "owner": "x"}}}`,
+	plan = expressionPlan(t, `{}`, `{"tags": {"constant_value": {"environment": "staging", "team": "b", "owner": "x"}}}`,
 		after, `{}`, `{}`, `{}`)
 	if whole, _ := expressionAt(t, plan, "x_thing.t", "tags"); !whole.Contradicted {
 		t.Error("a map one key of which the state keeps is not contradicted")
@@ -274,7 +287,10 @@ func TestAValueIsCarriedWhateverItsSensitivity(t *testing.T) {
 		"not marked":                              {kept, kept, `{}`, `{}`, `{}`, []string{"tags"}, true},
 		"not yet known":                           {kept, `{"tags": {"environment": "prod"}}`, `{}`, `{}`, `{"tags": {"owner": true}}`, []string{"tags"}, false},
 		"not yet known, null on both sides":       {`{"tags": null}`, `{"tags": null}`, `{}`, `{}`, `{"tags": true}`, []string{"tags"}, false},
-		"absent before":                           {`{}`, kept, `{}`, `{}`, `{}`, []string{"tags"}, false},
+		// A map one key of which is not yet known is not a value either, even
+		// where the plan writes null for the key on both sides.
+		"a key not yet known, null on both sides": {`{"tags": {"owner": null}}`, `{"tags": {"owner": null}}`, `{}`, `{}`, `{"tags": {"owner": true}}`, []string{"tags"}, false},
+		"absent before": {`{}`, kept, `{}`, `{}`, `{}`, []string{"tags"}, false},
 		// No prior value at the place is not a null one.
 		"absent before, null after": {`{}`, `{"tags": null}`, `{}`, `{}`, `{}`, []string{"tags"}, false},
 		// A mask can name a key the planned value omits; nothing is planned
@@ -305,6 +321,15 @@ func TestAValueIsCarriedWhateverItsSensitivity(t *testing.T) {
 	rules := change.After.Field("rules")
 	if !rules.At(0).Carried() || rules.At(1).Carried() {
 		t.Errorf("elements: %v %v, want true false", rules.At(0).Carried(), rules.At(1).Carried())
+	}
+	// A mask shorter than the list does not describe its tail, which is read
+	// as not yet known: such an element is neither carried nor in prior
+	// state, though the plan writes the same value on both sides.
+	change = parse(t, `{"rules": [1, 2]}`, `{"rules": [1, 2]}`, `{}`, `{}`, `{"rules": [false]}`)
+	rules = change.After.Field("rules")
+	if rules.At(1).State() != StateUnknown || rules.At(1).Carried() || rules.At(1).InPrior() || !rules.At(0).Carried() {
+		t.Errorf("an undescribed tail: %s carried %v in prior %v, head carried %v; want unknown, false, false, true",
+			rules.At(1).State(), rules.At(1).Carried(), rules.At(1).InPrior(), rules.At(0).Carried())
 	}
 	// An element not yet known is not carried, even where the plan writes
 	// null for it on both sides.
