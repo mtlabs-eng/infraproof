@@ -114,11 +114,14 @@ func TestAWriteThePlanDoesNotEvaluateIsUnrecordedWhereTheUpdateKeepsTheValue(t *
 		at(t, "real-reference-write-unchanged", "aws_security_group.const").Network.PublicIngress, model.MethodStated)
 }
 
-// The same writes on an update that moves each value to the configuration's.
-// ignore_changes keeps the prior value, so a value the update moves is not one
-// it kept: the plan is applying what the configuration evaluates to. The plan
-// does not record that value, so this is the one place a write it does not
-// evaluate is still stated -- on the strength of the move, not of a comparison.
+// The same writes on an update that moves each value to the configuration's,
+// and keeps nothing of what the object had there: the ACL, the tag and the
+// inline rule are each new in this update, so they are what the plan applies
+// of the write. The plan does not record that value, so this is the one place
+// a write it does not evaluate is still stated -- on the strength of the value
+// being new, not of a comparison. A value the prior state holds, or an element
+// of it, is not new, however the update moves the rest
+// (TestAPublicRangeTheProviderKeepsBesideAWriteIsNotStated in the GCP mapper).
 func TestAWriteThePlanDoesNotEvaluateIsStatedWhereTheUpdateMovesTheValue(t *testing.T) {
 	b := at(t, "real-reference-write-moved", "aws_s3_bucket.b")
 	wantMethod(t, "an ACL moved to a variable's value", b.ObjectStorage.PublicAccess, model.MethodStated)

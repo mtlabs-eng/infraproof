@@ -101,23 +101,30 @@ func (a Argument) Writing(change terraformplan.ResourceChange) Writing {
 //     another, and the plan's configuration does not record the lifecycle
 //     block; a provider that canonicalizes a constant reads the same way, which
 //     understates it.
-//   - Written with a value, where the plan moves the value: stated.
-//     ignore_changes keeps the prior value, so a value the plan moves is the
-//     one the configuration evaluates to.
+//   - Written with a value, where the change keeps an existing object and
+//     nothing the plan holds at the place was the object's -- not the value,
+//     and, for a list, a set or a map, not one element or key of it (Kept):
+//     stated. The value is new in this update, so it is the write's.
 //   - Written with a value, where the change keeps an existing object and the
-//     plan keeps the value it had: stated only where the configuration records
-//     a constant -- in block syntax, every attribute written in the block, and
-//     nothing the block does not write holding a value -- that the plan's
-//     value is shown to be. Anything else -- a reference, a variable, a
-//     function, an attribute written in several blocks, a write the
-//     configuration records no expression for, a comparison with a value the
-//     plan withholds or does not know -- is configuration-unrecorded: a write
-//     that evaluates to what the object already had is unrecorded too, which
-//     is the cost of the decision recorded in milestone 10.
+//     prior state holds the value, or any element or key of it: stated only
+//     where the configuration records a constant -- in block syntax, every
+//     attribute written in the block, and nothing the block does not write
+//     holding a value -- that the plan's value is shown to be. Anything else
+//     -- a reference, a variable, a function, an attribute written in several
+//     blocks, a write the configuration records no expression for, a
+//     comparison with a value the plan withholds or does not know -- is
+//     configuration-unrecorded, whether or not the update moves the value as
+//     a whole: a provider that suppresses removing an element plans the
+//     state's beside the one written, as google_compute_firewall does with
+//     0.0.0.0/0 in source_ranges, and the plan does not record what the write
+//     evaluates to. A write that evaluates to what the object already had is
+//     unrecorded too, which is the cost of the decision recorded in milestone
+//     10.
 //   - Unwritten, or written as an expression that evaluates to null, which
 //     Terraform treats exactly as unwritten: prior-state where the change keeps
-//     an existing object and the plan keeps its prior value; otherwise the
-//     provider's default, on a new object or where the plan moves the value.
+//     an existing object and the prior state holds the value, or any element
+//     or key of it; otherwise the provider's default, on a new object or where
+//     everything the plan holds there is new.
 func (a Argument) Method(change terraformplan.ResourceChange) model.Method {
 	return a.decide(change, nil)
 }
@@ -158,7 +165,7 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 	}
 
 	updates := Updates(change)
-	carried := updates && Carried(change, path)
+	kept := updates && Kept(change, path)
 	switch writing {
 	case WritingWritten:
 		switch {
@@ -167,18 +174,20 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 		case expression.Contradicted:
 			// Only a constant is ever contradicted.
 			return model.MethodPriorState
-		case !carried:
+		case !kept:
+			// Nothing the plan holds here was the object's: the value is new
+			// in this update, and the write is what the plan applies.
 			return model.MethodStated
 		case expression.Evaluation != terraformplan.EvaluationConstant || expression.Undecided:
 			// The plan records no value for the write to be shown to be the
-			// one the update keeps. A write the configuration records no
-			// expression for is the zero Expression, which is deferred.
+			// one the object already had. A write the configuration records
+			// no expression for is the zero Expression, which is deferred.
 			return model.MethodConfigurationUnrecorded
 		}
 		return model.MethodStated
 	case WritingUnwritten:
 		switch {
-		case carried:
+		case kept:
 			return model.MethodPriorState
 		case isDefault != nil && !*isDefault:
 			return model.MethodConfigurationUnrecorded
@@ -195,17 +204,60 @@ func (a Argument) decide(change terraformplan.ResourceChange, isDefault *bool) m
 // the path passes through is followed into its one element; where either side
 // holds other than one, the answer is the whole block's.
 func Carried(change terraformplan.ResourceChange, path string) bool {
-	before, after := change.Before, change.After
+	_, after, _ := follow(change, path)
+	return after.Carried()
+}
+
+// Kept reports that the prior state holds anything the plan holds at a path:
+// the value itself, as Carried, or -- where the value is a list, a set or a
+// map -- any one element or key of it (terraformplan.Value.InPrior). Which
+// element a verdict reads is not the argument's to know, so any of them makes
+// the value kept, which errs away from stated.
+//
+// Through a block that holds other than one element on either side, the plan
+// does not say which block the verdict reads in, so anything the prior state
+// holds there -- a value it withholds included -- makes the value kept.
+func Kept(change terraformplan.ResourceChange, path string) bool {
+	before, after, single := follow(change, path)
+	switch {
+	case after.Carried():
+		return true
+	case !single:
+		return before.Kind() != terraformplan.KindNull && before.State() != terraformplan.StateAbsent &&
+			(before.Kind() != terraformplan.KindArray || before.Len() > 0)
+	}
+	switch after.Kind() {
+	case terraformplan.KindArray:
+		for i := range after.Len() {
+			if after.At(i).InPrior() {
+				return true
+			}
+		}
+	case terraformplan.KindObject:
+		for _, key := range after.Keys() {
+			if after.Field(key).Carried() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// follow walks a path through a change's prior and planned values, following
+// a block into its one element. Where either side holds other than one, it
+// stops at the block, and single is false.
+func follow(change terraformplan.ResourceChange, path string) (before, after terraformplan.Value, single bool) {
+	before, after = change.Before, change.After
 	for i, segment := range strings.Split(path, ".") {
 		if i > 0 && after.Kind() == terraformplan.KindArray {
 			if before.Len() != 1 || after.Len() != 1 {
-				return after.Carried()
+				return before, after, false
 			}
 			before, after = before.At(0), after.At(0)
 		}
 		before, after = before.Field(segment), after.Field(segment)
 	}
-	return after.Carried()
+	return before, after, true
 }
 
 // Updates reports that the change keeps an existing object: it has a prior

@@ -125,8 +125,8 @@ func TestTheMethodFollowsWhatTheConfigurationRecords(t *testing.T) {
 			flag, planned(t, create, noPrior, entry(`{"flag": {"references": ["x_other.o.flag", "x_other.o"]}}`)),
 			model.MethodStated,
 		},
-		// ignore_changes keeps the prior value, so a value the update moves
-		// is the configuration's.
+		// The value is new in this update: the prior state does not hold
+		// it, so it is the write's.
 		"written from a resource, on an update that moves it": {
 			flag, planned(t, update, changed, entry(`{"flag": {"references": ["x_other.o.flag", "x_other.o"]}}`)),
 			model.MethodStated,
@@ -504,10 +504,12 @@ func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
 	inner := declared.Argument{Path: "settings.ip", Block: true}
 	leaf := declared.Argument{Path: "rule.port"}
 	const (
-		two      = `{"rule": [{"port": 22, "cidr": "0.0.0.0/0"}, {"port": 80, "cidr": "0.0.0.0/0"}]}`
-		moved    = `{"rule": [{"port": 22, "cidr": "10.0.0.0/8"}, {"port": 80, "cidr": "0.0.0.0/0"}]}`
-		nestedIP = `{"settings": [{"ip": [{"enabled": true, "cidr": "0.0.0.0/0"}]}]}`
-		empties  = `{"rule": [{"port": 22, "cidr": []}, {"port": 80, "cidr": ""}]}`
+		two   = `{"rule": [{"port": 22, "cidr": "0.0.0.0/0"}, {"port": 80, "cidr": "0.0.0.0/0"}]}`
+		moved = `{"rule": [{"port": 22, "cidr": "10.0.0.0/8"}, {"port": 80, "cidr": "0.0.0.0/0"}]}`
+		// everyMoved holds neither of two's blocks.
+		everyMoved = `{"rule": [{"port": 22, "cidr": "10.0.0.0/8"}, {"port": 80, "cidr": "10.0.0.0/8"}]}`
+		nestedIP   = `{"settings": [{"ip": [{"enabled": true, "cidr": "0.0.0.0/0"}]}]}`
+		empties    = `{"rule": [{"port": 22, "cidr": []}, {"port": 80, "cidr": ""}]}`
 	)
 	constants := entry(`{"rule": [{"port": {"constant_value": 80}, "cidr": {"constant_value": "0.0.0.0/0"}}, {"port": {"constant_value": 22}, "cidr": {"constant_value": "0.0.0.0/0"}}]}`)
 	cases := map[string]struct {
@@ -553,7 +555,13 @@ func TestABlockIsDecidedByWhatIsWrittenInsideIt(t *testing.T) {
 		"a reference inside a block, on a create": {rules, noPrior, two, create,
 			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"references": ["local.p"]}}]}`),
 			model.MethodStated},
-		"a reference inside a block, moved": {rules, moved, two, update,
+		// The update moves one block and keeps the other, and which of them
+		// the verdict reads is not the argument's to know: a block the object
+		// already had is stated only by constants.
+		"a reference inside a block, moved beside a block the update keeps": {rules, moved, two, update,
+			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"references": ["local.p"]}}]}`),
+			model.MethodConfigurationUnrecorded},
+		"a reference inside a block, every block moved": {rules, everyMoved, two, update,
 			entry(`{"rule": [{"port": {"constant_value": 80}}, {"port": {"references": ["local.p"]}}]}`),
 			model.MethodStated},
 		"a block inside a block, constants, carried": {inner, nestedIP, nestedIP, noOp,
@@ -720,5 +728,127 @@ func TestCarriedFollowsABlockOnlyThroughItsOneElement(t *testing.T) {
 				t.Errorf("Carried = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// On an update or no-op, a value the verdict reads that the prior state holds
+// -- or, in a list, a set or a map, an element or key of it the prior state
+// holds -- is stated only where the configuration records a constant there
+// that the plan's value is. A reference, a variable or a function never makes
+// it stated: a provider that suppresses removing an element plans it beside
+// the one written, so the update moves the list and keeps the element, and the
+// plan does not record what the write evaluates to. The milestone 10 decision
+// recorded after the sixth review.
+//
+// Which element the verdict reads is not the argument's to know, so any
+// element the prior state holds makes it so: that errs away from stated.
+func TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant(t *testing.T) {
+	ranges := declared.Argument{Path: "ranges"}
+	tags := declared.Argument{Path: "tags"}
+	const (
+		public    = `{"ranges": ["0.0.0.0/0"]}`
+		united    = `{"ranges": ["0.0.0.0/0", "10.0.0.0/8"]}`
+		reordered = `{"ranges": ["10.0.0.0/8", "0.0.0.0/0"]}`
+		narrowed  = `{"ranges": ["10.0.0.0/8"]}`
+		reference = `{"ranges": {"references": ["x_other.o.ranges", "x_other.o"]}}`
+	)
+	cases := map[string]struct {
+		argument               declared.Argument
+		actions, before, after string
+		expressions, variables string
+		want                   model.Method
+	}{
+		"a reference, an element kept beside the new one": {ranges, update, public, united, reference, `{}`,
+			model.MethodConfigurationUnrecorded},
+		"a reference, an element kept at another position": {ranges, update, public, reordered, reference, `{}`,
+			model.MethodConfigurationUnrecorded},
+		"a variable recorded with a value, an element kept": {ranges, update, public, united,
+			`{"ranges": {"references": ["var.a"]}}`, `{"a": {"value": ["10.0.0.0/8"]}}`,
+			model.MethodConfigurationUnrecorded},
+		"a function, an element kept": {ranges, update, public, united, `{"ranges": {}}`, `{}`,
+			model.MethodConfigurationUnrecorded},
+		"a constant the plan is, an element kept": {ranges, update, public, united,
+			`{"ranges": {"constant_value": ["0.0.0.0/0", "10.0.0.0/8"]}}`, `{}`, model.MethodStated},
+		"a constant the plan is not, an element kept": {ranges, update, public, united,
+			`{"ranges": {"constant_value": ["10.0.0.0/8"]}}`, `{}`, model.MethodPriorState},
+		// Nothing the plan holds there was in prior state: the value is new in
+		// this update, and the configuration's.
+		"a reference, every element new": {ranges, update, public, narrowed, reference, `{}`,
+			model.MethodStated},
+		"a reference, on a create":  {ranges, create, noPrior, united, reference, `{}`, model.MethodStated},
+		"a reference, on a replace": {ranges, replace, public, united, reference, `{}`, model.MethodStated},
+		"unwritten, an element kept while the list moves": {ranges, update, united, public,
+			`{"name": {"constant_value": "t"}}`, `{}`, model.MethodPriorState},
+		"unwritten, every element new": {ranges, update, public, narrowed,
+			`{"name": {"constant_value": "t"}}`, `{}`, model.MethodProviderDefault},
+		"a map from a reference, a key kept": {tags, update, `{"tags": {"a": "1", "b": "2"}}`,
+			`{"tags": {"a": "1", "b": "3"}}`, `{"tags": {"references": ["local.t"]}}`, `{}`,
+			model.MethodConfigurationUnrecorded},
+		"a map from a reference, every key moved": {tags, update, `{"tags": {"a": "1"}}`,
+			`{"tags": {"a": "2"}}`, `{"tags": {"references": ["local.t"]}}`, `{}`, model.MethodStated},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := plannedWith(t, c.actions, c.before, c.after, entry(c.expressions), c.variables)
+			if got := c.argument.Method(change); got != c.want {
+				t.Errorf("Method = %q, want %q", got, c.want)
+			}
+		})
+	}
+
+	// A sensitive mark does not make a kept element look new.
+	sensitive := plannedMasked(t, update, public, reordered, `{"ranges": [true]}`, `{"ranges": [false, true]}`,
+		entry(reference))
+	if got := ranges.Method(sensitive); got != model.MethodConfigurationUnrecorded {
+		t.Errorf("a sensitive element kept: %q, want %q", got, model.MethodConfigurationUnrecorded)
+	}
+}
+
+// Kept is Carried widened to the elements: the prior state holds the value at
+// the path, or any element or key of it. Through a block that holds other than
+// one element on either side the plan cannot say which block the verdict
+// reads in, so anything the prior state holds there makes it kept.
+func TestKeptFindsAnythingThePriorStateHoldsAtThePath(t *testing.T) {
+	cases := map[string]struct {
+		path, before, after string
+		want                bool
+	}{
+		"a scalar kept":                    {"flag", `{"flag": true}`, `{"flag": true}`, true},
+		"a scalar moved":                   {"flag", `{"flag": false}`, `{"flag": true}`, false},
+		"an element kept beside a new one": {"r", `{"r": ["a"]}`, `{"r": ["b", "a"]}`, true},
+		"every element new":                {"r", `{"r": ["a"]}`, `{"r": ["b"]}`, false},
+		"an empty list":                    {"r", `{"r": ["a"]}`, `{"r": []}`, false},
+		"a key kept beside a moved one":    {"m", `{"m": {"a": "1", "b": "2"}}`, `{"m": {"a": "1", "b": "3"}}`, true},
+		"every key moved":                  {"m", `{"m": {"a": "1"}}`, `{"m": {"a": "2"}}`, false},
+		"through one block, kept": {"settings.r", `{"settings": [{"r": ["a"]}]}`,
+			`{"settings": [{"r": ["b", "a"]}]}`, true},
+		"through one block, new": {"settings.r", `{"settings": [{"r": ["a"]}]}`,
+			`{"settings": [{"r": ["b"]}]}`, false},
+		"through a block the update adds": {"settings.r", `{"settings": [{"r": ["a"]}]}`,
+			`{"settings": [{"r": ["b"]}, {"r": ["c"]}]}`, true},
+		"through a block the update drops": {"settings.r", `{"settings": [{"r": ["a"]}, {"r": ["c"]}]}`,
+			`{"settings": [{"r": ["b"]}]}`, true},
+		"through blocks nothing was in before": {"settings.r", `{"settings": []}`,
+			`{"settings": [{"r": ["b"]}, {"r": ["c"]}]}`, false},
+		"through blocks, a null before": {"settings.r", `{"settings": null}`,
+			`{"settings": [{"r": ["b"]}, {"r": ["c"]}]}`, false},
+		"through blocks, none before": {"settings.r", `{}`,
+			`{"settings": [{"r": ["b"]}, {"r": ["c"]}]}`, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := plannedWith(t, update, c.before, c.after, "", `{}`)
+			if got := declared.Kept(change, c.path); got != c.want {
+				t.Errorf("Kept = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// Through blocks the plan withholds, nothing says the prior state held
+	// nothing there.
+	withheld := plannedMasked(t, update, `{"settings": [{"r": ["a"]}]}`,
+		`{"settings": [{"r": ["b"]}, {"r": ["c"]}]}`, `{"settings": true}`, `{}`, entry(""))
+	if !declared.Kept(withheld, "settings.r") {
+		t.Error("through blocks whose prior value is withheld: not kept")
 	}
 }

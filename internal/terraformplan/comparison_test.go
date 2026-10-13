@@ -314,3 +314,84 @@ func TestAValueIsCarriedWhateverItsSensitivity(t *testing.T) {
 		t.Errorf("elements: %v %v, want false true", rules.At(0).Carried(), rules.At(1).Carried())
 	}
 }
+
+// An element of a list or a set is in prior state where the prior list at the
+// same place holds an equal element, at any position: a legacy-SDK set is
+// ordered by hash, and a provider that suppresses removing an element plans it
+// beside the one written, so the list moves and the element does not. It is
+// decided like Carried, from the raw values before any mark applies, and only
+// the answer is kept.
+func TestAnElementIsInPriorWhereverThePriorListHoldsIt(t *testing.T) {
+	const canary = "INPRIOR-CANARY-7d21"
+	parse := func(t *testing.T, before, after, beforeSensitive, afterSensitive, afterUnknown string) ResourceChange {
+		t.Helper()
+		raw := `{
+		  "format_version": "1.2",
+		  "resource_changes": [{"address": "x_thing.t", "mode": "managed", "type": "x_thing", "name": "t",
+		    "provider_name": "registry.terraform.io/hashicorp/x",
+		    "change": {"actions": ["update"], "before": ` + before + `, "after": ` + after + `,
+		               "before_sensitive": ` + beforeSensitive + `, "after_sensitive": ` + afterSensitive + `,
+		               "after_unknown": ` + afterUnknown + `}}]
+		}`
+		plan, err := Parse([]byte(raw))
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		return plan.ResourceChanges[0]
+	}
+	cases := map[string]struct {
+		before, after, beforeSensitive, afterSensitive, afterUnknown string
+		want                                                         []bool
+	}{
+		"kept beside a new element": {`{"r": ["0.0.0.0/0"]}`, `{"r": ["0.0.0.0/0", "10.0.0.0/8"]}`,
+			`{}`, `{}`, `{}`, []bool{true, false}},
+		"kept at another position": {`{"r": ["0.0.0.0/0"]}`, `{"r": ["10.0.0.0/8", "0.0.0.0/0"]}`,
+			`{}`, `{}`, `{}`, []bool{false, true}},
+		"nothing kept": {`{"r": ["0.0.0.0/0"]}`, `{"r": ["10.0.0.0/8"]}`,
+			`{}`, `{}`, `{}`, []bool{false}},
+		"a block kept at another position": {`{"r": [{"port": 22}]}`, `{"r": [{"port": 80}, {"port": 22}]}`,
+			`{}`, `{}`, `{}`, []bool{false, true}},
+		"a block one attribute of which moved": {`{"r": [{"port": 22, "cidr": "0.0.0.0/0"}]}`,
+			`{"r": [{"port": 80, "cidr": "0.0.0.0/0"}]}`, `{}`, `{}`, `{}`, []bool{false}},
+		"sensitive on both sides": {`{"r": ["` + canary + `"]}`, `{"r": ["10.0.0.0/8", "` + canary + `"]}`,
+			`{"r": [true]}`, `{"r": [false, true]}`, `{}`, []bool{false, true}},
+		"sensitive, moved": {`{"r": ["` + canary + `"]}`, `{"r": ["10.0.0.0/8", "` + canary + `-new"]}`,
+			`{"r": [true]}`, `{"r": [false, true]}`, `{}`, []bool{false, false}},
+		// Not yet known is not a value, even where the plan writes the prior
+		// one in its place.
+		"not yet known": {`{"r": ["a", "b"]}`, `{"r": ["b", "a"]}`,
+			`{}`, `{}`, `{"r": [false, true]}`, []bool{true, false}},
+		"a block not yet known inside": {`{"r": [{"port": 22}]}`, `{"r": [{"port": 22}]}`,
+			`{}`, `{}`, `{"r": [{"port": true}]}`, []bool{false}},
+		"no prior list":            {`{}`, `{"r": ["a"]}`, `{}`, `{}`, `{}`, []bool{false}},
+		"a prior null":             {`{"r": null}`, `{"r": ["a"]}`, `{}`, `{}`, `{}`, []bool{false}},
+		"a prior value not a list": {`{"r": "a"}`, `{"r": ["a"]}`, `{}`, `{}`, `{}`, []bool{false}},
+		"no prior state":           {`null`, `{"r": ["a"]}`, `{}`, `{}`, `{}`, []bool{false}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			change := parse(t, c.before, c.after, c.beforeSensitive, c.afterSensitive, c.afterUnknown)
+			list := change.After.Field("r")
+			if list.Len() != len(c.want) {
+				t.Fatalf("%d elements, want %d", list.Len(), len(c.want))
+			}
+			for i, want := range c.want {
+				if got := list.At(i).InPrior(); got != want {
+					t.Errorf("element %d: InPrior = %v, want %v", i, got, want)
+				}
+			}
+			if found := findCanary(reflect.ValueOf(change.After), "after", canary); found != "" {
+				t.Errorf("a sensitive value was retained at %s", found)
+			}
+		})
+	}
+
+	// Anywhere but an element of a list, in prior is carried: the same value
+	// at the same place.
+	change := parse(t, `{"tags": {"a": "1", "b": "2"}}`, `{"tags": {"a": "1", "b": "3"}}`, `{}`, `{}`, `{}`)
+	tags := change.After.Field("tags")
+	if !tags.Field("a").InPrior() || tags.Field("b").InPrior() || tags.InPrior() {
+		t.Errorf("keys: %v %v, map %v, want true false false",
+			tags.Field("a").InPrior(), tags.Field("b").InPrior(), tags.InPrior())
+	}
+}

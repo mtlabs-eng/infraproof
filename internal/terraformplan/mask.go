@@ -341,9 +341,22 @@ func markCarried(value Value, before any, beforePresent bool, after any, afterPr
 			if inAfter {
 				childAfter = afterArray[i]
 			}
-			array[i] = markCarried(child, childBefore, inBefore, childAfter, inAfter, elementMask(unknown, i, len(value.array)))
+			childUnknown := elementMask(unknown, i, len(value.array))
+			array[i] = markCarried(child, childBefore, inBefore, childAfter, inAfter, childUnknown)
+			array[i].inPrior = inAfter && !childUnknown.marks() && holds(beforeArray, childAfter)
 		}
 		value.array = array
 	}
 	return value
+}
+
+// holds reports whether a raw prior list holds an element equal to a raw
+// planned one, at any position.
+func holds(list []any, element any) bool {
+	for _, candidate := range list {
+		if reflect.DeepEqual(candidate, element) {
+			return true
+		}
+	}
+	return false
 }

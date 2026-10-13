@@ -246,3 +246,55 @@ func TestAProtocolTheProviderCanonicalizesReadsPriorState(t *testing.T) {
 		t.Errorf("%s method = %q, want known true %q", got.State, got.Method(), model.MethodPriorState)
 	}
 }
+
+// Real plans of the sixth review. source_ranges is a legacy-SDK set whose
+// provider suppresses removing 0.0.0.0/0, so a range written by a variable, a
+// variable element or a local is planned beside the state's public range, with
+// no lifecycle block anywhere. The update moves the set and keeps the element
+// the grant rests on, which nobody under review wrote: a write that is not a
+// constant never makes it stated, and the plan does not record what the write
+// evaluates to. The constant the plan contradicts is prior-state, and a
+// configuration that writes nothing is a no-op keeping it.
+func TestAPublicRangeTheProviderKeepsBesideAWriteIsNotStated(t *testing.T) {
+	cases := []struct {
+		fixture, address, why string
+		want                  model.Method
+	}{
+		{"real-source-ranges-union-variable", "google_compute_firewall.a", "source_ranges = var.a",
+			model.MethodConfigurationUnrecorded},
+		{"real-source-ranges-union-variable", "google_compute_firewall.f", "[var.f], 0.0.0.0/1",
+			model.MethodConfigurationUnrecorded},
+		{"real-source-ranges-union-variable-element", "google_compute_firewall.a", "[var.a]",
+			model.MethodConfigurationUnrecorded},
+		{"real-source-ranges-union-variable-element", "google_compute_firewall.f", "[var.f], 10.0.0.1/8",
+			model.MethodConfigurationUnrecorded},
+		{"real-source-ranges-union-local", "google_compute_firewall.a", "[var.a]",
+			model.MethodConfigurationUnrecorded},
+		{"real-source-ranges-union-local", "google_compute_firewall.c", "[local.c]",
+			model.MethodConfigurationUnrecorded},
+		{"real-source-ranges-union-local", "google_compute_firewall.b", "the constant [\"10.0.0.0/8\"]",
+			model.MethodPriorState},
+		{"real-source-ranges-union-variable", "google_compute_firewall.c", "source_ranges = null",
+			model.MethodPriorState},
+	}
+	for _, c := range cases {
+		r, ok := methodAt(t, c.fixture, c.address)
+		if !ok {
+			t.Fatalf("%s has no %s", c.fixture, c.address)
+		}
+		got := r.Network.PublicIngress
+		if !got.IsKnown() || !got.Get() || got.Method() != c.want {
+			t.Errorf("%s, %s: %s %v method = %q, want known true %q",
+				c.fixture, c.why, got.State, got.IsKnown() && got.Get(), got.Method(), c.want)
+		}
+	}
+
+	// The controls replace the set: what the plan holds is new in this
+	// update, the configuration's, and opens nothing.
+	for _, address := range []string{"google_compute_firewall.d", "google_compute_firewall.e", "google_compute_firewall.g"} {
+		r, _ := methodAt(t, "real-source-ranges-union-variable", address)
+		if got := r.Network.PublicIngress; !got.IsKnown() || got.Get() {
+			t.Errorf("%s: %s %v, want known false", address, got.State, got.IsKnown() && got.Get())
+		}
+	}
+}
