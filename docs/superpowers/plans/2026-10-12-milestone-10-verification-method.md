@@ -901,7 +901,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 In the scratchpad (never in the repo), following `docs/milestones/research/README.md`'s procedure:
 
 ```bash
-S=/private/tmp/claude-501/-Users-marcotomas-MTLabs-InfraProof/5a8917bb-5636-4183-a116-cc00b98ddb97/scratchpad/m10-gcp
+S=$SCRATCH/m10-gcp
 mkdir -p "$S" && cd "$S"
 cat > main.tf <<'EOF'
 terraform {
@@ -926,7 +926,7 @@ resource "google_sql_database_instance" "default_endpoint" {
   }
 }
 EOF
-echo '{"type":"service_account","project_id":"infraproof-fixture","private_key_id":"0","private_key":"-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAu\n-----END PRIVATE KEY-----\n","client_email":"x@infraproof-fixture.iam.gserviceaccount.com","client_id":"0","token_uri":"https://oauth2.googleapis.com/token"}' > placeholder.json
+echo '{"type":"service_account","project_id":"infraproof-fixture","private_key_id":"0","private_key":"PLACEHOLDER-NOT-A-KEY","client_email":"x@infraproof-fixture.iam.gserviceaccount.com","client_id":"0","token_uri":"https://oauth2.googleapis.com/token"}' > placeholder.json
 terraform init -input=false
 terraform plan -refresh=false -input=false -out=plan.bin
 terraform show -json plan.bin > plan.json
@@ -1757,7 +1757,7 @@ Any site whose mutation breaks nothing is a gap: add the missing test to the tas
 - [ ] **Step 2: Criterion 8 for fixtures with no baseline**
 
 ```bash
-S=/private/tmp/claude-501/-Users-marcotomas-MTLabs-InfraProof/5a8917bb-5636-4183-a116-cc00b98ddb97/scratchpad/m10-binaries
+S=$SCRATCH/m10-binaries
 mkdir -p "$S"
 git worktree add "$S/before" 3b50544
 (cd "$S/before" && go build -o "$S/infraproof-before" ./cmd/infraproof)
