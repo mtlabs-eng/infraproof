@@ -164,6 +164,31 @@ on import.
   `ignore_changes` on `settings[0].ip_configuration[0].authorized_networks`
   against a state that also authorizes `0.0.0.0/0`, while `tier` moves.
 
+## Real plans added by milestone 10's sixth review
+
+Terraform 1.14.0 and `hashicorp/google` 6.50.0, `plan -refresh=false` against a
+hand-written state, nothing applied; the placeholder access token was stripped
+on import. No `lifecycle` block anywhere. `source_ranges` is a legacy-SDK set,
+and the provider suppresses removing `0.0.0.0/0` from it: against a state of
+exactly `["0.0.0.0/0"]`, one new range is planned beside the old one, so the
+update moves the set and keeps the public element nobody wrote.
+
+- `real-source-ranges-union-variable.json`: firewall `a` writes
+  `source_ranges = var.a` (`["10.0.0.0/8"]`) and `f` writes `[var.f]`
+  (`0.0.0.0/1`), each planned beside the state's `0.0.0.0/0`. `b` writes `[]`
+  and `c` writes `null` (a no-op keeping `0.0.0.0/0`). Controls that replace the
+  set: `d` writes two ranges, `[var.d, "10.1.0.0/16"]`; `e` holds
+  `["0.0.0.0/0", "::/0"]` in state; `g` holds only `10.0.0.0/8`.
+- `real-source-ranges-union-variable-element.json`: every firewall but `g`
+  writes `[var.x]`, and `g` the constant `["10.0.0.0/08"]`, against
+  `0.0.0.0/0` in state. `a` (`10.0.0.0/8`) and `f`
+  (`10.0.0.1/8`) are planned beside it; `b`, `c`, `d`, `g` and `i` hold a
+  spelling no parser here reads; `e` holds `["0.0.0.0/0", "10.0.0.0/8"]` in
+  state and is narrowed to `10.0.0.0/8`; `h` moves `::/0` to `fd00::/8`.
+- `real-source-ranges-union-local.json`: the same, with `c` writing
+  `[local.c]` and `b` the constant `["10.0.0.0/8"]`, which the plan
+  contradicts.
+
 ## Skipped-deny fixtures added by the fourth review
 
 Hand-authored, by a script editing only the fields named here, from
