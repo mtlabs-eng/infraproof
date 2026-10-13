@@ -48,10 +48,10 @@ the bundle only as an unknown.
 
   | method | means |
   | --- | --- |
-  | `plan-stated-value` | the plan's configuration records that the author wrote the argument with a value, decided at the place the verdict reads (a map key, a whole rule set): any write on a new object; any write the plan does not contradict where the update moves the value there; where the update keeps the value there, only a constant written there that the planned value is shown to equal -- `null`, and an attribute a block does not write, match only an empty value (null, `[]`, `{}`, `""`, `false`). Never by default. The policy also assigns it to `resource.cloud`, from `provider_name` |
-  | `provider-default` | the configuration records the argument as unwritten, or written as `null`, and the value is not carried from prior state: the provider's documented default, on a new object or where the plan moves the value to it |
-  | `prior-state` | the change keeps an existing object and, at the place the verdict reads, the plan keeps the value it had while the configuration records it unwritten or written as `null`, or the configuration records a constant the planned value is not, moved or not (`lifecycle { ignore_changes }`; a provider that canonicalizes a constant also lands here, understated) |
-  | `configuration-unrecorded` | the plan does not record whether the author wrote the argument with a value; or, on an update or no-op that keeps the value at the place the verdict reads, the plan cannot show the write is it: an expression the plan does not evaluate -- a reference, a variable, a function -- an attribute of a repeated block, or a constant compared with a value the plan withholds as sensitive or does not know |
+  | `plan-stated-value` | the plan's configuration records that the author wrote the argument with a value, decided at the place the verdict reads (a map key, a whole rule set at its elements): any write on a new object; any write the plan does not contradict where nothing the plan holds there is in the prior state -- not the value, not one element or key of it; where the prior state holds the value there, or any element or key of it, only a constant written there that the planned value is shown to equal -- `null`, and an attribute a block does not write, match only an empty value (null, `[]`, `{}`, `""`, `false`). Never by default. The policy also assigns it to `resource.cloud`, from `provider_name` |
+  | `provider-default` | the configuration records the argument as unwritten, or written as `null`, and the prior state holds nothing the plan holds there, not the value and not one element or key of it: the provider's documented default, on a new object or where the plan moves the value to it |
+  | `prior-state` | the change keeps an existing object and, at the place the verdict reads, the prior state holds the value, or an element or key of it, while the configuration records it unwritten or written as `null`, or the configuration records a constant the planned value is not, moved or not (`lifecycle { ignore_changes }`; a provider that canonicalizes a constant also lands here, understated) |
+  | `configuration-unrecorded` | the plan does not record whether the author wrote the argument with a value; or, on an update or no-op where the prior state holds the value at the place the verdict reads, or any element or key of it, however the update moves the rest, the plan cannot show the write is it: an expression the plan does not evaluate -- a reference, a variable, a function -- an attribute of a repeated block, or a constant compared with a value the plan withholds as sensitive or does not know |
   | `policy-document-interpreted` | the value results from this build's reading of a JSON policy document |
   | `reference-resolved` | the value is obtainable only by resolving a reference: the security groups a database reaches through `vpc_security_group_ids` |
   | `documented-table` | the value comes from a closed, documented table in this build |
@@ -287,7 +287,7 @@ and the mappers' call sites.
 ## Limitations as built
 
 Written from what the tests measure at the end of the milestone, after the
-fifth review's fix wave.
+sixth review's fix wave.
 
 - **The method follows what the configuration records, compared with the
   prior state, not the `after` value alone.** Real plans showed that a provider
@@ -297,13 +297,14 @@ fifth review's fix wave.
   not record -- it carries the prior value even of an argument the
   configuration writes. One mechanism, `declared.Argument`, decides every
   mapper's method, at the place the verdict reads -- the environment at its
-  tag or label key, a network grant at the rule set or block list:
-  `configuration-unrecorded` where the plan does not record the writing, and
-  where the change keeps the object, `before` and `after` agree there, and the
-  write is an expression the plan does not evaluate or a constant it cannot
-  compare; `prior-state` where the change keeps the object and either `before`
-  and `after` agree there while the configuration records the argument as
-  unwritten or as `null`, or a written constant is contradicted there, moved
+  tag or label key, a network grant at the rule set or block list and its
+  elements: `configuration-unrecorded` where the plan does not record the
+  writing, and where the change keeps the object, the prior state holds the
+  value there or any element or key of it, and the write is an expression the
+  plan does not evaluate or a constant it cannot compare; `prior-state` where
+  the change keeps the object and either the prior state holds the value
+  there, or an element or key of it, while the configuration records the
+  argument as unwritten or as `null`, or a written constant is contradicted there, moved
   or not; otherwise `plan-stated-value` for a written value and
   `provider-default` for an unwritten one. The value itself is read exactly as
   in milestone 09.
@@ -326,15 +327,18 @@ fifth review's fix wave.
   unwritten too; no verdict reads this, only the method does.
 - **`prior-state` is decided by comparing `before` with `after`, not by the
   schema.** An update or no-op that keeps the object, and a value equal on
-  both sides at the place the verdict reads. The comparison is made while
+  both sides at the place the verdict reads -- or, for a list, a set or a map,
+  any one element the prior list holds at any position, or any key the prior
+  map holds with the same value. The comparison is made while
   parsing, on the plan's own `before` and `after` before any sensitive mark
   applies, and keeps only its answer: a sensitive tag beside the environment
   no longer makes a kept map look moved. A value not yet known is never
   carried. Where a provider's default equals
   what the object already had -- a firewall priority of 1000 left unwritten --
   the value is both, and the method says `prior-state`. An unwritten argument
-  the update moves is `provider-default`: Terraform planned it back to the
-  default (the AWS block flags an update resets, measured).
+  the update moves to something the prior state does not hold is
+  `provider-default`: Terraform planned it back to the default (the AWS block
+  flags an update resets, measured).
 - **A value the configuration does not record as written is never stated.** An
   argument recorded as unwritten, holding a value that is not its documented
   default and not carried from prior state, is `configuration-unrecorded`. No
@@ -362,8 +366,22 @@ fifth review's fix wave.
   applies the default (found by the fifth review, by reasoning; not planned):
   the method then says `provider-default` or `configuration-unrecorded` for a
   value the module's author wrote, which understates it and never states one.
-- **On an update that keeps a value, only a constant write is stated.** The
-  plan records a constant's value: a constant the carried value is reads
+- **On an update where the prior state holds the value, or any element or key
+  of it, only a constant write is stated.** Which element of a list, a set or a
+  map the verdict rests on is not the argument's to know, so any element the
+  prior list holds, at any position, or any key the prior map holds with the
+  same value, makes the value kept -- and so does a path through a block of
+  other than one element where the prior state holds anything. That errs away
+  from stated: a reference write that adds a public range beside a private one
+  the state held reads `configuration-unrecorded`, though the grant rests on
+  the new range (the accepted cost, below). An element is one of the
+  collection at the argument's path, and for a block argument a whole block:
+  a block the update changes is new even where an entry nested inside it --
+  a `cidr_blocks` address of an inline rule -- equals one the state's block
+  held. The sixth review planned AWS inline and dynamic `ingress`, Cloud SQL
+  `authorized_networks` and GCP `allow` and found each replaced cleanly, with
+  no union, so no real plan here reaches that bound. The plan records a constant's
+  value: a constant the carried value is reads
   `plan-stated-value`, and one it is not reads `prior-state` (`ignore_changes`
   kept the state). A write by reference, variable or function records no value
   -- `lower(var.x)` is recorded exactly as `var.x`, a function of constants as
@@ -384,10 +402,15 @@ fifth review's fix wave.
   write is written as nothing. A constant the plan contradicts there is
   `prior-state` on any update, moved or not, and one compared with a value the
   plan withholds or does not know is `configuration-unrecorded`. A write the
-  plan moves, and does not contradict, is stated without a comparison: `ignore_changes` keeps a value, so a value the plan
-  moves is the configuration's, but the plan does not show that `after` is
-  what the expression evaluates to (a provider that normalizes or computes the
-  value would read stated). A static block beside a `dynamic` one of the same
+  plan does not contradict, where nothing the plan holds at the place was in
+  the prior state, is stated without a comparison: the value is new in this
+  update, but the plan does not show that `after` is what the expression
+  evaluates to (a provider that normalizes or computes the value into
+  something new would read stated). That the update moves the value as a whole
+  is not enough, and stating it was false: `google_compute_firewall`
+  suppresses removing `0.0.0.0/0` from `source_ranges`, so a range written by
+  a variable is planned beside the state's public range
+  (`real-source-ranges-union-*`). A static block beside a `dynamic` one of the same
   type, on a create, still reads stated; on an update, the planned set is not
   the written one and it reads `prior-state`. The comparison takes Terraform's
   encoding: an attribute written as blocks records every attribute, `null`
@@ -1449,3 +1472,216 @@ comparison they mutate (its own mutants above cover the new code), and the two
 | `w3:e-body-nested-skipped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
 | `w3:e-body-absent-dropped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
 | `w3:e-body-constant-dropped` | `terraformplan/expression.go` | not applied: the text it mutates was rewritten by this wave |
+
+## Amendment: adversarial review, round 6
+
+A sixth round ran at `b917c55`: provider reality with real plans (Terraform
+1.14.0, `hashicorp/aws` 6.67.0, `hashicorp/google` 6.50.0, `plan
+-refresh=false` against hand-written state, nothing applied), and mutations and
+claims. Provider reality returned BLOCK on one finding; mutations and claims
+approved with three minor findings. No verdict, decision or exit code was
+wrong, and every repro of rounds 1, 4 and 5 reproduced.
+
+### The claim that turned out false
+
+- *"A reference write the update moves stays `plan-stated-value` ...
+  `ignore_changes` keeps a value, so a value the plan moves is the
+  configuration's"* -- the third wave's amendment, kept by the fifth review's
+  principle, the `declared.Argument.Method` documentation, and the method
+  tables in this document, `EVIDENCE-BUNDLE.md`, `MCP.md`, `PRODUCT.md` and
+  `ARCHITECTURE.md`. It rested on `ignore_changes` being the only way an update
+  keeps a value. `google_compute_firewall.source_ranges` is a legacy-SDK set,
+  and the provider suppresses removing `0.0.0.0/0` from it: against a state of
+  exactly `["0.0.0.0/0"]`, a range written by `var.a`, by `[var.a]` or by
+  `[local.c]` is planned beside it, so the update moves the set and keeps the
+  public element nobody under review wrote. `NETWORK_PUBLIC_INGRESS` was a
+  BLOCK with `network.public_ingress = plan-stated-value` for an author
+  tightening a public rule (`real-source-ranges-union-variable`,
+  `-variable-element`, `-local`). Carried was decided for the set as a whole;
+  the grant rests on one element of it.
+- *"Never the answer where the plan cannot decide"* (`EVIDENCE-BUNDLE.md`) held
+  only with the moved-write exception read beside it (the review's minor
+  finding 3). With the exception withdrawn it holds as written.
+
+### The user's decision
+
+Binding, and replacing the moved-reference exception: on an update or no-op,
+if the value the verdict reads -- or, for a list, a set or a map, the element or
+key it reads -- is present in `before`, it is `plan-stated-value` only where
+the configuration records a constant at that place equal to it; otherwise
+`prior-state`, or `configuration-unrecorded` where the plan cannot decide. A
+reference, a variable or a function write never makes a value the prior state
+holds stated. A value not present in `before`, genuinely new in this update,
+keeps its behaviour: written, stated unless contradicted; unwritten, the
+provider's default. Creates are unchanged. Where the element cannot be decided,
+the answer errs away from stated.
+
+### How it is applied
+
+- `terraformplan.Value.InPrior`: set while parsing, beside `Carried`, on an
+  element of a list or a set whose prior list at the same place holds an equal
+  element at any position, compared on the raw `before` and `after` before any
+  mark applies, keeping only the answer. An element any part of which is not
+  yet known, or that only a mask names, is not in prior state. Elsewhere it is
+  `Carried`.
+- `declared.Kept`: `Carried` widened to elements -- the value at the path is
+  carried, or any element of a list or set at the path is in prior state, or
+  any key of a map at the path is carried. Through a block holding other than
+  one element on either side, the plan does not say which block the verdict
+  reads in, so anything the prior state holds there, a withheld value
+  included, makes it kept.
+- `Argument.decide` asks `Kept` where it asked `Carried`, in both branches: a
+  written value is stated without a comparison only where nothing the plan
+  holds at the place is kept, and an unwritten one is `prior-state` where
+  anything is. The mapper call sites are unchanged: the decision is general,
+  not per site.
+- An element is an element of the collection at the argument's path: an
+  address in `source_ranges` or `members`, a key of `tags`, a whole block of a
+  block argument such as an inline `ingress`, a firewall's `allow` or an
+  `authorized_networks` entry. Which element a verdict rests on is not the
+  argument's to know, so any kept element makes the whole value kept.
+
+### Accepted cost
+
+- A write by reference, variable or function on an update that keeps any
+  element of the value reads `configuration-unrecorded` for every verdict on
+  it, including one resting only on an element the update adds: a variable
+  that adds `0.0.0.0/0` beside the state's `10.0.0.0/8` is unrecorded, not
+  stated. Hand-authored rows pin it (`TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant`,
+  `TestABlockIsDecidedByWhatIsWrittenInsideIt`); no committed real plan
+  reaches it.
+- An unwritten list the update moves while keeping an element reads
+  `prior-state` rather than `provider-default`.
+- A block the update changes is new, even where an element nested inside it
+  -- a `cidr_blocks` entry of an inline rule -- equals one the state's block
+  held. The sixth review measured AWS inline and dynamic `ingress`, Cloud SQL
+  `authorized_networks` and GCP `allow` replaced cleanly on real plans, with
+  no union, so this is a bound, not a measured defect; it is in the
+  Limitations.
+
+### Tests whose assertion changed
+
+- `TestABlockIsDecidedByWhatIsWrittenInsideIt`, "a reference inside a block,
+  moved": `plan-stated-value` became `configuration-unrecorded`, renamed "...,
+  moved beside a block the update keeps". Its `before` holds the block
+  `{port 80, cidr 0.0.0.0/0}` that its `after` holds too, so by the decision a
+  reference cannot make it stated. Its twin "..., every block moved", whose
+  `before` holds neither planned block, asserts `plan-stated-value`.
+- No other assertion changed. `real-reference-write-moved` stays stated: the
+  ACL, the tag and the inline rule are each absent from `before`. So do
+  "written from a resource, on an update that moves it", "written as a
+  variable recorded with a value, moved" and "a map from a reference, the key
+  moved", whose value is not in `before`. Their comments, which gave the false
+  reason, now give this one.
+- No test was removed or skipped.
+
+### Also fixed
+
+- The review's three unpinned, non-permissive survivors now have tests: a key
+  not yet known below a map the plan writes as `null` on both sides
+  (`r6-mc-unknown-flag-only`), a list tail its unknown mask does not describe
+  (`r6-mc-elementmask-at`, re-expressed on the rewritten line), and a constant
+  map compared where the path names no single planned value
+  (`r6-elem-single-true`).
+
+### Criterion 8, re-measured after the sixth review's fix wave
+
+The binary built from `3b50544`, one built from the fifth wave's head
+(`b917c55`) and one built from this wave's tree ran `check --format json` on
+every plan JSON in the tree under the shipped contract and the three in
+`scratchpad/intents/`, normalised as before (`scratchpad/w5/c8.py`).
+
+| | count |
+| --- | --- |
+| plans x contracts compared | 325 x 4 = 1300 |
+| identical to `3b50544` after normalisation, same exit code and stderr | 1300 |
+| identical to `b917c55` after normalisation, same exit code and stderr | 1300 |
+| differing | 0 |
+| exit codes, shipped contract (before = after) | 262 x `4`, 46 x `3`, 15 x `0`, 2 x `10` |
+
+The 325 plans include the three real plans this wave added. `git diff 3b50544
+-- internal/verify/testdata/baseline` is empty and no fixture that existed
+before this wave was touched; the 226 baselines still match. Against
+`b917c55`, no step changed on any plan that existed there: the 28 step changes
+(`scratchpad/w5/c8-final.txt`) are all on the three new fixtures, seven
+`NETWORK_PUBLIC_INGRESS` findings under each of four contracts, each
+`network.public_ingress` `plan-stated-value` that became
+`configuration-unrecorded`. Steps on plan facts across the 1300 runs,
+`resource.cloud`, `contract.` and `plan-action` excluded: `plan-stated-value`
+838, `configuration-unrecorded` 247, `prior-state` 166, `provider-default` 132,
+`reference-resolved` 100, `documented-table` 72, `policy-document-interpreted`
+12.
+
+Every repro of rounds 1, 4 and 5 (`scratchpad/w4/repro.py`) gives output
+identical to the fifth wave's and to the sixth review's re-run. Of the sixth
+review's real plans, only `g1`, `g2` and `g5` change, and only in method: each
+firewall whose public range the provider kept beside a reference write reads
+`configuration-unrecorded`, the contradicted constant (`g2` `b`) and the
+unwritten `null` (`g5` `c`) stay `prior-state`, and `a1`, `g3`, `g4`, `g6`,
+`g7` and `g8` are identical, the replacements of `g6` still stated.
+
+### Criterion 9, re-measured after the sixth review's fix wave
+
+The same harness (`scratchpad/w5/mut.py`, re-pointed at this tree; each mutant
+replaces one string occurring once, must show in `git diff`, must pass `go vet
+./...`, runs `go test ./... -count=1`, and the file is restored). Every line
+this wave added or changed was mutated -- `InPrior`, the in-prior mark the
+parse sets and `holds`, `Kept`, `follow`, `Carried` on top of it, and the
+decision asking `Kept` -- 33 mutants, with wave 4's 82 and the sixth review's
+48 re-run beside them.
+
+- This wave's 33: on the first run 27 were killed, four did not compile (an
+  unused variable) and two survived. The four were re-expressed (`&& false`,
+  `|| true`) and are killed. `m-inprior-inafter-dropped` -- an element only a
+  mask names, beside a prior `null` -- was given a test and is killed.
+  `d-kept-object-inprior` survives: equivalent, since on a key of a map
+  `InPrior` is `Carried`. Final: 32 of 33 killed.
+- Wave 4's 82: 74 killed outright; six no longer applied and one did not
+  compile because this wave rewrote their text, and the seven, re-expressed on
+  the new text, are killed (`d-moved-stated-unrecorded` is this wave's
+  `d-decide-new-unrecorded`). `d-carried-before-kind`, equivalent at
+  `b917c55`, is now killed by `Kept`. `e-scalar-notext-matched` survives,
+  unreachable as before. Final: 81 of 82 killed.
+- The sixth review's 48: 44 killed, including its three unpinned survivors.
+  Three survive as the equivalents it triaged (`r6-mc-present-dropped`,
+  `r6-p-beforepresent-true`, `r6-d-carried-leaf-before`, the last re-expressed
+  on `follow`), and `r6-body-nested-compare` does not compile, as in the
+  review.
+
+Results: `scratchpad/w5/{mut,mut2,mut3,mut4,w4set,mine}-r.json`.
+
+| mutant | file | result |
+| --- | --- | --- |
+| `v-inprior-carried-dropped` | `terraformplan/value.go` | killed: `TestAnElementIsInPriorWhereverThePriorListHoldsIt` |
+| `v-inprior-only-carried` | `terraformplan/value.go` | killed: `TestAnElementIsInPriorWhereverThePriorListHoldsIt`, `TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant`, `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `v-inprior-true` | `terraformplan/value.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAValueIsCarriedWhateverItsSensitivity`, `TestAWriteThePlanDoesNotEvaluateIsStatedWhereTheUpdateMovesTheValue` and 3 more |
+| `m-elem-mask-at` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `m-carried-mask-at` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity` |
+| `m-inprior-inafter-dropped` | `terraformplan/mask.go` | killed: `TestAnElementIsInPriorWhereverThePriorListHoldsIt` |
+| `m-inprior-unknown-dropped` | `terraformplan/mask.go` | killed: `TestAValueIsCarriedWhateverItsSensitivity`, `TestAnElementIsInPriorWhereverThePriorListHoldsIt` |
+| `m-inprior-holds-true` | `terraformplan/mask.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsStatedWhereTheUpdateMovesTheValue`, `TestAnElementIsInPriorWhereverThePriorListHoldsIt` and 2 more |
+| `m-inprior-not-assigned` | `terraformplan/mask.go` | killed: `TestAnElementIsInPriorWhereverThePriorListHoldsIt`, `TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant`, `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `m-holds-inverted` | `terraformplan/mask.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAWriteThePlanDoesNotEvaluateIsStatedWhereTheUpdateMovesTheValue`, `TestAnElementIsInPriorWhereverThePriorListHoldsIt` and 2 more |
+| `m-holds-first-only` | `terraformplan/mask.go` | killed: `TestAnElementIsInPriorWhereverThePriorListHoldsIt` |
+| `d-kept-carried-false` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords` and 15 more |
+| `d-kept-carried-dropped` | `providers/declared/method.go` | killed: `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords`, `TestADenySkippedRestsTheVerdictOnWhyItWasSkipped` and 13 more |
+| `d-kept-single-ignored` | `providers/declared/method.go` | killed: `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-multi-false` | `providers/declared/method.go` | killed: `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-multi-true` | `providers/declared/method.go` | killed: `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-multi-null-dropped` | `providers/declared/method.go` | killed: `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-multi-absent-dropped` | `providers/declared/method.go` | killed: `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-multi-empty-dropped` | `providers/declared/method.go` | killed: `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-multi-empty-len` | `providers/declared/method.go` | killed: `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-array-false` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAPublicRangeTheProviderKeepsBesideAWriteIsNotStated`, `TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant` and 1 more |
+| `d-kept-array-carried` | `providers/declared/method.go` | killed: `TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant`, `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-object-false` | `providers/declared/method.go` | killed: `TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant`, `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-object-true` | `providers/declared/method.go` | killed: `TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant`, `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-kept-object-inprior` | `providers/declared/method.go` | survived: equivalent, on a key of a map InPrior is Carried |
+| `d-follow-single-true` | `providers/declared/method.go` | killed: `TestKeptFindsAnythingThePriorStateHoldsAtThePath` |
+| `d-carried-is-kept` | `providers/declared/method.go` | killed: `TestCarriedComparesTheWholeValue`, `TestCarriedFollowsABlockOnlyThroughItsOneElement` |
+| `d-decide-kept-is-carried` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAPublicRangeTheProviderKeepsBesideAWriteIsNotStated`, `TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant` |
+| `d-decide-updates-dropped` | `providers/declared/method.go` | killed: `TestTheMethodFollowsWhatTheConfigurationRecords` |
+| `d-decide-new-unrecorded` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 3 more |
+| `d-decide-new-dropped` | `providers/declared/method.go` | killed: `TestABlockIsDecidedByWhatIsWrittenInsideIt`, `TestAConstantThePlanCannotCompareIsUnrecordedWhereItIsKept`, `TestAKeyOfAMapIsDecidedAtTheKey` and 3 more |
+| `d-unwritten-kept-carried` | `providers/declared/method.go` | killed: `TestAnElementTheUpdateKeepsIsStatedOnlyByAConstant` |
+| `d-unwritten-kept-dropped` | `providers/declared/method.go` | killed: `TestADeclaredEnvironmentSaysWhatTheConfigurationRecords`, `TestADenySkippedRestsTheVerdictOnWhyItWasSkipped`, `TestADirectionCarriedFromStateIsPriorState` and 11 more |
