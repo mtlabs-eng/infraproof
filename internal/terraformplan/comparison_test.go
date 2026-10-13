@@ -392,6 +392,9 @@ func TestAnElementIsInPriorWhereverThePriorListHoldsIt(t *testing.T) {
 		"a prior null":             {`{"r": null}`, `{"r": ["a"]}`, `{}`, `{}`, `{}`, []bool{false}},
 		"a prior value not a list": {`{"r": "a"}`, `{"r": ["a"]}`, `{}`, `{}`, `{}`, []bool{false}},
 		"no prior state":           {`null`, `{"r": ["a"]}`, `{}`, `{}`, `{}`, []bool{false}},
+		// A mask can name an element the planned list omits; nothing is
+		// planned there, so it is not the prior null either.
+		"named only by a mask": {`{"r": [null]}`, `{"r": []}`, `{}`, `{"r": [true]}`, `{}`, []bool{false}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
