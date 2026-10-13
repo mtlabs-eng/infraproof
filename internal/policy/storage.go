@@ -151,6 +151,10 @@ func publicFinding(resource model.NormalizedResource, capabilities model.ObjectS
 		Observed:    evidence.KnownFact("object_storage.public_access", evidence.Bool(true)),
 		Evidence:    referencesOf(capabilities.PublicAccess),
 		Remediation: remediation,
+		VerificationSteps: []evidence.VerificationStep{
+			factStep("object_storage.public_access", capabilities.PublicAccess),
+			contractStep("object_storage.exposure"),
+		},
 	}
 }
 

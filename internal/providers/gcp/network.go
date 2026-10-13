@@ -64,6 +64,9 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	scope []terraformplan.ResourceChange) model.NetworkCapabilities {
 
 	rule := readFirewall(subject)
+	// Every input the verdict rests on, each with how it was established. The
+	// verdict is only as strong as the weakest of them.
+	rests := []model.Method{rule.blocksMethod, rule.directionMethod, rule.priorityMethod, rule.sourceMethod}
 	capabilities := model.NetworkCapabilities{Unresolved: m.ingressGaps(subject)}
 
 	if rule.unread {
@@ -87,21 +90,42 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 				continue
 			}
 			deny := readFirewall(candidate)
-			switch {
-			case deny.unread || deny.disabled || !deny.inbound || len(deny.denies) == 0:
+			if deny.unread || len(deny.denies) == 0 {
 				continue
-			case !deny.anySource:
+			}
+			// A deny skipped is skipped on the strength of its own inputs, and
+			// the verdict rests on them as it does on a deny it applies. Each
+			// ground below suffices alone, so the skip is as strong as the
+			// best established of those that hold.
+			var skippedOn []model.Method
+			if deny.disabled {
+				skippedOn = append(skippedOn, deny.disabledMethod)
+			}
+			if !deny.inbound {
+				skippedOn = append(skippedOn, deny.directionMethod)
+			}
+			if !deny.anySource {
 				// A deny reaches only the addresses it names. One scoped to a
 				// private range, or to a tag, says nothing about traffic from
 				// the internet -- and using it to cancel a grant open to the
 				// world reported PASS, with no finding and no unknown, for a
 				// port open to everyone. Azure's resolve has always required
 				// this; nothing proved either of them did.
+				skippedOn = append(skippedOn, deny.sourceMethod)
+			}
+			if len(skippedOn) > 0 {
+				rests = append(rests, declared.Strongest(skippedOn...))
 				continue
+			}
+			switch {
 			case deny.priority > rule.priority:
 				// Above this rule in the ordering, so it never reaches traffic
 				// this rule has already permitted. Equal is not above: a deny
 				// takes precedence over an allow of the same priority.
+				//
+				// The skip rests on the deny's priority, so a defaulted one is
+				// what the verdict rests on.
+				rests = append(rests, deny.priorityMethod)
 				continue
 			}
 
@@ -111,6 +135,9 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 				continue
 			}
 			if !together {
+				// Skipped because the two networks differ, which rests on
+				// both of them.
+				rests = append(rests, rule.networkMethod, deny.networkMethod)
 				continue
 			}
 			if !coversTargets(deny, rule) {
@@ -122,6 +149,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 			}
 
 			cited = append(cited, deny.cited...)
+			rests = append(rests, deny.blocksMethod, deny.directionMethod, deny.priorityMethod, deny.sourceMethod)
 			remaining, byProtocol = subtract(remaining, deny.denies, byProtocol)
 		}
 	}
@@ -129,15 +157,16 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	opened := openRanges(remaining, rule)
 	capabilities.OpenToAnyAddress = opened
 
+	method := declared.Weakest(rests...)
 	switch {
 	case len(opened) > 0:
-		capabilities.PublicIngress = model.Known(true, cited...)
+		capabilities.PublicIngress = model.Known(true, method, cited...)
 	default:
 		// Every rule of this firewall was read. The platform denies inbound
 		// traffic no rule allows, so a firewall that opens nothing to any
 		// address permits nothing from any address -- whatever another firewall
 		// allows is that firewall's own grant, reported there.
-		capabilities.PublicIngress = model.Known(false, cited...)
+		capabilities.PublicIngress = model.Known(false, method, cited...)
 	}
 
 	// Two different approximations, each with its own reason. They share a
@@ -228,6 +257,29 @@ type firewallRule struct {
 	// read, which bounds comparison with a deny without unsettling the rule.
 	targetsUnread bool
 	unread        bool
+	// directionMethod is how direction was established. Unwritten, it is read
+	// as the provider's INGRESS default, so a verdict resting on this rule
+	// rests on that default; it is Computed, so an update carries it.
+	directionMethod model.Method
+	// priorityMethod is how priority was established. Unwritten, it is the
+	// provider's documented 1000, and a verdict resting on the ordering rests
+	// on it.
+	priorityMethod model.Method
+	// blocksMethod is how the allow or deny blocks were established: a block
+	// the configuration does not record may be a dynamic one.
+	blocksMethod model.Method
+	// sourceMethod is how source_ranges was established. A verdict rests on
+	// whether the source reaches every address. It was removed once, on the
+	// premise that a source reaching every address was written wherever the
+	// configuration records the resource; lifecycle { ignore_changes } carries
+	// one nobody wrote, and the fourth review measured it on a real plan.
+	sourceMethod model.Method
+	// disabledMethod is how a disabled firewall's disabled was established,
+	// which a deny skipped for it rests on. Empty for an enabled one.
+	disabledMethod model.Method
+	// networkMethod is how network was established, which a deny skipped as
+	// being on another network rests on.
+	networkMethod model.Method
 	cited         []model.Provenance
 }
 
@@ -237,19 +289,35 @@ type protocolPorts struct {
 	ports    []model.PortRange
 }
 
+var (
+	// priorityArgument is Optional and not Computed: an unwritten one is
+	// planned to 1000 on every change.
+	priorityArgument = declared.Argument{Path: "priority"}
+	// directionArgument is Optional and Computed.
+	directionArgument = declared.Argument{Path: "direction"}
+	// sourceArgument is Optional and not Computed, with no default.
+	sourceArgument = declared.Argument{Path: "source_ranges"}
+	// disabledArgument is Optional and not Computed, defaulting to false.
+	disabledArgument = declared.Argument{Path: "disabled"}
+	// networkArgument is Required.
+	networkArgument = declared.Argument{Path: attrNetwork, Required: true}
+)
+
 // readFirewall reads one firewall resource.
 func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	cite := func(field string) model.Provenance {
 		return declared.Source(model.CloudGCP, change.Address, field, change.After.Field(field))
 	}
 	read := firewallRule{priority: defaultPriority, inbound: true,
-		cited: []model.Provenance{cite("priority"), cite("source_ranges")}}
+		cited:         []model.Provenance{cite("priority"), cite("source_ranges")},
+		networkMethod: networkArgument.Method(change)}
 
 	priority := change.After.Field("priority")
 	switch priority.State() {
 	case terraformplan.StateAbsent:
 		// The provider documents 1000 for an unstated priority, so an absent
 		// field is a value rather than a gap.
+		read.priorityMethod = priorityArgument.Method(change)
 	case terraformplan.StateKnown:
 		value, err := priority.Number().Int64()
 		if priority.Kind() != terraformplan.KindNumber || err != nil {
@@ -257,6 +325,9 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 			return read
 		}
 		read.priority = int(value)
+		// A real plan carries the default as a known 1000; the configuration
+		// says whether anybody wrote it.
+		read.priorityMethod = priorityArgument.Method(change)
 	default:
 		// `priority` is Optional and not Computed: the authoritative schema says
 		// so, and a real plan confirms it by emitting 1000 for an omitted one.
@@ -274,6 +345,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	switch direction.State() {
 	case terraformplan.StateAbsent:
 		// INGRESS by the provider's own default.
+		read.directionMethod = directionArgument.Method(change)
 	case terraformplan.StateKnown:
 		// A spelling this build cannot name is undetermined, not EGRESS. An
 		// egress firewall says nothing about who can reach in, so reading an
@@ -281,8 +353,12 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		switch {
 		case strings.EqualFold(direction.Text(), "INGRESS"):
 			read.inbound = true
+			// The provider writes its default into the plan as a known value;
+			// the configuration says whether anybody wrote it.
+			read.directionMethod = directionArgument.Method(change)
 		case strings.EqualFold(direction.Text(), "EGRESS"):
 			read.inbound = false
+			read.directionMethod = directionArgument.Method(change)
 		default:
 			read.unread = true
 			read.cited = append(read.cited, cite("direction"))
@@ -303,6 +379,7 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 			read.cited = append(read.cited, cite("direction"))
 			return read
 		}
+		read.directionMethod = directionArgument.Method(change)
 	}
 
 	disabled := change.After.Field("disabled")
@@ -310,6 +387,9 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 	case terraformplan.StateAbsent:
 	case terraformplan.StateKnown:
 		read.disabled = disabled.Kind() == terraformplan.KindBool && disabled.Bool()
+		if read.disabled {
+			read.disabledMethod = disabledArgument.MethodFor(change, false)
+		}
 	default:
 		// `disabled` is Optional and not Computed, and a real plan emits null for
 		// an omitted one -- which is absent, handled above. An unknown value is
@@ -326,6 +406,9 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		return read
 	}
 	read.anySource = source
+	ranges := change.After.Field("source_ranges")
+	read.sourceMethod = sourceArgument.MethodFor(change, ranges.Kind() == terraformplan.KindNull ||
+		(ranges.Kind() == terraformplan.KindArray && ranges.Len() == 0))
 
 	tags, tagsUnread := targetsOf(change, "target_tags")
 	accounts, accountsUnread := targetsOf(change, "target_service_accounts")
@@ -351,6 +434,11 @@ func readFirewall(change terraformplan.ResourceChange) firewallRule {
 		return read
 	}
 	read.allows, read.denies = allows, denies
+	blocks := "allow"
+	if len(allows) == 0 && len(denies) > 0 {
+		blocks = "deny"
+	}
+	read.blocksMethod = declared.Argument{Path: blocks, Block: true}.Method(change)
 	if len(allows) > 0 {
 		read.cited = append(read.cited, cite("allow"))
 	}

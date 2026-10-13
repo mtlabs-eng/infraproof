@@ -59,6 +59,10 @@ func about(address, evidenceAddress, path string) evidence.Bundle {
 				Path:            path,
 			}},
 			Remediation: "A remediation the tests do not care about.",
+			VerificationSteps: []evidence.VerificationStep{
+				{Fact: "object_storage.public_access", Method: evidence.MethodPlanStatedValue},
+				{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
+			},
 		}},
 		Unknowns: []evidence.Unknown{},
 	}

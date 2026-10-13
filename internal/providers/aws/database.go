@@ -97,6 +97,7 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 	cited := declared.Source(model.CloudAWS, subject.Address, attrPubliclyAccessible,
 		subject.After.Field(attrPubliclyAccessible))
 	value := subject.After.Field(attrPubliclyAccessible)
+	switchArgument := declared.Argument{Path: attrPubliclyAccessible}
 
 	if declared.Unstated(subject) {
 		// Nothing in this change states anything, so the absence below is not the
@@ -126,19 +127,26 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 		// default, and an absence beside an argument somebody did write is a
 		// value the plan withheld.
 		if declared.Unwritten(subject, attrPubliclyAccessible) {
-			return model.Known(false, cited)
+			return model.Known(false, switchArgument.Method(subject), cited)
 		}
 		return model.Unknown[bool](cited)
 	case terraformplan.StateKnown:
 		if value.Kind() != terraformplan.KindBool {
 			return model.Unknown[bool](cited)
 		}
-		return model.Known(value.Bool(), cited)
+		// The method follows the configuration: a real plan emits the default
+		// as a known value when nobody wrote it, and that is still a default.
+		// On an update the plan may carry an unwritten one over from state --
+		// on an Aurora instance the switch is Computed, true as readily as
+		// false, and the default only by coincidence.
+		return model.Known(value.Bool(), switchArgument.Method(subject), cited)
 	default:
 		if declared.Unwritten(subject, attrPubliclyAccessible) {
 			// Computed and nobody wrote it, so the provider's documented default
 			// applies: a database is not publicly accessible unless asked for.
-			return model.Known(false, cited)
+			// The method goes through the same mechanism as a known value, so
+			// a value the plan does not carry is never called prior state.
+			return model.Known(false, switchArgument.Method(subject), cited)
 		}
 		return model.Unknown[bool](cited)
 	}
@@ -340,7 +348,11 @@ func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	if stated := subject.After.Field(attrPort); stated.State() == terraformplan.StateKnown &&
 		stated.Kind() == terraformplan.KindNumber {
 		if value, err := stated.Number().Int64(); err == nil && value > 0 && value <= lastPort {
-			return model.Known(int(value),
+			// Stated only when somebody wrote it. `port` is Computed everywhere,
+			// so an update carries an unwritten one from state: the deployed
+			// port, which is neither stated nor the table's.
+			portArgument := declared.Argument{Path: attrPort}
+			return model.Known(int(value), portArgument.Method(subject),
 				declared.Source(model.CloudAWS, subject.Address, attrPort, stated)), false
 		}
 	}
@@ -362,7 +374,7 @@ func (m Mapper) listeningPort(subject terraformplan.ResourceChange,
 	if !named {
 		return model.Unknown[int](cited), true
 	}
-	return model.Known(port, cited), true
+	return model.Known(port, model.MethodDocumentedTable, cited), true
 }
 
 // clusterUncorrelated reports that the plan holds an Aurora cluster the subject

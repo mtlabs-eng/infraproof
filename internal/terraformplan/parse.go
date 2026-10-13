@@ -75,10 +75,10 @@ func parseDocument(raw []byte) (Plan, error) {
 
 	plan.ResourceChanges = parseResourceChanges(document, &errs)
 
-	configs, byAddress, calls := parseConfiguration(document, &errs)
+	configs, byAddress, calls, scopes := parseConfiguration(document, &errs)
 	plan.ProviderConfigs = configs
 	plan.ModuleCalls = calls
-	resolveProviderInstances(&plan, byAddress)
+	resolveProviderInstances(&plan, byAddress, newEvaluator(document, scopes))
 
 	if len(errs) > 0 {
 		return Plan{}, errors.Join(errs...)
@@ -249,6 +249,7 @@ func parseChangeBody(path string, body map[string]any, change *ResourceChange, e
 	// known, by definition.
 	change.Before = merge(before, beforePresent, mask{}, beforeSensitive)
 	change.After = merge(after, afterPresent, afterUnknown, afterSensitive)
+	change.After = markCarried(change.After, before, beforePresent, after, afterPresent, afterUnknown)
 }
 
 func parseMaskField(path string, body map[string]any, name string, errs *[]error) mask {

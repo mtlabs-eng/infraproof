@@ -20,6 +20,9 @@ const (
 	attrAccessType   = "container_access_type"
 	accessTypePublic = "blob"
 	accessTypeList   = "container"
+	// accessTypeDefault is the provider's documented default for an unwritten
+	// container_access_type, which is Optional and not Computed.
+	accessTypeDefault = "private"
 )
 
 // Mapper normalizes Azure blob containers.
@@ -164,9 +167,9 @@ func accountCapabilities(account terraformplan.ResourceChange, related []terrafo
 		return nil
 	}
 
-	gate, sources := accountAllowsPublic(&account)
+	gate, sources, method := accountAllowsPublic(&account)
 	if gate == answerNo {
-		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, sources...).Canonical()}
+		return &model.ObjectStorageCapabilities{PublicAccess: model.Known(false, method, sources...).Canonical()}
 	}
 
 	capabilities := &model.ObjectStorageCapabilities{
@@ -199,20 +202,21 @@ const (
 // container. Both the account gate and the container setting must say yes, and
 // either saying no is enough to prove it does not.
 func publicAccess(container terraformplan.ResourceChange, account *terraformplan.ResourceChange) model.Fact[bool] {
-	gate, gateSources := accountAllowsPublic(account)
-	setting, settingSources := containerIsPublic(container)
+	gate, gateSources, gateMethod := accountAllowsPublic(account)
+	setting, settingSources, settingMethod := containerIsPublic(container)
 
 	sources := append(gateSources, settingSources...)
 
 	// One definite no settles it, whatever the other says.
 	if gate == answerNo {
-		return model.Known(false, gateSources...).Canonical()
+		return model.Known(false, gateMethod, gateSources...).Canonical()
 	}
 	if setting == answerNo {
-		return model.Known(false, settingSources...).Canonical()
+		return model.Known(false, settingMethod, settingSources...).Canonical()
 	}
 	if gate == answerYes && setting == answerYes {
-		return model.Known(true, sources...).Canonical()
+		// Both are needed, so the grant is only as strong as the weaker.
+		return model.Known(true, declared.Weakest(gateMethod, settingMethod), sources...).Canonical()
 	}
 
 	if gate == answerRedacted || setting == answerRedacted {
@@ -224,45 +228,59 @@ func publicAccess(container terraformplan.ResourceChange, account *terraformplan
 // accountAllowsPublic reads the account-level gate. An account this plan does
 // not contain is not an account that permits nothing; it is an account nobody
 // here can see.
-func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model.Provenance) {
+//
+// The method says how the value read was established: a fact resting on a gate
+// nobody wrote rests on the provider's default. The gate is Optional and not
+// Computed, and its default is not one this build has measured, so only what
+// the configuration records decides it.
+func accountAllowsPublic(account *terraformplan.ResourceChange) (answer, []model.Provenance, model.Method) {
 	if account == nil {
-		return answerUnknown, nil
+		return answerUnknown, nil, ""
 	}
+	method := declared.Argument{Path: attrAllowPublic}.Method(*account)
 
 	value := account.After.Field(attrAllowPublic)
 	sources := []model.Provenance{declared.Source(model.CloudAzure, account.Address, attrAllowPublic, value)}
 	switch {
 	case value.Kind() == terraformplan.KindBool:
 		if value.Bool() {
-			return answerYes, sources
+			return answerYes, sources, method
 		}
-		return answerNo, sources
+		return answerNo, sources, method
 	case value.State() == terraformplan.StateRedacted:
-		return answerRedacted, sources
+		return answerRedacted, sources, method
 	default:
 		// Absent is not the provider default, and a readable value of the wrong
 		// kind is not an answer either: Bool returns false for both, and false
 		// here is what proves a container private.
-		return answerUnknown, sources
+		return answerUnknown, sources, method
 	}
 }
 
 // containerIsPublic reads the container's access level. blob exposes the blobs;
 // container additionally exposes the listing.
-func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance) {
+//
+// The method says how the value read was established; see accountAllowsPublic.
+// The default is "private", so a public access type the configuration does not
+// record as written, on a container that is not carrying it from state, is a
+// value the plan does not record anybody writing: unrecorded, not a default it
+// is not, and never stated.
+func containerIsPublic(container terraformplan.ResourceChange) (answer, []model.Provenance, model.Method) {
 	value := container.After.Field(attrAccessType)
+	method := declared.Argument{Path: attrAccessType}.MethodFor(container,
+		value.Kind() != terraformplan.KindString || value.Text() == accessTypeDefault)
 	sources := []model.Provenance{declared.Source(model.CloudAzure, container.Address, attrAccessType, value)}
 
 	switch {
 	case value.Kind() == terraformplan.KindString:
 		if value.Text() == accessTypePublic || value.Text() == accessTypeList {
-			return answerYes, sources
+			return answerYes, sources, method
 		}
-		return answerNo, sources
+		return answerNo, sources, method
 	case value.State() == terraformplan.StateRedacted:
-		return answerRedacted, sources
+		return answerRedacted, sources, method
 	default:
-		return answerUnknown, sources
+		return answerUnknown, sources, method
 	}
 }
 

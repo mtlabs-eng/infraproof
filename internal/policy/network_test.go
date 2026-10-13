@@ -34,7 +34,7 @@ func open(ranges ...model.OpenRange) model.Graph {
 		Family:      model.FamilyNetwork,
 		Interpreted: true,
 		Network: &model.NetworkCapabilities{
-			PublicIngress: model.Known(true, model.Provenance{
+			PublicIngress: model.Known(true, model.MethodStated, model.Provenance{
 				ResourceAddress: "aws_security_group.web",
 				AttributePath:   "ingress[0].cidr_blocks[0]",
 				Cloud:           model.CloudAWS,
@@ -200,7 +200,7 @@ func TestEveryProtocolOnEveryPortIsNotPermittedByAPortList(t *testing.T) {
 // holds the whole set and the set permits no ingress from any address.
 func TestProvenClosureIsSilent(t *testing.T) {
 	graph := open()
-	graph.Resources[0].Network.PublicIngress = model.Known(false, model.Provenance{
+	graph.Resources[0].Network.PublicIngress = model.Known(false, model.MethodStated, model.Provenance{
 		ResourceAddress: "aws_security_group.web",
 		AttributePath:   "ingress",
 		Cloud:           model.CloudAWS,

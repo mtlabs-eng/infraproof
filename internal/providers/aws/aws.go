@@ -172,6 +172,9 @@ const (
 type channel struct {
 	grant   answer
 	blocked answer
+	// method is how the grant, if any, was established: a canned ACL is stated,
+	// a policy document is this build's reading of one.
+	method  model.Method
 	sources []model.Provenance
 }
 
@@ -203,7 +206,7 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	// A grant nothing blocks settles it.
 	for _, c := range []channel{acl, policy} {
 		if c.grant == answerYes && c.blocked == answerNo {
-			return model.Known(true, c.sources...).Canonical()
+			return model.Known(true, c.method, c.sources...).Canonical()
 		}
 	}
 
@@ -232,12 +235,21 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 	// No route grants access. That only proves the bucket is not public if the
 	// plan also blocks the routes it cannot see — a policy or ACL applied
 	// outside this change.
+	//
+	// The proof rests on flags read as true. Every flag defaults to false and
+	// none is Computed, so a true the configuration does not record as written
+	// is prior state where an update carries it and unrecorded otherwise --
+	// never stated.
 	if blocksEveryRoute(block) || blocksEveryRoute(account) {
 		proven := block
 		if !blocksEveryRoute(proven) {
 			proven = account
 		}
-		return model.Known(false, blockProvenance(proven)...).Canonical()
+		var methods []model.Method
+		for _, flag := range []string{"block_public_acls", "ignore_public_acls", "block_public_policy", "restrict_public_buckets"} {
+			methods = append(methods, declared.Argument{Path: flag}.MethodFor(*proven, false))
+		}
+		return model.Known(false, declared.Weakest(methods...), blockProvenance(proven)...).Canonical()
 	}
 	return model.Unknown[bool](sources...).Canonical()
 }
@@ -247,11 +259,15 @@ func (m Mapper) publicAccess(subject terraformplan.ResourceChange, related, scop
 // can disable ACLs for the bucket outright.
 func aclChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
 	ownership := findType(related, typeOwnershipControls)
-	c := channel{blocked: strongest(
-		blockedBy(block, "block_public_acls", "ignore_public_acls"),
-		blockedBy(account, "block_public_acls", "ignore_public_acls"),
-		aclsDisabled(ownership),
-	)}
+	bucketBlocked, bucketMethods := blockedBy(block, "block_public_acls", "ignore_public_acls")
+	accountBlocked, accountMethods := blockedBy(account, "block_public_acls", "ignore_public_acls")
+	disabled, ownershipMethods := aclsDisabled(ownership)
+	c := channel{blocked: strongest(bucketBlocked, accountBlocked, disabled)}
+	// A grant through this route settles only when the route is not blocked, so
+	// it rests on the ACL and on every flag and ownership rule that answered
+	// "not blocked". If one of those is a flag nobody wrote, the provider's
+	// default is what the verdict rests on, and the method says so.
+	gates := append(append(bucketMethods, accountMethods...), ownershipMethods...)
 	if block != nil {
 		c.sources = blockProvenance(block)
 	}
@@ -269,6 +285,10 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 	}
 	value := acl.After.Field("acl")
 	c.sources = append(c.sources, declared.Source(model.CloudAWS, acl.Address, "acl", value))
+	// `acl` is Optional, not Computed and without a default, so a canned ACL
+	// the configuration does not record as written is not a default either.
+	aclMethod := declared.Argument{Path: "acl"}.MethodFor(*acl, value.Kind() != terraformplan.KindString)
+	c.method = declared.Weakest(append([]model.Method{aclMethod}, gates...)...)
 
 	switch value.State() {
 	case terraformplan.StateKnown:
@@ -286,10 +306,15 @@ func aclChannel(related []terraformplan.ResourceChange, block, account *terrafor
 // policyChannel reads the bucket policy and whether policies are blocked, at
 // either the bucket or the account level.
 func policyChannel(related []terraformplan.ResourceChange, block, account *terraformplan.ResourceChange) channel {
-	c := channel{blocked: strongest(
-		blockedBy(block, "block_public_policy", "restrict_public_buckets"),
-		blockedBy(account, "block_public_policy", "restrict_public_buckets"),
-	)}
+	// A defaulted flag is discarded here on purpose. A policy grant through a
+	// defaulted flag rests on two inputs that are not stated, the default and the
+	// interpreted document. An order of strength exists (declared.Weakest), and
+	// the product decision recorded in milestone 10 is still that the method
+	// stays the document's: the document is what the finding cites, and a
+	// reader should see when a verdict rests on this build's reading of one.
+	bucketBlocked, _ := blockedBy(block, "block_public_policy", "restrict_public_buckets")
+	accountBlocked, _ := blockedBy(account, "block_public_policy", "restrict_public_buckets")
+	c := channel{method: model.MethodPolicyDocument, blocked: strongest(bucketBlocked, accountBlocked)}
 	if block != nil {
 		c.sources = blockProvenance(block)
 	}
@@ -319,19 +344,28 @@ func policyChannel(related []terraformplan.ResourceChange, block, account *terra
 }
 
 // blockedBy reports whether either of two block flags is set.
-func blockedBy(block *terraformplan.ResourceChange, flags ...string) answer {
+//
+// The second result is the method of each flag read as known false: a "not
+// blocked" rests on all of them. A flag the configuration does not write is the
+// provider's default, false, which the provider writes into the plan; an empty
+// block body is recorded with no expressions at all, and that is still a body
+// that writes no flag. It is only meaningful when the answer is answerNo. No
+// block resource at all is nothing to rest on.
+func blockedBy(block *terraformplan.ResourceChange, flags ...string) (answer, []model.Method) {
 	if block == nil {
-		return answerNo
+		return answerNo, nil
 	}
 
 	result := answerNo
+	var methods []model.Method
 	for _, flag := range flags {
 		value := block.After.Field(flag)
 		switch value.State() {
 		case terraformplan.StateKnown:
 			if value.Bool() {
-				return answerYes
+				return answerYes, nil
 			}
+			methods = append(methods, declared.Argument{Path: flag}.Method(*block))
 		case terraformplan.StateRedacted:
 			result = answerRedacted
 		default:
@@ -340,7 +374,7 @@ func blockedBy(block *terraformplan.ResourceChange, flags ...string) answer {
 			}
 		}
 	}
-	return result
+	return result, methods
 }
 
 // strongest combines several independent blocks. A definite yes from any of
@@ -364,24 +398,30 @@ func strongest(answers ...answer) answer {
 // aclsDisabled reports whether ownership controls turn ACLs off for the bucket.
 // BucketOwnerEnforced makes an ACL impossible to apply at all, so an ACL
 // granting public access cannot take effect and the apply would fail.
-func aclsDisabled(controls *terraformplan.ResourceChange) answer {
+//
+// The second result is the method of the ownership a "not disabled" rests on.
+// `rule` is a block, so a rule nobody recorded may be a dynamic one.
+func aclsDisabled(controls *terraformplan.ResourceChange) (answer, []model.Method) {
 	if controls == nil {
-		return answerNo
+		return answerNo, nil
 	}
 
 	rules := controls.After.Field("rule")
 	if rules.Kind() != terraformplan.KindArray || rules.Len() == 0 {
-		return unreadable(rules)
+		return unreadable(rules), nil
 	}
 
 	result := answerNo
+	var methods []model.Method
+	ownershipArgument := declared.Argument{Path: "rule.object_ownership", Required: true}
 	for i := range rules.Len() {
 		ownership := rules.At(i).Field("object_ownership")
 		switch ownership.State() {
 		case terraformplan.StateKnown:
 			if ownership.Text() == "BucketOwnerEnforced" {
-				return answerYes
+				return answerYes, nil
 			}
+			methods = append(methods, ownershipArgument.Method(*controls))
 		case terraformplan.StateRedacted:
 			result = answerRedacted
 		default:
@@ -390,7 +430,7 @@ func aclsDisabled(controls *terraformplan.ResourceChange) answer {
 			}
 		}
 	}
-	return result
+	return result, methods
 }
 
 func unreadable(value terraformplan.Value) answer {

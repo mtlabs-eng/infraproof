@@ -131,7 +131,7 @@ func DatabaseExposure(contract intent.Contract, graph model.Graph) Result {
 			// declaration written for an intentionally public replica silence an
 			// accidentally public database beside it.
 			result.Findings = append(result.Findings,
-				reachableFinding(resource, capabilities, admits, declared))
+				reachableFinding(resource, capabilities, admits, how, declared))
 			if len(capabilities.GatedBy) > 0 && !portUsable(capabilities.Port) {
 				// The verdict did not need the port -- a gate admitting every
 				// usable port reaches the database whatever it listens on -- and
@@ -214,10 +214,12 @@ func admitsAnyAddress(capabilities model.DatabaseCapabilities,
 		if !gate.Network.PublicIngress.Get() {
 			continue
 		}
-		reaches, wider := rangesReach(gate.Network.OpenToAnyAddress, capabilities.Port)
+		reaches, wider, byPort := rangesReach(gate.Network.OpenToAnyAddress, capabilities.Port)
 		if reaches {
 			how.widerThanReality = how.widerThanReality || wider
-			return model.Known(true, referencesTo(gate)...), how
+			how.gate = gate.Network.PublicIngress
+			how.byPort = byPort
+			return model.Known(true, model.MethodReferenceResolved, referencesTo(gate)...), how
 		}
 		if gate.Network.RangesPartial {
 			// The port is not in the set, and the set is not the whole set: at
@@ -248,7 +250,12 @@ func admitsAnyAddress(capabilities model.DatabaseCapabilities,
 	if !settled {
 		return model.Unknown[bool](capabilities.AdmitsAnyAddress.Sources...), how
 	}
-	return model.Known(false, capabilities.AdmitsAnyAddress.Sources...), how
+	method := model.MethodReferenceResolved
+	if len(capabilities.GatedBy) == 0 {
+		// No gate was consulted: the mapper's own fact settled it.
+		method = capabilities.AdmitsAnyAddress.Method()
+	}
+	return model.Known(false, method, capabilities.AdmitsAnyAddress.Sources...), how
 }
 
 // approximation records how far the admission answer can be trusted, so every
@@ -268,10 +275,17 @@ type approximation struct {
 	// unreadableGates names the gates the graph does not hold, so an unknown can
 	// say which resource to go and look for.
 	unreadableGates []string
+	// gate is the deciding gate's own ingress fact, when a gate decided, so the
+	// finding can say how the gate's openness was established.
+	gate model.Fact[bool]
+	// byPort: reachability was decided by a known port falling in a range, so
+	// the port entered the verdict. Only the steps read it; no decision does.
+	byPort bool
 }
 
 // rangesReach reports whether any range admitted from every address reaches this
-// database's port, and whether the answer is wider than reality.
+// database's port, whether the answer is wider than reality, and whether the
+// port decided it. The third result feeds only the finding's verification steps.
 //
 // Every range is scanned and an exact containment is preferred over an
 // approximation. Returning on the first port-less range made the answer depend
@@ -282,7 +296,7 @@ type approximation struct {
 // protocols a database answers on, so it is reported as reaching -- the direction
 // that cannot hide a grant -- and the approximation says so, because a BLOCK
 // resting on it is a BLOCK whose claim is wider than the evidence.
-func rangesReach(open []model.OpenRange, port model.Fact[int]) (reaches, wider bool) {
+func rangesReach(open []model.OpenRange, port model.Fact[int]) (reaches, wider, byPort bool) {
 	// The protocol decides first, because it decides without the port. A
 	// protocol with no ports cannot reach a port, whether this build knows the
 	// port or not -- so a rule admitting only ICMP reaches nothing a database
@@ -303,7 +317,7 @@ func rangesReach(open []model.OpenRange, port model.Fact[int]) (reaches, wider b
 		// when the first is true, so flipping it here changes nothing. Written
 		// false because that is what it means, and the test for this shape
 		// asserts the absence of both port disclosures rather than this value.
-		return false, false
+		return false, false, false
 	}
 
 	if !port.IsKnown() || port.Get() <= 0 {
@@ -321,23 +335,31 @@ func rangesReach(open []model.OpenRange, port model.Fact[int]) (reaches, wider b
 		// zero made the most open rule set there is read as an approximation.
 		for _, admitted := range ported {
 			if admitted.Ports.Contains(model.PortRange{From: 1, To: 65535}) {
-				return true, false
+				return true, false, false
 			}
 		}
 		// Otherwise every range that could carry the database's port is treated
 		// as reaching it, which over-reports and says so.
-		return true, true
+		return true, true, false
 	}
 
 	wanted := model.PortRange{From: port.Get(), To: port.Get()}
+	everyPort := false
+	for _, admitted := range ported {
+		if admitted.Ports.Contains(model.PortRange{From: 1, To: 65535}) {
+			everyPort = true
+		}
+	}
 	for _, admitted := range ported {
 		if admitted.Ports.Contains(wanted) {
-			return true, false
+			// A range admitting every usable port reaches the database whatever
+			// it listens on, so the port did not decide.
+			return true, false, !everyPort
 		}
 	}
 	// Ruled out by the port, which came from the engine rather than the plan.
 	// That is the silence the caller discloses.
-	return false, false
+	return false, false, false
 }
 
 // referencesTo cites a gate's own deciding fact, so a reader following the
@@ -365,7 +387,7 @@ func referencesTo(gate model.NormalizedResource) []model.Provenance {
 // an intentionally public replica silence an accidentally public database beside
 // it, which is criterion 9 of this milestone read the way it was written.
 func reachableFinding(resource model.NormalizedResource, capabilities model.DatabaseCapabilities,
-	admits model.Fact[bool], declared intent.Exposure) evidence.Finding {
+	admits model.Fact[bool], how approximation, declared intent.Exposure) evidence.Finding {
 
 	disposition := evidence.DispositionWarn
 	claim := "The change makes a database reachable from any address, and the intent contract does " +
@@ -388,6 +410,21 @@ func reachableFinding(resource model.NormalizedResource, capabilities model.Data
 			"declaration was written for."
 	}
 
+	// One step per fact the verdict rests on. The gate's own ingress only when
+	// a gate decided, and the port only when it fell in a range that did not
+	// admit every port -- otherwise the port decided nothing.
+	steps := []evidence.VerificationStep{
+		factStep("database.public_endpoint", capabilities.PublicEndpoint),
+		factStep("database.admitted_by", admits),
+		contractStep("database.exposure"),
+	}
+	if how.gate.IsKnown() {
+		steps = append(steps, factStep("network.public_ingress", how.gate))
+	}
+	if how.byPort {
+		steps = append(steps, factStep("database.port", capabilities.Port))
+	}
+
 	return evidence.Finding{
 		RuleID:      RuleDatabasePublicReachable,
 		Severity:    evidence.SeverityHigh,
@@ -401,8 +438,9 @@ func reachableFinding(resource model.NormalizedResource, capabilities model.Data
 		Observed: evidence.KnownFact("database.reachable_from_any_address", evidence.Bool(true)),
 		// Both halves, because a reader needs to know which rule and which
 		// switch between them produced this.
-		Evidence:    append(referencesOf(capabilities.PublicEndpoint), referencesOf(admits)...),
-		Remediation: remediation,
+		Evidence:          append(referencesOf(capabilities.PublicEndpoint), referencesOf(admits)...),
+		Remediation:       remediation,
+		VerificationSteps: steps,
 	}
 }
 

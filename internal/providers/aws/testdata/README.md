@@ -97,3 +97,132 @@ placeholder credentials, and the provider's credential arguments and the databas
 password removed from the committed files. Each exists because a review found a
 decision nothing exercised, and each was generated rather than written so the
 shape it turns on is the provider's rather than this project's.
+
+Hand-authored storage fixtures:
+
+- `public-acl-and-policy.json` — both channels grant; the ACL is the cited proof.
+  Its configuration writes the four bucket block flags as `false`, so the ACL
+  proof rests on nothing the provider defaulted and stays `plan-stated-value`.
+- `public-acl-flags-written.json` — `public-acl` with the four bucket block flags
+  written as `false` in the configuration; `after` is unchanged. The written half
+  of the pair whose unwritten half is `public-acl`: the ACL grant is
+  `plan-stated-value` here and `provider-default` there.
+- `public-acl-account-flags-defaulted.json` — a public-read ACL, no bucket block,
+  and an account-wide block whose four flags are `false` in `after` and written
+  nowhere in the configuration. The grant rests on the account block's defaults,
+  so it is `provider-default`.
+
+Most storage fixtures here predate milestone 10, and their configurations list
+only the arguments that carry a reference (`bucket`). Every block flag they set
+in `after` therefore reads as unwritten, so a step on them may say
+`provider-default` for a value the fixture meant as written. `public-acl`,
+`public-policy` and the other open-block fixtures read that way on purpose now.
+The blocked fixtures set the flags `true` on a new block, which no real plan
+carries for a flag nobody wrote -- none is Computed and each defaults to
+`false` -- so their proof of prevention is `configuration-unrecorded`: a value
+the configuration does not record as written is never stated. They cannot be
+corrected: each has a milestone 09 baseline, which records its plan digest.
+`private-flags-written` is `private` with the four flags recorded in the
+`configuration` block, `after` unchanged, and its proof is stated.
+
+## Real plans added by milestone 10's adversarial review
+
+Real `terraform plan -refresh=false` then `terraform show -json`, Terraform
+1.14.0, `hashicorp/aws` 6.67.0, `skip_*` flags and placeholder credentials; the
+two credential arguments and every password value removed afterwards. The
+update plans ran against a hand-written state file and contacted nothing.
+
+- `real-rds-unwritten-update.json` and `real-rds-unwritten-create.json`: one
+  configuration, planned against a state and without one. The Aurora instance
+  writes no `publicly_accessible` and nothing writes `port`; the state holds
+  `true` and 5432. On the update both are carried and known, `prior-state`; on
+  the create the port is unknown and the engine table supplies it.
+- `real-sg-ingress-from-state.json`: a group whose configuration writes name,
+  vpc_id and tags and no `ingress`, on an update whose state holds one inline
+  rule open to the world. Terraform carries it; the grant is
+  `configuration-unrecorded`, since a dynamic `ingress` leaves the same plan.
+- `real-acl-account-block-empty.json` and `real-acl-account-block-one-flag.json`:
+  a public-read ACL through `resource "aws_s3_account_public_access_block" "acct" {}`,
+  which Terraform records with no `expressions` key, and through one that writes
+  an unrelated flag. Both are `provider-default`.
+
+## Real plans added by milestone 10's fourth review
+
+Same tooling: Terraform 1.14.0, `hashicorp/aws` 6.67.0, `plan -refresh=false`
+against a hand-written state where the change is an update, nothing applied,
+the two credential arguments and every password value removed afterwards.
+
+- `real-ignore-changes.json`: `lifecycle { ignore_changes }` on a bucket that
+  writes no `tags` (state: `environment = prod`), an ACL that writes `private`
+  (state: `public-read`, ownership `ObjectWriter`) and a group that writes one
+  inline rule, 443 from `10.0.0.0/8` (state: 22 from `0.0.0.0/0`). Every
+  `after` is the state's and the configuration does not record `lifecycle`:
+  each value is `prior-state`.
+- `real-sg-tags-ignored.json`: a group that writes no `tags`, with
+  `ignore_changes = [tags]` and `environment = production` in state.
+- `real-null-variables-update.json`: `real-rds-unwritten-update`'s shape with
+  the Aurora instance writing `publicly_accessible = var.publicly_accessible`
+  and the instance `port = var.port`, both defaulting to `null`. Terraform
+  carries the state's `true` and 5432 exactly as when the arguments are
+  omitted.
+- `real-acl-block-flags-reset.json`: a block that writes only
+  `block_public_policy = true`, against a state holding all four flags `true`;
+  the update plans the other three back to `false`, the provider's default.
+- `real-ownership-dynamic-rule.json`: a public-read ACL beside ownership controls
+  whose `rule` is a `dynamic` block, which the configuration does not record.
+- `real-sg-inline-and-carried-rule.json`: a group open on 22 through a written
+  inline rule, beside a separate rule that writes `10.0.0.0/8` with
+  `ignore_changes = [cidr_ipv4]` and `0.0.0.0/0` on 443 in state, and a third
+  rule that opens 80 to `10.0.0.0/8` only.
+- `real-reference-write-ignored.json`: `real-ignore-changes`'s state and
+  lifecycle blocks with every overridden value written by something the plan
+  does not evaluate: the bucket `tags = { environment = var.environment }`
+  (`dev`), the ACL `acl = var.acl` (`private`), and the group's inline rule
+  `cidr_blocks = [local.cidr]` (`10.0.0.0/8`). The configuration records only
+  the references; every `after` is the state's.
+- `real-reference-write-unchanged.json`: no `ignore_changes`. Against the same
+  state, `tags` from a variable holding `prod`, `acl = lower(var.acl)` holding
+  `public-read` -- recorded exactly as `var.acl` -- and an inline rule from a
+  variable holding `0.0.0.0/0`, each equal to the state's, so the plan is a
+  no-op; beside group `const`, the same rule written as constants.
+- `real-reference-write-moved.json`: the same writes against a state holding
+  `environment = dev`, `private` and 22 from `10.0.0.0/8`: the update moves each
+  value to the configuration's.
+- `real-function-write-unchanged.json`: a bucket writing
+  `tags = { environment = lower("PROD") }`, which the configuration records as
+  `{}` -- neither a value nor a reference -- against a state holding
+  `environment = prod`; a no-op.
+
+## Real plans added by milestone 10's fifth review
+
+Terraform 1.14.0 and `hashicorp/aws` 6.67.0, `plan -refresh=false` against a
+hand-written state, nothing applied; the provider's placeholder auth was
+stripped on import.
+
+- `real-tags-partial-ignore.json`: bucket `b` writes
+  `tags = { environment = "staging", team = "b" }` with
+  `ignore_changes = [tags["environment"]]` against a state holding
+  `{ environment = "prod", team = "a" }`: the update moves `team` and keeps the
+  state's `environment`. Bucket `r` is replaced (its name changes) with
+  `ignore_changes = [tags]`, beside an ownership rule and an ACL writing
+  `private` under `ignore_changes = [acl]`; a replacement applies the
+  configuration.
+- `real-tags-sensitive-ignored.json`: bucket `s` writes
+  `tags = { environment = "staging", owner = var.owner }` with `owner`
+  declared `sensitive` (its default is the placeholder `team-x`) and
+  `ignore_changes = [tags]`, against a state holding `prod` and a sensitive
+  `owner`; a no-op. Beside it, groups `n1` and `n2` write an inline rule with
+  `protocol = "TCP"` (and `from_port = "22"`) and `protocol = "6"`, against a
+  state holding `tcp`; the provider treats each as `tcp`, and each is a no-op.
+- `real-tags-sensitive-ignored-control.json`: the same configuration with
+  `owner` not sensitive.
+- `real-sg-null-attribute-from-state.json`: group `web` writes one inline rule,
+  443/tcp from `10.0.0.0/8`, with `ignore_changes = [ingress]`, against a state
+  holding the same rule with `ipv6_cidr_blocks = ["::/0"]`; Terraform records
+  the rule with `ipv6_cidr_blocks = null` and the no-op keeps `::/0`. Group
+  `ctl` is the same without `ignore_changes`: the update plans `[]`. Group
+  `ports` writes 443/tcp from `0.0.0.0/0` with a description, as the state
+  holds.
+- `real-sg-unwritten-source-from-state.json`: group `web` writes a 22/tcp rule
+  with no source and `ignore_changes = [ingress]`, against a state whose rule
+  admits `0.0.0.0/0`; the update (a tag moves) keeps it.

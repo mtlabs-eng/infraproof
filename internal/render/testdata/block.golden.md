@@ -26,6 +26,8 @@ Object storage permits public access.
 - Expected: `object_storage.public_access` = `false`
 - Observed: `object_storage.public_access` = `true` (KNOWN)
 - Evidence: terraform_plan `aws_s3_bucket.assets` `resource_changes[].change.after` at `main.tf:6`
+- Verified by: `contract.object_storage.exposure` (intent-comparison)
+- Verified by: `object_storage.public_access` (plan-stated-value)
 - Remediation: Disable public access using the provider-supported controls.
 
 ## Unknowns

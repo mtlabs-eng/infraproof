@@ -72,7 +72,11 @@ func TestMarkdownOrdersFindingsCanonically(t *testing.T) {
 		Disposition: evidence.DispositionInfo,
 		Claim:       "An informational observation.",
 		Remediation: "No remediation required.",
-		Evidence:    []evidence.EvidenceRef{},
+		VerificationSteps: []evidence.VerificationStep{
+			{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
+			{Fact: "object_storage.versioning", Method: evidence.MethodPlanStatedValue},
+		},
+		Evidence: []evidence.EvidenceRef{},
 	}}, bundle.Findings...)
 
 	got, err := render.Markdown(bundle)
@@ -482,6 +486,10 @@ func hostileBundle() evidence.Bundle {
 			Evidence: []evidence.EvidenceRef{{Source: "terraform_plan",
 				ResourceAddress: address, Path: "acl"}},
 			Remediation: "Remove the grant.",
+			VerificationSteps: []evidence.VerificationStep{
+				{Fact: "object_storage.public_access", Method: evidence.MethodPlanStatedValue},
+				{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
+			},
 		}},
 		Unknowns: []evidence.Unknown{{
 			CheckID: "STORAGE_PUBLIC_DETERMINABLE", Required: false,
@@ -993,5 +1001,20 @@ func TestAPipeIsEscapedExactlyOnce(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `aws_s3_bucket.b["a\|b"]`) {
 		t.Fatalf("the pipe was not escaped exactly once:\n%s", out)
+	}
+}
+
+func TestAFindingSaysHowItWasVerified(t *testing.T) {
+	out, err := render.Markdown(contractBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"- Verified by: `object_storage.public_access` (plan-stated-value)",
+		"- Verified by: `contract.object_storage.exposure` (intent-comparison)",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
 	}
 }

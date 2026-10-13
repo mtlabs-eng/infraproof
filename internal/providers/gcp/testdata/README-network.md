@@ -99,3 +99,37 @@ Each fixture is one question:
 | `fw-unknown-priority` | a priority the plan has not determined, so nothing can be ordered against it |
 | `fw-icmp-deny-one-port` | a deny limited to one port, which cannot reach a protocol that has none |
 | `fw-default-priority-tied` | a deny at 1000 against an unstated priority, which pins the default exactly |
+| `fw-public-direction-omitted` | `fw-public` with `direction` absent from `after` and from the configuration: the INGRESS default, so the verdict's method is the provider's default (`fw-public` itself holds INGRESS in `after` with nothing in the configuration, which is the same default) |
+| `fw-public-direction-written` | `fw-public` with `direction = "INGRESS"` written in the configuration, so the same value is stated |
+| `fw-denied-lower-direction-omitted` | `fw-denied-lower` with `web`'s `direction` written and the cancelling deny `block`'s omitted, so `web`'s closed verdict is the provider's default only because of the deny's own direction |
+| `fw-deny-above-direction-omitted` | `fw-deny-above` with `web`'s `direction` written and the deny `block`'s omitted: the deny is skipped for priority and never applied, so `web` stays open and stated |
+| `fw-priority-written` | `fw-default-priority-open` with `direction` and `priority` written on both firewalls and `web` at 1000: the deny at 1001 is above `web`, which stays open and stated |
+| `fw-priority-omitted` | the same with `web`'s `priority` absent from `after` and from the configuration: the mapper applies the documented 1000, so the open verdict is the provider's default |
+| `fw-priority-unwritten` | the same with `web`'s `priority` known 1000 in `after` and unwritten, the shape a real plan emits for the default |
+| `fw-deny-above-priority-unwritten` | `fw-priority-written` with the deny `block`'s `priority` (1001) unwritten: the skip rests on the deny's default, so `web`'s open verdict is the provider's default |
+| `fw-denied-lower-priority-unwritten` | `fw-denied-lower` with `direction` written on both and `priority` written on `web` only: the deny at 100 applies on a priority nobody wrote, so `web`'s closed verdict is the provider's default |
+| `fw-public-priority-written` | `fw-public` with `priority` written: INGRESS known in `after` and unwritten, so direction alone makes the method the provider's default |
+| `fw-public-direction-computed` | `fw-public-direction-omitted` with `direction` unknown in `after_unknown`, the shape a real create plan emits for an unwritten one; `priority` written, so direction alone makes the method the provider's default |
+
+The `-direction-` fixtures above also write `priority` on every firewall,
+so that only `direction` decides their method. Every fixture in this table also
+records the `allow` or `deny` blocks and the `source_ranges` its `after`
+carries: a verdict rests on those as well, and a block the configuration does
+not record reads `configuration-unrecorded`. `fw-public-direction-written` and
+`fw-public-priority-written` are the criterion 3 pair: their configurations
+differ only in `direction`.
+
+`real-firewall-dynamic-allow.json` is a real plan (Terraform 1.14.0,
+`hashicorp/google` 6.50.0, placeholder token removed) of two firewalls that
+differ only in writing `allow` as a block or as a `dynamic` block, which the
+configuration does not record. `real-firewall-direction-from-state.json` is a
+real update plan, against a hand-written state, of a firewall that writes
+neither `direction` nor `priority`: Terraform carries `direction`, which is
+Computed, and plans `priority` to 1000, so the verdict is `prior-state`.
+
+Every other hand-authored fixture here predates milestone 10, and its
+configuration lists only the arguments that carry a reference (`network`). A
+`priority` or `direction` it sets in `after` therefore reads as unwritten, so a
+step on it may say `provider-default` for a value the fixture meant as written,
+and its unrecorded `allow` makes the step `configuration-unrecorded`. Each has a
+milestone 09 baseline recording its plan digest, so none can be corrected.

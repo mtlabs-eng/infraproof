@@ -1,0 +1,462 @@
+{
+ "format_version": "1.2",
+ "terraform_version": "1.14.0",
+ "planned_values": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_storage_bucket.assets",
+     "mode": "managed",
+     "type": "google_storage_bucket",
+     "name": "assets",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 3,
+     "values": {
+      "autoclass": [],
+      "cors": [],
+      "custom_placement_config": [],
+      "default_event_based_hold": false,
+      "effective_labels": {},
+      "enable_object_retention": false,
+      "encryption": [],
+      "force_destroy": false,
+      "hierarchical_namespace": [],
+      "id": "assets-example",
+      "ip_filter": [],
+      "labels": {},
+      "lifecycle_rule": [],
+      "location": "US",
+      "logging": [],
+      "name": "assets-example",
+      "project": "fake-project",
+      "project_number": null,
+      "public_access_prevention": "inherited",
+      "requester_pays": false,
+      "retention_policy": [],
+      "rpo": "DEFAULT",
+      "self_link": "https://www.googleapis.com/storage/v1/b/assets-example",
+      "soft_delete_policy": [],
+      "storage_class": "STANDARD",
+      "terraform_labels": {},
+      "time_created": null,
+      "timeouts": null,
+      "uniform_bucket_level_access": true,
+      "updated": null,
+      "url": "gs://assets-example",
+      "versioning": [],
+      "website": []
+     },
+     "sensitive_values": {
+      "autoclass": [],
+      "cors": [],
+      "custom_placement_config": [],
+      "effective_labels": {},
+      "encryption": [],
+      "hierarchical_namespace": [],
+      "ip_filter": [],
+      "labels": {},
+      "lifecycle_rule": [],
+      "logging": [],
+      "retention_policy": [],
+      "soft_delete_policy": [],
+      "terraform_labels": {},
+      "versioning": [],
+      "website": []
+     }
+    },
+    {
+     "address": "google_storage_bucket_iam_member.reader",
+     "mode": "managed",
+     "type": "google_storage_bucket_iam_member",
+     "name": "reader",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 0,
+     "values": {
+      "bucket": "b/assets-example",
+      "condition": [],
+      "etag": "CAE=",
+      "id": "b/assets-example/roles/storage.objectViewer/allUsers",
+      "member": "allUsers",
+      "role": "roles/storage.objectViewer"
+     },
+     "sensitive_values": {
+      "condition": []
+     }
+    },
+    {
+     "address": "google_storage_bucket_iam_policy.policy",
+     "mode": "managed",
+     "type": "google_storage_bucket_iam_policy",
+     "name": "policy",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 0,
+     "values": {
+      "bucket": "assets-example",
+      "policy_data": "{\"bindings\":[{\"members\":[\"user:bob@example.com\"],\"role\":\"roles/storage.objectViewer\"}]}"
+     },
+     "sensitive_values": {}
+    }
+   ]
+  }
+ },
+ "resource_changes": [
+  {
+   "address": "google_storage_bucket.assets",
+   "mode": "managed",
+   "type": "google_storage_bucket",
+   "name": "assets",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "autoclass": [],
+     "cors": [],
+     "custom_placement_config": [],
+     "default_event_based_hold": false,
+     "effective_labels": {},
+     "enable_object_retention": false,
+     "encryption": [],
+     "force_destroy": false,
+     "hierarchical_namespace": [],
+     "id": "assets-example",
+     "ip_filter": [],
+     "labels": {},
+     "lifecycle_rule": [],
+     "location": "US",
+     "logging": [],
+     "name": "assets-example",
+     "project": "fake-project",
+     "project_number": null,
+     "public_access_prevention": "inherited",
+     "requester_pays": false,
+     "retention_policy": [],
+     "rpo": "DEFAULT",
+     "self_link": "https://www.googleapis.com/storage/v1/b/assets-example",
+     "soft_delete_policy": [],
+     "storage_class": "STANDARD",
+     "terraform_labels": {},
+     "time_created": null,
+     "timeouts": null,
+     "uniform_bucket_level_access": true,
+     "updated": null,
+     "url": "gs://assets-example",
+     "versioning": [],
+     "website": []
+    },
+    "after": {
+     "autoclass": [],
+     "cors": [],
+     "custom_placement_config": [],
+     "default_event_based_hold": false,
+     "effective_labels": {},
+     "enable_object_retention": false,
+     "encryption": [],
+     "force_destroy": false,
+     "hierarchical_namespace": [],
+     "id": "assets-example",
+     "ip_filter": [],
+     "labels": {},
+     "lifecycle_rule": [],
+     "location": "US",
+     "logging": [],
+     "name": "assets-example",
+     "project": "fake-project",
+     "project_number": null,
+     "public_access_prevention": "inherited",
+     "requester_pays": false,
+     "retention_policy": [],
+     "rpo": "DEFAULT",
+     "self_link": "https://www.googleapis.com/storage/v1/b/assets-example",
+     "soft_delete_policy": [],
+     "storage_class": "STANDARD",
+     "terraform_labels": {},
+     "time_created": null,
+     "timeouts": null,
+     "uniform_bucket_level_access": true,
+     "updated": null,
+     "url": "gs://assets-example",
+     "versioning": [],
+     "website": []
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "autoclass": [],
+     "cors": [],
+     "custom_placement_config": [],
+     "effective_labels": {},
+     "encryption": [],
+     "hierarchical_namespace": [],
+     "ip_filter": [],
+     "labels": {},
+     "lifecycle_rule": [],
+     "logging": [],
+     "retention_policy": [],
+     "soft_delete_policy": [],
+     "terraform_labels": {},
+     "versioning": [],
+     "website": []
+    },
+    "after_sensitive": {
+     "autoclass": [],
+     "cors": [],
+     "custom_placement_config": [],
+     "effective_labels": {},
+     "encryption": [],
+     "hierarchical_namespace": [],
+     "ip_filter": [],
+     "labels": {},
+     "lifecycle_rule": [],
+     "logging": [],
+     "retention_policy": [],
+     "soft_delete_policy": [],
+     "terraform_labels": {},
+     "versioning": [],
+     "website": []
+    }
+   }
+  },
+  {
+   "address": "google_storage_bucket_iam_member.reader",
+   "mode": "managed",
+   "type": "google_storage_bucket_iam_member",
+   "name": "reader",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "bucket": "b/assets-example",
+     "condition": [],
+     "etag": "CAE=",
+     "id": "b/assets-example/roles/storage.objectViewer/allUsers",
+     "member": "allUsers",
+     "role": "roles/storage.objectViewer"
+    },
+    "after": {
+     "bucket": "b/assets-example",
+     "condition": [],
+     "etag": "CAE=",
+     "id": "b/assets-example/roles/storage.objectViewer/allUsers",
+     "member": "allUsers",
+     "role": "roles/storage.objectViewer"
+    },
+    "after_unknown": {},
+    "before_sensitive": {
+     "condition": []
+    },
+    "after_sensitive": {
+     "condition": []
+    }
+   }
+  },
+  {
+   "address": "google_storage_bucket_iam_policy.policy",
+   "mode": "managed",
+   "type": "google_storage_bucket_iam_policy",
+   "name": "policy",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "before": null,
+    "after": {
+     "bucket": "assets-example",
+     "policy_data": "{\"bindings\":[{\"members\":[\"user:bob@example.com\"],\"role\":\"roles/storage.objectViewer\"}]}"
+    },
+    "after_unknown": {
+     "etag": true,
+     "id": true
+    },
+    "before_sensitive": false,
+    "after_sensitive": {}
+   }
+  }
+ ],
+ "prior_state": {
+  "format_version": "1.0",
+  "terraform_version": "1.14.0",
+  "values": {
+   "root_module": {
+    "resources": [
+     {
+      "address": "google_storage_bucket.assets",
+      "mode": "managed",
+      "type": "google_storage_bucket",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "schema_version": 3,
+      "values": {
+       "autoclass": [],
+       "cors": [],
+       "custom_placement_config": [],
+       "default_event_based_hold": false,
+       "effective_labels": {},
+       "enable_object_retention": false,
+       "encryption": [],
+       "force_destroy": false,
+       "hierarchical_namespace": [],
+       "id": "assets-example",
+       "ip_filter": [],
+       "labels": {},
+       "lifecycle_rule": [],
+       "location": "US",
+       "logging": [],
+       "name": "assets-example",
+       "project": "fake-project",
+       "project_number": null,
+       "public_access_prevention": "inherited",
+       "requester_pays": false,
+       "retention_policy": [],
+       "rpo": "DEFAULT",
+       "self_link": "https://www.googleapis.com/storage/v1/b/assets-example",
+       "soft_delete_policy": [],
+       "storage_class": "STANDARD",
+       "terraform_labels": {},
+       "time_created": null,
+       "timeouts": null,
+       "uniform_bucket_level_access": true,
+       "updated": null,
+       "url": "gs://assets-example",
+       "versioning": [],
+       "website": []
+      },
+      "sensitive_values": {
+       "autoclass": [],
+       "cors": [],
+       "custom_placement_config": [],
+       "effective_labels": {},
+       "encryption": [],
+       "hierarchical_namespace": [],
+       "ip_filter": [],
+       "labels": {},
+       "lifecycle_rule": [],
+       "logging": [],
+       "retention_policy": [],
+       "soft_delete_policy": [],
+       "terraform_labels": {},
+       "versioning": [],
+       "website": []
+      }
+     },
+     {
+      "address": "google_storage_bucket_iam_member.reader",
+      "mode": "managed",
+      "type": "google_storage_bucket_iam_member",
+      "name": "reader",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "schema_version": 0,
+      "values": {
+       "bucket": "b/assets-example",
+       "condition": [],
+       "etag": "CAE=",
+       "id": "b/assets-example/roles/storage.objectViewer/allUsers",
+       "member": "allUsers",
+       "role": "roles/storage.objectViewer"
+      },
+      "sensitive_values": {
+       "condition": []
+      },
+      "depends_on": [
+       "google_storage_bucket.assets"
+      ]
+     }
+    ]
+   }
+  }
+ },
+ "configuration": {
+  "provider_config": {
+   "google": {
+    "name": "google",
+    "full_name": "registry.terraform.io/hashicorp/google",
+    "version_constraint": "6.50.0",
+    "expressions": {
+     "project": {
+      "constant_value": "fake-project"
+     },
+     "region": {
+      "constant_value": "us-central1"
+     }
+    }
+   }
+  },
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_storage_bucket.assets",
+     "mode": "managed",
+     "type": "google_storage_bucket",
+     "name": "assets",
+     "provider_config_key": "google",
+     "expressions": {
+      "location": {
+       "constant_value": "US"
+      },
+      "name": {
+       "constant_value": "assets-example"
+      },
+      "public_access_prevention": {
+       "constant_value": "inherited"
+      }
+     },
+     "schema_version": 3
+    },
+    {
+     "address": "google_storage_bucket_iam_member.reader",
+     "mode": "managed",
+     "type": "google_storage_bucket_iam_member",
+     "name": "reader",
+     "provider_config_key": "google",
+     "expressions": {
+      "bucket": {
+       "references": [
+        "google_storage_bucket.assets.name",
+        "google_storage_bucket.assets"
+       ]
+      },
+      "member": {
+       "constant_value": "user:alice@example.com"
+      },
+      "role": {
+       "constant_value": "roles/storage.objectViewer"
+      }
+     },
+     "schema_version": 0
+    },
+    {
+     "address": "google_storage_bucket_iam_policy.policy",
+     "mode": "managed",
+     "type": "google_storage_bucket_iam_policy",
+     "name": "policy",
+     "provider_config_key": "google",
+     "expressions": {
+      "bucket": {
+       "references": [
+        "google_storage_bucket.assets.name",
+        "google_storage_bucket.assets"
+       ]
+      },
+      "policy_data": {}
+     },
+     "schema_version": 0
+    }
+   ]
+  }
+ },
+ "relevant_attributes": [
+  {
+   "resource": "google_storage_bucket.assets",
+   "attribute": [
+    "name"
+   ]
+  }
+ ],
+ "timestamp": "2026-10-12T20:14:56Z",
+ "applyable": true,
+ "complete": true,
+ "errored": false
+}

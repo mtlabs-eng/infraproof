@@ -78,6 +78,24 @@ the new answer — which is the point, and why there is nothing to invalidate.
 A rule that reported nothing is an answer rather than an error: the response
 says so and lists the rules that did report.
 
+### How a finding says it knows
+
+Every finding in a bundle declaring `1.3` carries `verification_steps`: for
+each fact the verdict rests on, how that fact was established. The method
+describes provenance, not how certain the verdict is, and no decision or exit
+code reads it. What an agent can do with each:
+
+| method | what to do |
+| --- | --- |
+| `plan-stated-value` | the author wrote it; where the prior state holds the value, or any element or key of it, as a constant at the place the verdict reads that the plan's value equals; the evidence names where |
+| `provider-default` | nobody wrote it and the provider's default applies; write the argument if that is not the intent |
+| `prior-state` | the object already has this value and Terraform keeps it, often through `lifecycle { ignore_changes }`, or the author wrote a constant the plan's value is not (which a provider that canonicalizes the constant also produces); read the state or the deployed resource, because the configuration under review does not decide it |
+| `configuration-unrecorded` | the plan does not record who wrote it -- a `dynamic` block, a plan without its `configuration` section, a variable the plan does not resolve, a write by reference, variable or function on an update where the prior state holds the value or an element of it, which `ignore_changes` or the provider may have kept instead, or a constant the update keeps that the plan withholds as sensitive; read the configuration and its `lifecycle` blocks, or write the argument as a constant |
+| `policy-document-interpreted`, `documented-table`, `reference-resolved` | this build derived the value from a document, a table or a reference the evidence names |
+| `plan-action`, `intent-comparison` | the classification of the plan's actions, and the comparison with the contract |
+
+`docs/EVIDENCE-BUNDLE.md` defines each method exactly.
+
 ## Making a plan to verify
 
 The server does not run Terraform, and will not. Produce the plan yourself:

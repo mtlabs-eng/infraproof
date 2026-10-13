@@ -117,14 +117,21 @@ func publicEndpoint(subject terraformplan.ResourceChange, config terraformplan.V
 		config.Field(attrIPv4Enabled))
 	value := config.Field(attrIPv4Enabled)
 
+	// The method follows the configuration: the provider writes its default
+	// into the plan as a known value, and that is still a default. The switch
+	// is an attribute two blocks deep, so it is recorded as unwritten only when
+	// ip_configuration itself is recorded; a block the configuration does not
+	// record may be a dynamic one, or carried from state.
+	switchArgument := declared.Argument{Path: pathIPv4Enabled}
 	if value.State() == terraformplan.StateKnown && value.Kind() == terraformplan.KindBool {
-		return model.Known(value.Bool(), cited)
+		return model.Known(value.Bool(), switchArgument.Method(subject), cited)
 	}
 	if wroteSettings(subject) && declared.Unwritten(subject, pathIPv4Enabled) {
 		// Nobody wrote it inside a block the author did write, so the provider's
 		// documented default applies: Cloud SQL gives an instance a public IP
-		// unless asked not to.
-		return model.Known(true, cited)
+		// unless asked not to. The value is milestone 09's; the method says
+		// whether the configuration records the block the default applies in.
+		return model.Known(true, switchArgument.Method(subject), cited)
 	}
 	return model.Unknown[bool](cited)
 }
@@ -235,7 +242,7 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 	// The grant before the gaps: one entry covering everything settles it.
 	switch declared.SetReach(prefixes) {
 	case declared.ReachAnyAddress:
-		return model.Known(true, cited), unread
+		return model.Known(true, allowList.Method(subject), cited), unread
 	case declared.ReachUnreadable:
 		return model.Unknown[bool](cited), append(unread, model.MissingControl{
 			CheckID: checkAuthNetsUnread,
@@ -250,8 +257,13 @@ func authorizedNetworks(subject terraformplan.ResourceChange,
 	}
 	// Every entry was read and none covers every address. The list is inside the
 	// instance, so this is the whole list and an empty one authorizes nobody.
-	return model.Known(false, cited), nil
+	return model.Known(false, allowList.Method(subject), cited), nil
 }
+
+// allowList is the authorized networks, a block inside ip_configuration:
+// stated only when the configuration records it, because a dynamic block or a
+// block carried from state leaves no record.
+var allowList = declared.Argument{Path: pathIPConfig + "." + attrAuthorizedNets, Block: true}
 
 // wroteSettings reports that the author wrote the block the switch and the allow
 // list live inside.
@@ -286,5 +298,5 @@ func listeningPort(subject terraformplan.ResourceChange) model.Fact[int] {
 	if !named {
 		return model.Unknown[int](cited)
 	}
-	return model.Known(port, cited)
+	return model.Known(port, model.MethodDocumentedTable, cited)
 }

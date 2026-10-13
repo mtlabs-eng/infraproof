@@ -64,8 +64,20 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	found := openness{cited: []model.Provenance{
 		declared.Source(model.CloudAWS, subject.Address, "ingress", inline),
 	}}
+	// `ingress` can be written as blocks, and a dynamic block leaves no
+	// record, so an inline rule set the configuration does not record -- left
+	// in state, or written as a dynamic block -- reads as such rather than as
+	// stated.
+	inlineArgument := declared.Argument{Path: "ingress", Block: true}
+	// proofs are the methods of every rule that opens something. A grant needs
+	// only one, so it takes the best of them.
+	var proofs []model.Method
 	for i := range inline.Len() {
-		found = found.and(inlineRule(subject.Address, inline.At(i), i))
+		contribution := inlineRule(subject.Address, inline.At(i), i)
+		if len(contribution.ranges) > 0 {
+			proofs = append(proofs, inlineArgument.Method(subject))
+		}
+		found = found.and(contribution)
 	}
 	// `ingress` is Optional and Computed, so a group that writes no inline rules
 	// has the attribute emitted as unknown rather than empty -- which is what a
@@ -87,7 +99,11 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 
 	separate := ingressRules(related)
 	for _, rule := range separate {
-		found = found.and(standaloneRule(rule))
+		contribution := standaloneRule(rule)
+		if len(contribution.ranges) > 0 {
+			proofs = append(proofs, openedBy(rule, contribution.opened))
+		}
+		found = found.and(contribution)
 		found.cited = append(found.cited,
 			declared.Source(model.CloudAWS, rule.Address, "ip_protocol", rule.After.Field("ip_protocol")))
 	}
@@ -119,7 +135,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 
 	switch {
 	case len(found.ranges) > 0:
-		capabilities.PublicIngress = model.Known(true, found.cited...)
+		capabilities.PublicIngress = model.Known(true, declared.Strongest(proofs...), found.cited...)
 		// The grant is proven and the set behind it may not be whole. The
 		// boolean is unaffected -- an unread rule can only add openness here --
 		// but anyone asking which ports the set reaches has to be told that the
@@ -128,7 +144,7 @@ func (m Mapper) ingressOf(subject terraformplan.ResourceChange,
 	case found.unread:
 		capabilities.PublicIngress = model.Unknown[bool](found.cited...)
 	case stated:
-		capabilities.PublicIngress = model.Known(false, found.cited...)
+		capabilities.PublicIngress = model.Known(false, inlineArgument.Method(subject), found.cited...)
 		capabilities.Unresolved = append(capabilities.Unresolved, model.MissingControl{
 			CheckID: checkRuleSetOpenEnded,
 			Reason: "The group writes its rules inline and the provider does not refuse a separate " +
@@ -195,6 +211,10 @@ type openness struct {
 	// cited is what was read to decide, whichever way it went. A fact that
 	// concluded nothing still has to say what it looked at.
 	cited []model.Provenance
+	// opened names the address fields that admitted every address, relative
+	// to the rule, so the method of the grant can be asked of the argument
+	// that made it.
+	opened []string
 }
 
 // and combines two rules' contributions. A union, because that is what AWS does
@@ -205,7 +225,21 @@ func (o openness) and(other openness) openness {
 		gaps:   append(o.gaps, other.gaps...),
 		ranges: append(o.ranges, other.ranges...),
 		cited:  append(o.cited, other.cited...),
+		opened: append(o.opened, other.opened...),
 	}
+}
+
+// openedBy is the method of a separate rule's grant: the best established of
+// the address arguments that admitted every address. Each is Optional, not
+// Computed and without a default, so one that opens on a new rule without the
+// configuration recording it is unrecorded, and one an update carries from
+// state is prior state.
+func openedBy(rule terraformplan.ResourceChange, opened []string) model.Method {
+	methods := make([]model.Method, 0, len(opened))
+	for _, path := range opened {
+		methods = append(methods, declared.Argument{Path: path}.MethodFor(rule, false))
+	}
+	return declared.Strongest(methods...)
 }
 
 // inlineRule reads one ingress block written in the group.
@@ -296,6 +330,7 @@ func rule(address, path string, addresses []reachable,
 		}
 		if reach {
 			open = true
+			found.opened = append(found.opened, source.path)
 			found.cited = append(found.cited,
 				declared.Source(model.CloudAWS, address, source.path, source.value))
 		}

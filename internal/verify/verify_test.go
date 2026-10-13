@@ -482,7 +482,7 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 				// return an error and watching this test pass.
 				t.Fatalf("this fixture had a baseline and is no longer verifiable: %v", err)
 			}
-			got, err := render.JSON(bundle)
+			got, err := render.JSON(verdictOnly(bundle))
 			if err != nil {
 				t.Fatalf("render.JSON: %v", err)
 			}
@@ -527,5 +527,62 @@ func TestEveryFixtureProducesItsBaselineBundle(t *testing.T) {
 	}
 	if total := int(compared.Load()); total != len(goldens) {
 		t.Fatalf("compared %d fixtures against %d recorded baselines", total, len(goldens))
+	}
+}
+
+// verdictOnly is the bundle as milestone 09 would have written it: no
+// verification steps, and the version that predates them.
+//
+// The baselines are the milestone 09 verdict baseline and are not re-recorded.
+// Stripping only what milestone 10 adds means every other byte -- decision,
+// findings, unknowns, evidence, DATABASE_PORT_INFERRED -- is still compared, so
+// a verdict cannot change behind the new field.
+func verdictOnly(b evidence.Bundle) evidence.Bundle {
+	out := b
+	out.SchemaVersion = "1.2"
+	out.Findings = slices.Clone(b.Findings)
+	for i := range out.Findings {
+		out.Findings[i].VerificationSteps = nil
+	}
+	return out
+}
+
+// TestEveryFindingSaysHowItKnows is criterion 1 over every committed plan
+// fixture, not a sample: each finding carries at least one step, one of them
+// the contract comparison, and the bundle validates as 1.3.
+func TestEveryFindingSaysHowItKnows(t *testing.T) {
+	intent := filepath.Join("testdata", "baseline", "intent.json")
+	findings := 0
+	for _, fixture := range planFixtures(t) {
+		bundle, err := verify.FromFiles(intent, fixture, verify.Options{})
+		if err != nil {
+			// Not skipped: the baseline test is fatal only for a fixture that
+			// has a baseline, and the fixtures added since have none, so a
+			// skip here let one that could not be verified pass in silence.
+			t.Errorf("%s: could not be verified: %v", fixture, err)
+			continue
+		}
+		if bundle.SchemaVersion != "1.3" {
+			t.Fatalf("%s: schema_version = %q, want 1.3", fixture, bundle.SchemaVersion)
+		}
+		for _, f := range bundle.Findings {
+			findings++
+			if len(f.VerificationSteps) == 0 {
+				t.Errorf("%s: %s on %v carries no step", fixture, f.RuleID, f.Resource)
+			}
+			// The contract comparison is on every finding, including one where
+			// the contract declares nothing: silence is read.
+			if !slices.ContainsFunc(f.VerificationSteps, func(s evidence.VerificationStep) bool {
+				return strings.HasPrefix(s.Fact, "contract.")
+			}) {
+				t.Errorf("%s: %s on %v carries no contract comparison step", fixture, f.RuleID, f.Resource)
+			}
+		}
+		if err := bundle.Validate(); err != nil {
+			t.Errorf("%s: %v", fixture, err)
+		}
+	}
+	if findings == 0 {
+		t.Fatal("no fixture produced a finding; the test asserted nothing")
 	}
 }

@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.2",
+  "schema_version": "1.3",
   "decision": "BLOCK",
   "summary": "The requested private storage change enables public access.",
   "subject": {
@@ -54,6 +54,16 @@
             "file": "main.tf",
             "line": 6
           }
+        }
+      ],
+      "verification_steps": [
+        {
+          "fact": "contract.object_storage.exposure",
+          "method": "intent-comparison"
+        },
+        {
+          "fact": "object_storage.public_access",
+          "method": "plan-stated-value"
         }
       ],
       "remediation": "Disable public access using the provider-supported controls."

@@ -2,6 +2,7 @@ package terraformplan
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 )
 
@@ -301,4 +302,61 @@ func mergeArray(raw []any, unknown, sensitive mask) []Value {
 		out = append(out, merge(child, present, elementMask(unknown, i, length), elementMask(sensitive, i, length)))
 	}
 	return out
+}
+
+// markCarried sets carried on every node of a merged planned value whose raw
+// prior value, at the same place, is the same as its raw planned value. The
+// raw values are compared, so a sensitive mark on either side changes nothing,
+// and neither raw value is kept. A node the unknown mask marks, at any depth,
+// is not carried: its planned value is not yet a value.
+func markCarried(value Value, before any, beforePresent bool, after any, afterPresent bool, unknown mask) Value {
+	if !value.present {
+		return value
+	}
+	value.carried = beforePresent && afterPresent && !unknown.marks() && reflect.DeepEqual(before, after)
+	// A withheld node kept nothing beneath it, and has no kind to descend by.
+	// A prior value of another shape holds nothing at the places below.
+	switch value.kind {
+	case KindObject:
+		beforeObject, _ := before.(map[string]any)
+		afterObject, _ := after.(map[string]any)
+		object := make(map[string]Value, len(value.object))
+		for name, child := range value.object {
+			childBefore, inBefore := beforeObject[name]
+			childAfter, inAfter := afterObject[name]
+			object[name] = markCarried(child, childBefore, inBefore, childAfter, inAfter, unknown.field(name))
+		}
+		value.object = object
+	case KindArray:
+		beforeArray, _ := before.([]any)
+		afterArray, _ := after.([]any)
+		array := make([]Value, len(value.array))
+		for i, child := range value.array {
+			var childBefore, childAfter any
+			inBefore := i < len(beforeArray)
+			if inBefore {
+				childBefore = beforeArray[i]
+			}
+			inAfter := i < len(afterArray)
+			if inAfter {
+				childAfter = afterArray[i]
+			}
+			childUnknown := elementMask(unknown, i, len(value.array))
+			array[i] = markCarried(child, childBefore, inBefore, childAfter, inAfter, childUnknown)
+			array[i].inPrior = inAfter && !childUnknown.marks() && holds(beforeArray, childAfter)
+		}
+		value.array = array
+	}
+	return value
+}
+
+// holds reports whether a raw prior list holds an element equal to a raw
+// planned one, at any position.
+func holds(list []any, element any) bool {
+	for _, candidate := range list {
+		if reflect.DeepEqual(candidate, element) {
+			return true
+		}
+	}
+	return false
 }

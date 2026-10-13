@@ -66,6 +66,11 @@ type Finding struct {
 	Observed *ObservedFact `json:"observed,omitempty"`
 	// Evidence locates the source data supporting the claim.
 	Evidence []EvidenceRef `json:"evidence"`
+	// VerificationSteps says how each fact the verdict rests on was established:
+	// the "verification method" CLAUDE.md requires of every finding. A list,
+	// because one verdict can rest on facts of different provenance. It carries
+	// no value, and nothing decides on it.
+	VerificationSteps []VerificationStep `json:"verification_steps,omitempty"`
 	// Remediation describes the fix, or explains why none is available.
 	Remediation string `json:"remediation"`
 }
@@ -146,6 +151,16 @@ func AbsentFact(path string) *ObservedFact {
 // sensitive. It cannot carry a value.
 func RedactedFact(path string) *ObservedFact {
 	return &ObservedFact{Path: path, State: FactRedacted}
+}
+
+// VerificationStep is one fact a finding rests on and how it was established.
+// It has no value field by construction, like an evidence reference.
+type VerificationStep struct {
+	// Fact is a capability path, or contract.<field> or contract.<family>.<field>
+	// for the comparison with the intent contract; both shapes are emitted.
+	Fact string `json:"fact"`
+	// Method is how the fact was established.
+	Method VerificationMethod `json:"method"`
 }
 
 // EvidenceRef locates source data. It has no value field by construction, so

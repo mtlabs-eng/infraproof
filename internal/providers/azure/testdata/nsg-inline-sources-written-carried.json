@@ -1,0 +1,121 @@
+{
+ "format_version": "1.2",
+ "terraform_version": "1.14.0",
+ "resource_changes": [
+  {
+   "address": "azurerm_network_security_group.web",
+   "mode": "managed",
+   "type": "azurerm_network_security_group",
+   "name": "web",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "before": {
+     "location": "westeurope",
+     "name": "web",
+     "resource_group_name": "rg",
+     "security_rule": [
+      {
+       "access": "Allow",
+       "description": "",
+       "destination_address_prefix": "*",
+       "destination_address_prefixes": [],
+       "destination_application_security_group_ids": [],
+       "destination_port_range": "80",
+       "destination_port_ranges": [],
+       "direction": "Inbound",
+       "name": "http",
+       "priority": 200,
+       "protocol": "Tcp",
+       "source_address_prefix": "10.0.0.0/8",
+       "source_address_prefixes": [
+        "0.0.0.0/0"
+       ],
+       "source_application_security_group_ids": [],
+       "source_port_range": "*"
+      }
+     ],
+     "tags": {}
+    },
+    "after": {
+     "location": "westeurope",
+     "name": "web",
+     "resource_group_name": "rg",
+     "security_rule": [
+      {
+       "access": "Allow",
+       "description": "",
+       "destination_address_prefix": "*",
+       "destination_address_prefixes": [],
+       "destination_application_security_group_ids": [],
+       "destination_port_range": "80",
+       "destination_port_ranges": [],
+       "direction": "Inbound",
+       "name": "http",
+       "priority": 200,
+       "protocol": "Tcp",
+       "source_address_prefix": "10.0.0.0/8",
+       "source_address_prefixes": [
+        "0.0.0.0/0"
+       ],
+       "source_application_security_group_ids": [],
+       "source_port_range": "*"
+      }
+     ],
+     "tags": {}
+    },
+    "before_sensitive": {},
+    "after_sensitive": {},
+    "after_unknown": {}
+   }
+  }
+ ],
+ "configuration": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "azurerm_network_security_group.web",
+     "mode": "managed",
+     "type": "azurerm_network_security_group",
+     "name": "web",
+     "expressions": {
+      "name": {
+       "constant_value": "web"
+      },
+      "location": {
+       "constant_value": "westeurope"
+      },
+      "resource_group_name": {
+       "constant_value": "rg"
+      },
+      "security_rule": {
+       "constant_value": [
+        {
+         "access": "Allow",
+         "description": null,
+         "destination_address_prefix": "*",
+         "destination_address_prefixes": null,
+         "destination_application_security_group_ids": null,
+         "destination_port_range": "80",
+         "destination_port_ranges": null,
+         "direction": "Inbound",
+         "name": "http",
+         "priority": 200,
+         "protocol": "Tcp",
+         "source_address_prefix": "10.0.0.0/8",
+         "source_address_prefixes": [
+          "0.0.0.0/0"
+         ],
+         "source_application_security_group_ids": null,
+         "source_port_range": "*"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ }
+}

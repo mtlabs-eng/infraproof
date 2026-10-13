@@ -85,7 +85,9 @@ func (Mapper) publicEndpoint(subject terraformplan.ResourceChange) model.Fact[bo
 	if value.State() != terraformplan.StateKnown || value.Kind() != terraformplan.KindBool {
 		return model.Unknown[bool](cited)
 	}
-	return model.Known(value.Bool(), cited)
+	// Follows the configuration: a plan states the default of an argument nobody
+	// wrote as a known value, and that is still a default.
+	return model.Known(value.Bool(), declared.Argument{Path: attrPublicNetwork}.Method(subject), cited)
 }
 
 // allowList reads the server's firewall rules and answers whether any of them
@@ -101,6 +103,8 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	var cited []model.Provenance
 	var unread []model.MissingControl
 	var ranges []declared.AddressRange
+	// rested is how each input the grant rests on was established.
+	var rested []model.Method
 	var rules int
 
 	for _, candidate := range related {
@@ -163,6 +167,12 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 			})
 		}
 		ranges = append(ranges, span)
+		// The grant is the union, so it rests on every rule in it. The join to
+		// the server through server_id only locates where the rule applies;
+		// what admits is the rule's own start and end, which are Required.
+		rested = append(rested,
+			declared.Argument{Path: attrStartIP, Required: true}.Method(candidate),
+			declared.Argument{Path: attrEndIP, Required: true}.Method(candidate))
 	}
 
 	// The grant is tested before the gaps, and that order is the asymmetry this
@@ -173,7 +183,7 @@ func (m Mapper) allowList(subject terraformplan.ResourceChange,
 	// The union, not any single rule: two halves of the space are each narrow
 	// and together are the internet.
 	if len(ranges) > 0 && declared.RangeReach(ranges) == declared.ReachAnyAddress {
-		return model.Known(true, cited...), unread
+		return model.Known(true, declared.Weakest(rested...), cited...), unread
 	}
 	// Closure is not provable on this cloud at all, and that is not a limitation
 	// of this build. A database firewall rule is always a separate resource --
@@ -310,7 +320,8 @@ func uncorrelated(subject terraformplan.ResourceChange,
 // listeningPort reads the port from the resource type, because on this cloud the
 // engine *is* the type: there is no engine attribute and no `port` attribute
 // either, so the port is certain rather than inferred from a table of defaults.
-// That is why PortInferred stays false here.
+// That is why PortInferred stays false here, and why the method is still
+// documented-table: the value comes from portOf, a table this build keeps.
 //
 // A type portOf does not name leaves the port undetermined rather than taking
 // another type's, which the rule then reports as an approximation.
@@ -319,5 +330,5 @@ func listeningPort(subject terraformplan.ResourceChange) model.Fact[int] {
 	if port == 0 {
 		return model.Unknown[int](portCitation(subject))
 	}
-	return model.Known(port, portCitation(subject))
+	return model.Known(port, model.MethodDocumentedTable, portCitation(subject))
 }

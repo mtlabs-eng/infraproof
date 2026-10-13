@@ -158,3 +158,62 @@ func (c Cloud) Valid() bool {
 	}
 	return false
 }
+
+// VerificationMethod is how one fact a finding rests on was established. It is
+// provenance, not technique: a reader is told whether the verdict rests on what
+// the plan states, on a provider default, or on something this build inferred.
+//
+// It is never load-bearing. No decision, disposition or exit code depends on it.
+type VerificationMethod string
+
+const (
+	// MethodPlanStatedValue means the plan's configuration records that the
+	// author wrote the argument with a value, and the plan carries that value.
+	// The policy also assigns it to resource.cloud, which it reads from a
+	// change's provider_name through this build's provider-name table.
+	MethodPlanStatedValue VerificationMethod = "plan-stated-value"
+	// MethodProviderDefault means the configuration records the argument as
+	// unwritten, or written as null, and the value is not one carried from
+	// prior state: the provider's documented default, on a new object or where
+	// the plan moves the value to it.
+	MethodProviderDefault VerificationMethod = "provider-default"
+	// MethodPolicyDocumentInterpreted means the value results from this build's
+	// reading of a JSON policy document.
+	MethodPolicyDocumentInterpreted VerificationMethod = "policy-document-interpreted"
+	// MethodReferenceResolved means the value is obtainable only by resolving a
+	// reference: the security groups a database reaches through
+	// vpc_security_group_ids. A grant written on its own resource and joined to
+	// what it applies to by a reference is stated; the join only locates it.
+	MethodReferenceResolved VerificationMethod = "reference-resolved"
+	// MethodDocumentedTable means the value comes from a closed, documented table
+	// in this build.
+	MethodDocumentedTable VerificationMethod = "documented-table"
+	// MethodPlanAction means the value is the classification of the plan's
+	// actions.
+	MethodPlanAction VerificationMethod = "plan-action"
+	// MethodIntentComparison means the fact is the comparison with the intent
+	// contract.
+	MethodIntentComparison VerificationMethod = "intent-comparison"
+	// MethodPriorState means the change keeps an existing object, the plan
+	// carries the value the object had, and the configuration does not record
+	// the author writing it: unwritten, written as null, or written as a
+	// constant the carried value contradicts, which is what
+	// lifecycle { ignore_changes } leaves. Neither written by the author nor
+	// the provider's default.
+	MethodPriorState VerificationMethod = "prior-state"
+	// MethodConfigurationUnrecorded means the plan does not record whether the
+	// author wrote the argument, so its absence from the configuration proves
+	// nothing either way.
+	MethodConfigurationUnrecorded VerificationMethod = "configuration-unrecorded"
+)
+
+// Valid reports whether m is a member of the closed method set.
+func (m VerificationMethod) Valid() bool {
+	switch m {
+	case MethodPlanStatedValue, MethodProviderDefault, MethodPolicyDocumentInterpreted,
+		MethodReferenceResolved, MethodDocumentedTable, MethodPlanAction, MethodIntentComparison,
+		MethodPriorState, MethodConfigurationUnrecorded:
+		return true
+	}
+	return false
+}

@@ -22,6 +22,7 @@ func Canonical(b Bundle) Bundle {
 		out.Findings[i].Expected = cloneExpected(out.Findings[i].Expected)
 		out.Findings[i].Observed = cloneObserved(out.Findings[i].Observed)
 		out.Findings[i].Evidence = canonicalEvidence(out.Findings[i].Evidence)
+		out.Findings[i].VerificationSteps = canonicalSteps(out.Findings[i].VerificationSteps)
 	}
 	slices.SortStableFunc(out.Findings, compareFindings)
 
@@ -75,7 +76,10 @@ func compareFindings(a, b Finding) int {
 	if c := compareObserved(a.Observed, b.Observed); c != 0 {
 		return c
 	}
-	return compareEvidenceSlice(a.Evidence, b.Evidence)
+	if c := compareEvidenceSlice(a.Evidence, b.Evidence); c != 0 {
+		return c
+	}
+	return compareSteps(a.VerificationSteps, b.VerificationSteps)
 }
 
 // compareUnknowns orders unknowns by check identifier, then resource address,
@@ -332,4 +336,26 @@ func cloneScalar(s *Scalar) *Scalar {
 	}
 	v := *s
 	return &v
+}
+
+// canonicalSteps returns a sorted copy, ordered by fact and then method. Nil
+// stays nil, so a bundle that predates the field renders without it.
+func canonicalSteps(steps []VerificationStep) []VerificationStep {
+	if steps == nil {
+		return nil
+	}
+	out := slices.Clone(steps)
+	slices.SortStableFunc(out, compareStep)
+	return out
+}
+
+func compareStep(a, b VerificationStep) int {
+	if c := cmp.Compare(a.Fact, b.Fact); c != 0 {
+		return c
+	}
+	return cmp.Compare(string(a.Method), string(b.Method))
+}
+
+func compareSteps(a, b []VerificationStep) int {
+	return slices.CompareFunc(a, b, compareStep)
 }

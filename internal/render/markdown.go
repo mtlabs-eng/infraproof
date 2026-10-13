@@ -74,7 +74,7 @@ func findingBlocks(findings []evidence.Finding) []string {
 // findingBullets renders the facts of one finding. A bullet is omitted rather
 // than emitted empty when the finding does not carry that fact.
 func findingBullets(f evidence.Finding) []string {
-	bullets := make([]string, 0, 5+len(f.Evidence))
+	bullets := make([]string, 0, 5+len(f.Evidence)+len(f.VerificationSteps))
 
 	if f.Resource != nil {
 		// The provider is a plan value, so it goes in a code span like every
@@ -94,6 +94,12 @@ func findingBullets(f evidence.Finding) []string {
 	}
 	for _, ref := range f.Evidence {
 		bullets = append(bullets, "- Evidence: "+evidenceText(ref))
+	}
+	for _, step := range f.VerificationSteps {
+		// A fact path is produced by this build, but it goes in a code span like
+		// every other path, and the method is from a closed set.
+		bullets = append(bullets, fmt.Sprintf("- Verified by: %s (%s)",
+			code(step.Fact), inlineText(string(step.Method))))
 	}
 	bullets = append(bullets, "- Remediation: "+inlineText(f.Remediation))
 

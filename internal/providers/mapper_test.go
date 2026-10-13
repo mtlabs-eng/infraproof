@@ -1838,7 +1838,7 @@ type silentMapper struct{ muteMapper }
 func (silentMapper) Map(subject terraformplan.ResourceChange, related, scope []terraformplan.ResourceChange) model.NormalizedResource {
 	return model.NormalizedResource{Address: subject.Address, Cloud: model.Cloud("stub"),
 		Family: model.FamilyObjectStorage, ObjectStorage: &model.ObjectStorageCapabilities{
-			PublicAccess: model.Known(false, model.Provenance{
+			PublicAccess: model.Known(false, model.MethodStated, model.Provenance{
 				ResourceAddress: subject.Address, AttributePath: "x"})}}
 }
 

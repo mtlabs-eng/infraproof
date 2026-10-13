@@ -85,6 +85,10 @@ func BenchmarkAnnotateAtTheReadingBound(b *testing.B) {
 				Path:            "input",
 			}},
 			Remediation: "A remediation the benchmark does not care about.",
+			VerificationSteps: []evidence.VerificationStep{
+				{Fact: "object_storage.public_access", Method: evidence.MethodPlanStatedValue},
+				{Fact: "contract.object_storage.exposure", Method: evidence.MethodIntentComparison},
+			},
 		})
 	}
 
