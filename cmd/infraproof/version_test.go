@@ -107,10 +107,33 @@ func field(fields []string, i int) int {
 // document is not mid-release the way a constant is: it either tells people to
 // install this build or it tells them to install another one.
 func TestWhatTheDocumentsTellPeopleToInstallIsThisVersion(t *testing.T) {
-	root := filepath.Join("..", "..")
+	pins, err := documentPins(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("walking the documents: %v", err)
+	}
+	if len(pins) == 0 {
+		t.Fatal("no document pins a version, so this test asserts nothing")
+	}
+	for _, pin := range pins {
+		if pin.version != version {
+			t.Errorf("%s tells a reader to install v%s and this build is %s; a release moves "+
+				"the constants and the documents together, or it publishes instructions for "+
+				"a build nobody is releasing", pin.path, pin.version, version)
+		}
+	}
+}
+
+// pin is one install line a document hands a reader.
+type pin struct {
+	path, version string
+}
+
+// documentPins finds every version a document under root tells a reader to
+// install.
+func documentPins(root string) ([]pin, error) {
 	pinned := regexp.MustCompile(`infraproof@v([0-9]+\.[0-9]+\.[0-9]+)`)
 
-	var found int
+	var pins []pin
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -118,6 +141,12 @@ func TestWhatTheDocumentsTellPeopleToInstallIsThisVersion(t *testing.T) {
 		if entry.IsDir() {
 			if name := entry.Name(); name == ".git" || name == "testdata" {
 				return filepath.SkipDir
+			}
+			// Another checkout below this one: its documents are its own.
+			if path != root {
+				if _, err := os.Lstat(filepath.Join(path, ".git")); err == nil {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
@@ -131,19 +160,50 @@ func TestWhatTheDocumentsTellPeopleToInstallIsThisVersion(t *testing.T) {
 			return err
 		}
 		for _, match := range pinned.FindAllStringSubmatch(string(raw), -1) {
-			found++
-			if match[1] != version {
-				t.Errorf("%s tells a reader to install v%s and this build is %s; a release moves "+
-					"the constants and the documents together, or it publishes instructions for "+
-					"a build nobody is releasing", path, match[1], version)
-			}
+			pins = append(pins, pin{path: path, version: match[1]})
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("walking the documents: %v", err)
+	return pins, err
+}
+
+// TestAnotherCheckoutInsideTheTreeIsNotThisBuildsDocuments keeps the document
+// walk inside this checkout.
+//
+// A git worktree or a clone placed under the repository -- `.claude/worktrees/`
+// is where review agents put theirs -- carries its own README at whatever
+// version it was checked out at. Reading it made the release of 0.5.0 fail on a
+// reviewer's copy of 0.4.0's README, which no reader of this build is ever
+// handed. A checkout announces itself with a `.git` entry, a directory for a
+// clone and a file for a worktree, and the walk stops at either.
+func TestAnotherCheckoutInsideTheTreeIsNotThisBuildsDocuments(t *testing.T) {
+	root := t.TempDir()
+	write := func(path, content string) {
+		t.Helper()
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if found == 0 {
-		t.Fatal("no document pins a version, so this test asserts nothing")
+	write("README.md", "go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v9.9.9\n")
+	write("docs/GUIDE.md", "go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v9.9.9\n")
+	write(".claude/worktrees/agent/.git", "gitdir: /elsewhere\n")
+	write(".claude/worktrees/agent/README.md", "go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.1.0\n")
+	write("vendor-clone/.git/HEAD", "ref: refs/heads/main\n")
+	write("vendor-clone/README.md", "go install github.com/mtlabs-eng/infraproof/cmd/infraproof@v0.2.0\n")
+
+	pins, err := documentPins(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, pin := range pins {
+		paths = append(paths, filepath.ToSlash(strings.TrimPrefix(pin.path, root+string(filepath.Separator))))
+	}
+	if got, want := strings.Join(paths, ","), "README.md,docs/GUIDE.md"; got != want {
+		t.Errorf("pins were read from %q, want only this checkout's %q", got, want)
 	}
 }
